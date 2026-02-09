@@ -1,10 +1,38 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::fs;
 use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::error::ServerError;
+
+/// Verify that a resolved path stays within the expected base directory.
+/// Prevents path traversal attacks.
+fn ensure_within(base: &Path, target: &Path) -> Result<PathBuf, ServerError> {
+    // Canonicalize base; target may not exist yet so normalize manually
+    let canonical_base = base
+        .canonicalize()
+        .unwrap_or_else(|_| base.to_path_buf());
+    // Build the full path and strip out any `..` components
+    let mut resolved = canonical_base.clone();
+    for component in target.strip_prefix(&canonical_base).unwrap_or(target).components() {
+        match component {
+            std::path::Component::Normal(c) => resolved.push(c),
+            std::path::Component::ParentDir => {
+                return Err(ServerError::BadRequest(
+                    "Path traversal detected".to_string(),
+                ));
+            }
+            _ => {} // RootDir, CurDir, Prefix — skip
+        }
+    }
+    if !resolved.starts_with(&canonical_base) {
+        return Err(ServerError::BadRequest(
+            "Path traversal detected".to_string(),
+        ));
+    }
+    Ok(resolved)
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -47,7 +75,7 @@ impl BlobStore {
         }
 
         let id = Uuid::new_v4();
-        let path = self.blob_path(&id);
+        let path = self.safe_blob_path(&id)?;
 
         fs::write(&path, data)
             .await
@@ -58,7 +86,7 @@ impl BlobStore {
     }
 
     pub async fn get_blob(&self, id: Uuid) -> Result<Vec<u8>, ServerError> {
-        let path = self.blob_path(&id);
+        let path = self.safe_blob_path(&id)?;
 
         if !path.exists() {
             return Err(ServerError::BlobNotFound(id));
@@ -73,7 +101,7 @@ impl BlobStore {
     }
 
     pub async fn delete_blob(&self, id: Uuid) -> Result<(), ServerError> {
-        let path = self.blob_path(&id);
+        let path = self.safe_blob_path(&id)?;
 
         if !path.exists() {
             return Err(ServerError::BlobNotFound(id));
@@ -107,8 +135,22 @@ impl BlobStore {
         Ok(ids)
     }
 
-    fn blob_path(&self, id: &Uuid) -> PathBuf {
-        self.base_path.join(id.to_string())
+    /// Safe blob path that validates against traversal.
+    fn safe_blob_path(&self, id: &Uuid) -> Result<PathBuf, ServerError> {
+        let raw = self.base_path.join(id.to_string());
+        ensure_within(&self.base_path, &raw)
+    }
+
+    /// Build a safe path for a sub-directory file (e.g. backups).
+    pub fn safe_subpath(&self, subdir: &str, filename: &str) -> Result<PathBuf, ServerError> {
+        // Reject any path separator or traversal characters in inputs
+        if subdir.contains('/') || subdir.contains('\\') || subdir.contains("..")
+            || filename.contains('/') || filename.contains('\\') || filename.contains("..")
+        {
+            return Err(ServerError::BadRequest("Path traversal detected".to_string()));
+        }
+        let target = self.base_path.join(subdir).join(filename);
+        ensure_within(&self.base_path, &target)
     }
 }
 

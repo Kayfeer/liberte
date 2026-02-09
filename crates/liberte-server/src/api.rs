@@ -282,6 +282,7 @@ async fn backup_sync_upload(
     State(state): State<AppState>,
     Json(req): Json<BackupSyncRequest>,
 ) -> Result<Json<BackupSyncResponse>, ServerError> {
+    // Validate pubkey is exactly 64 hex chars (rejects any path-traversal chars)
     let _pubkey = parse_hex_32(&req.user_pubkey_hex)?;
     let data = req.encrypted_data.as_bytes();
 
@@ -291,7 +292,10 @@ async fn backup_sync_upload(
         .await
         .map_err(|e| ServerError::Internal(format!("Failed to create backup dir: {e}")))?;
 
-    let file_path = backup_dir.join(format!("{}.enc", req.user_pubkey_hex));
+    let filename = format!("{}.enc", req.user_pubkey_hex);
+    let file_path = state
+        .blob_store
+        .safe_subpath("backups", &filename)?;
     tokio::fs::write(&file_path, data)
         .await
         .map_err(|e| ServerError::Internal(format!("Failed to write backup: {e}")))?;
@@ -313,13 +317,13 @@ async fn backup_sync_download(
     State(state): State<AppState>,
     Path(pubkey_hex): Path<String>,
 ) -> Result<String, ServerError> {
+    // Validate pubkey is exactly 64 hex chars (rejects any path-traversal chars)
     let _pubkey = parse_hex_32(&pubkey_hex)?;
 
+    let filename = format!("{pubkey_hex}.enc");
     let file_path = state
         .blob_store
-        .base_path()
-        .join("backups")
-        .join(format!("{pubkey_hex}.enc"));
+        .safe_subpath("backups", &filename)?;
 
     if !file_path.exists() {
         return Err(ServerError::NotFound(
