@@ -1,0 +1,28 @@
+[package]
+name = "liberte-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+liberte-shared = { workspace = true }
+liberte-net    = { workspace = true }
+libp2p = { workspace = true }
+tokio = { workspace = true }
+axum = { version = "0.7", features = ["multipart"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ed25519-dalek = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+tempfile = "3"

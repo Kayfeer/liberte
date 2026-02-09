@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  liberte-relay:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: liberte-relay
+    restart: unless-stopped
+    ports:
+      - "4001:4001/udp"   # libp2p QUIC
+      - "8080:8080"       # HTTP API
+    volumes:
+      - liberte-data:/data
+    environment:
+      - RUST_LOG=liberte=info,libp2p=warn
+      - LISTEN_ADDR=/ip4/0.0.0.0/udp/4001/quic-v1
+      - HTTP_ADDR=0.0.0.0:8080
+      - BLOB_STORAGE_PATH=/data/blobs
+      - PAYMENT_SERVER_PUBKEY=${PAYMENT_SERVER_PUBKEY}
+      # Self-hosted settings
+      - INSTANCE_NAME=${INSTANCE_NAME:-Liberté Node}
+      - PREMIUM_REQUIRED=${PREMIUM_REQUIRED:-false}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - REGISTRATION_OPEN=${REGISTRATION_OPEN:-true}
+      - MAX_PEERS=${MAX_PEERS:-0}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+volumes:
+  liberte-data:
+    driver: local

@@ -1,0 +1,20 @@
+[package]
+name = "liberte-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+liberte-shared = { workspace = true }
+rusqlite = { version = "0.31", features = ["bundled"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+directories = "5"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

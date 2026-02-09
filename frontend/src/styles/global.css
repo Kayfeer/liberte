@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-liberte-border;
+  }
+
+  body {
+    @apply bg-liberte-bg text-liberte-text antialiased;
+    font-family: "Inter", system-ui, sans-serif;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-liberte-bg;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-liberte-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-liberte-muted;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-4 py-2 bg-liberte-accent text-white rounded-lg
+           hover:bg-opacity-90 transition-colors duration-150
+           font-medium text-sm;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-liberte-surface text-liberte-text rounded-lg
+           border border-liberte-border hover:bg-liberte-panel
+           transition-colors duration-150 font-medium text-sm;
+  }
+
+  .input-field {
+    @apply w-full px-3 py-2 bg-liberte-bg border border-liberte-border
+           rounded-lg text-liberte-text placeholder-liberte-muted
+           focus:outline-none focus:border-liberte-accent
+           transition-colors duration-150;
+  }
+
+  .panel {
+    @apply bg-liberte-surface rounded-lg border border-liberte-border;
+  }
+}

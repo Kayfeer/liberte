@@ -1,0 +1,9 @@
+# Bootstrap peers for initial network discovery.
+# Add your relay server's multiaddress here after deployment.
+
+[[peers]]
+# Example: Your VPS relay server
+# addr = "/ip4/YOUR_SERVER_IP/udp/4001/quic-v1/p2p/YOUR_PEER_ID"
+
+# Placeholder - replace with actual bootstrap peer
+addr = "/ip4/127.0.0.1/udp/4001/quic-v1"

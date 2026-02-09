@@ -1,0 +1,18 @@
+[package]
+name = "liberte-media"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+liberte-shared = { workspace = true }
+liberte-net = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+chacha20poly1305 = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+webrtc = "0.11"
+cpal = "0.15"

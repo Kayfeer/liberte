@@ -1,0 +1,16 @@
+[package]
+name = "liberte-net"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+liberte-shared = { workspace = true }
+libp2p = { workspace = true }
+hickory-resolver = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
