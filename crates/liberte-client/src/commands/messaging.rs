@@ -197,3 +197,72 @@ pub fn list_channels(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<Chann
 
     Ok(channels.into_iter().map(ChannelDto::from).collect())
 }
+
+/// Search messages across all channels (or a specific channel) by decrypting and matching.
+#[tauri::command]
+pub fn search_messages(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    query: String,
+    channel_id: Option<String>,
+) -> Result<Vec<MessageDto>, String> {
+    let query_lower = query.to_lowercase();
+
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    // Get channel keys to decrypt
+    let channel_keys = db
+        .get_all_channel_keys()
+        .map_err(|e| format!("Failed to load channel keys: {e}"))?;
+
+    // Determine which channels to search
+    let target_channels: Vec<uuid::Uuid> = match channel_id {
+        Some(ref cid) => {
+            let uuid = Uuid::parse_str(cid).map_err(|e| format!("Invalid channel_id: {e}"))?;
+            vec![uuid]
+        }
+        None => {
+            let channels = db
+                .list_channels()
+                .map_err(|e| format!("Failed to list channels: {e}"))?;
+            channels.into_iter().map(|c| c.id).collect()
+        }
+    };
+
+    let mut results = Vec::new();
+
+    for ch_id in target_channels {
+        let key_hex = channel_keys.get(&ch_id);
+        let channel_key: Option<[u8; 32]> = key_hex.and_then(|hex_str| {
+            let bytes = hex::decode(hex_str).ok()?;
+            if bytes.len() != 32 {
+                return None;
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            Some(key)
+        });
+
+        let messages = db
+            .get_messages_for_channel(ch_id, 10_000, 0)
+            .map_err(|e| format!("Failed to load messages: {e}"))?;
+
+        for m in messages {
+            let dto = MessageDto::from_message(m, channel_key.as_ref());
+            if dto.content.to_lowercase().contains(&query_lower) {
+                results.push(dto);
+            }
+        }
+    }
+
+    // Sort by timestamp descending
+    results.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    // Limit results
+    results.truncate(100);
+
+    Ok(results)
+}

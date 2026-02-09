@@ -6,15 +6,15 @@ export default {
     extend: {
       colors: {
         liberte: {
-          bg: "#1a1a2e",
-          surface: "#16213e",
-          panel: "#0f3460",
-          accent: "#e94560",
-          text: "#eaeaea",
-          muted: "#8a8a9a",
-          success: "#4ade80",
-          warning: "#fbbf24",
-          border: "#2a2a4a",
+          bg: "var(--liberte-bg)",
+          surface: "var(--liberte-surface)",
+          panel: "var(--liberte-panel)",
+          accent: "var(--liberte-accent)",
+          text: "var(--liberte-text)",
+          muted: "var(--liberte-muted)",
+          success: "var(--liberte-success)",
+          warning: "var(--liberte-warning)",
+          border: "var(--liberte-border)",
         },
       },
       fontFamily: {

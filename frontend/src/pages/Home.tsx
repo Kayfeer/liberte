@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { EVENTS } from "../lib/constants";
 import { useMessageStore } from "../stores/messageStore";
 import { useNetworkStore } from "../stores/networkStore";
@@ -12,11 +17,24 @@ import UpdateBanner from "../components/common/UpdateBanner";
 import Settings from "./Settings";
 
 export default function Home() {
-  const { loadChannels, loadMessages } = useMessageStore();
+  const { loadChannels, loadMessages, channels } = useMessageStore();
   const { refreshPeers } = useNetworkStore();
   const currentPage = useNavigationStore((s) => s.currentPage);
   const { autoBackupEnabled, intervalMinutes, runAutoBackup } = useBackupStore();
   const backupTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const notifPermRef = useRef<boolean>(false);
+
+  // Request notification permission once
+  useEffect(() => {
+    (async () => {
+      let granted = await isPermissionGranted();
+      if (!granted) {
+        const result = await requestPermission();
+        granted = result === "granted";
+      }
+      notifPermRef.current = granted;
+    })();
+  }, []);
 
   useEffect(() => {
     loadChannels();
@@ -25,13 +43,24 @@ export default function Home() {
     // Listen for real-time events from Tauri backend
     const unlisten: (() => void)[] = [];
 
-    listen<{ channelId: string }>(
+    listen<{ channelId: string; senderShort?: string }>(
       EVENTS.NEW_MESSAGE,
       (event) => {
-        // Reload messages for the channel that received a new message
         const channelId = event.payload.channelId;
         if (channelId) {
           loadMessages(channelId);
+        }
+
+        // Send OS notification when window is not focused
+        if (notifPermRef.current && document.hidden) {
+          const ch = channels.find((c) => c.id === channelId);
+          const channelName = ch?.name ?? "Liberté";
+          sendNotification({
+            title: `Nouveau message — #${channelName}`,
+            body: event.payload.senderShort
+              ? `De ${event.payload.senderShort}`
+              : "Vous avez reçu un nouveau message",
+          });
         }
       }
     ).then((u) => unlisten.push(u));
@@ -47,7 +76,7 @@ export default function Home() {
     return () => {
       unlisten.forEach((u) => u());
     };
-  }, [loadChannels, loadMessages, refreshPeers]);
+  }, [loadChannels, loadMessages, refreshPeers, channels]);
 
   // Auto-backup timer
   useEffect(() => {

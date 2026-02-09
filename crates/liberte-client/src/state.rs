@@ -15,6 +15,8 @@ pub struct AppState {
     pub is_video_enabled: bool,
     pub is_premium: bool,
     pub server_url: String,
+    /// "mesh" or "sfu"
+    pub call_mode: String,
 }
 
 impl AppState {
@@ -29,6 +31,7 @@ impl AppState {
             is_video_enabled: true,
             is_premium: false,
             server_url: String::new(),
+            call_mode: "mesh".to_string(),
         }
     }
 }

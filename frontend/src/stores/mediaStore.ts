@@ -15,7 +15,7 @@ interface MediaState {
   toggleMute: () => Promise<void>;
   toggleVideo: () => Promise<void>;
   setParticipants: (participants: PeerInfo[]) => void;
-  setMode: (mode: "mesh" | "sfu") => void;
+  setMode: (mode: "mesh" | "sfu") => Promise<void>;
 }
 
 export const useMediaStore = create<MediaState>((set) => ({
@@ -47,5 +47,8 @@ export const useMediaStore = create<MediaState>((set) => ({
   },
 
   setParticipants: (participants) => set({ participants }),
-  setMode: (mode) => set({ mode }),
+  setMode: async (mode) => {
+    await tauri.setCallMode(mode);
+    set({ mode });
+  },
 }));

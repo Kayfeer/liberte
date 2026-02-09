@@ -46,10 +46,13 @@ pub fn run() {
             commands::messaging::send_message,
             commands::messaging::get_messages,
             commands::messaging::list_channels,
+            commands::messaging::search_messages,
             commands::media::start_call,
             commands::media::end_call,
             commands::media::toggle_mute,
             commands::media::toggle_video,
+            commands::media::set_call_mode,
+            commands::media::get_call_state,
             commands::files::send_file,
             commands::files::upload_premium_blob,
             commands::premium::check_premium,
@@ -66,6 +69,8 @@ pub fn run() {
             commands::backup::auto_backup,
             commands::backup::import_backup,
             commands::backup::list_backups,
+            commands::profile::export_profile,
+            commands::profile::import_profile,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run Tauri application");

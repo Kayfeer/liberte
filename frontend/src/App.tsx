@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { useIdentityStore } from "./stores/identityStore";
+import { useThemeStore } from "./stores/themeStore";
 import Welcome from "./pages/Welcome";
 import Home from "./pages/Home";
 
 export default function App() {
   const { identity, loadIdentity, loading } = useIdentityStore();
   const [initialized, setInitialized] = useState(false);
+
+  // Initialize theme CSS variables on mount
+  useThemeStore();
 
   useEffect(() => {
     loadIdentity().finally(() => setInitialized(true));

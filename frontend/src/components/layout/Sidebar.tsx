@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Hash, Plus, Settings, Users, UserPlus } from "lucide-react";
+import { Hash, Plus, Settings, UserPlus, Circle } from "lucide-react";
 import { useMessageStore } from "../../stores/messageStore";
 import { useNetworkStore } from "../../stores/networkStore";
 import { useNavigationStore } from "../../stores/navigationStore";
@@ -22,7 +22,7 @@ export default function Sidebar() {
           <h1 className="text-lg font-bold text-liberte-accent">Liberté</h1>
         </div>
         <div className="flex items-center gap-1 mt-1">
-          <Users className="w-3 h-3 text-liberte-muted" />
+          <Circle className="w-2 h-2 fill-liberte-success text-liberte-success" />
           <span className="text-xs text-liberte-muted">
             {peers.length} pair{peers.length !== 1 ? "s" : ""} connecté
             {peers.length !== 1 ? "s" : ""}
@@ -64,6 +64,30 @@ export default function Sidebar() {
           <p className="text-xs text-liberte-muted px-2 py-4 text-center">
             Aucun canal. Créez-en un ou rejoignez une invitation.
           </p>
+        )}
+
+        {/* Online peers */}
+        {peers.length > 0 && (
+          <div className="mt-4">
+            <div className="flex items-center px-2 mb-2">
+              <span className="text-xs font-semibold text-liberte-muted uppercase tracking-wider">
+                Pairs en ligne — {peers.length}
+              </span>
+            </div>
+            {peers.map((peerId) => (
+              <div
+                key={peerId}
+                className="flex items-center gap-2 px-2 py-1 rounded text-sm text-liberte-muted"
+              >
+                <Circle className="w-2 h-2 fill-liberte-success text-liberte-success flex-shrink-0" />
+                <span className="truncate font-mono text-xs">
+                  {peerId.length > 16
+                    ? `${peerId.slice(0, 8)}…${peerId.slice(-8)}`
+                    : peerId}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

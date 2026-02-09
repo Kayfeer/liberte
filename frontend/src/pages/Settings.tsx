@@ -1,6 +1,7 @@
 import { useIdentityStore } from "../stores/identityStore";
 import { useNavigationStore } from "../stores/navigationStore";
 import { useMediaDevices } from "../hooks/useMediaDevices";
+import { useThemeStore, type ThemeName } from "../stores/themeStore";
 import {
   Shield,
   Copy,
@@ -18,6 +19,7 @@ import {
   FolderOpen,
   Cloud,
   Download,
+  Palette,
 } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useBackupStore } from "../stores/backupStore";
@@ -243,6 +245,9 @@ export default function Settings() {
         </p>
       </div>
 
+      {/* ── Thème ── */}
+      <ThemeSection />
+
       {/* ── Identity ── */}
       <div className="panel p-4 space-y-4">
         <h3 className="font-medium flex items-center gap-2">
@@ -276,6 +281,70 @@ export default function Settings() {
             <div>
               <label className="text-xs text-liberte-muted">ID court</label>
               <p className="text-sm font-mono mt-1">{identity.shortId}</p>
+            </div>
+
+            {/* Profile export / import */}
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-liberte-border">
+              <button
+                onClick={async () => {
+                  const { save } = await import("@tauri-apps/plugin-dialog");
+                  try {
+                    const json = await import("../lib/tauri").then((t) =>
+                      t.exportProfile()
+                    );
+                    const path = await save({
+                      defaultPath: `liberte_profile_${new Date().toISOString().slice(0, 10)}.json`,
+                      filters: [{ name: "JSON", extensions: ["json"] }],
+                    });
+                    if (path) {
+                      const { writeTextFile } = await import(
+                        "@tauri-apps/plugin-fs"
+                      );
+                      await writeTextFile(path, json);
+                      alert("Profil exporté avec succès !");
+                    }
+                  } catch (e) {
+                    alert(`Erreur d'export : ${e}`);
+                  }
+                }}
+                className="btn-secondary text-xs flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Exporter le profil
+              </button>
+
+              <button
+                onClick={async () => {
+                  const { open: openFile } = await import(
+                    "@tauri-apps/plugin-dialog"
+                  );
+                  const path = await openFile({
+                    multiple: false,
+                    filters: [{ name: "JSON", extensions: ["json"] }],
+                    title: "Importer un profil",
+                  });
+                  if (path) {
+                    const { readTextFile } = await import(
+                      "@tauri-apps/plugin-fs"
+                    );
+                    const json = await readTextFile(path);
+                    try {
+                      const result = await import("../lib/tauri").then((t) =>
+                        t.importProfile(json)
+                      );
+                      alert(
+                        `Profil importé ! Clé publique : ${result.publicKey.slice(0, 16)}…\n${result.channelsImported} canaux importés.\n\nRedémarrez l'application pour appliquer.`
+                      );
+                    } catch (e) {
+                      alert(`Erreur d'import : ${e}`);
+                    }
+                  }
+                }}
+                className="btn-secondary text-xs flex items-center gap-1.5"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                Importer un profil
+              </button>
             </div>
           </div>
         )}
@@ -550,6 +619,79 @@ export default function Settings() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ─── Theme Section ─── */
+
+const THEME_OPTIONS: { id: ThemeName; label: string; preview: string[] }[] = [
+  { id: "dark", label: "Sombre", preview: ["#1a1a2e", "#16213e", "#e94560"] },
+  { id: "light", label: "Clair", preview: ["#f5f5f5", "#ffffff", "#e94560"] },
+  { id: "midnight", label: "Minuit", preview: ["#0d0d1a", "#111127", "#8b5cf6"] },
+  { id: "custom", label: "Personnalisé", preview: [] },
+];
+
+function ThemeSection() {
+  const { themeName, setTheme, colors, setCustomColor } = useThemeStore();
+
+  return (
+    <div className="panel p-4 space-y-4">
+      <h3 className="font-medium flex items-center gap-2">
+        <Palette className="w-4 h-4 text-liberte-accent" />
+        Thème
+      </h3>
+
+      <div className="grid grid-cols-4 gap-2">
+        {THEME_OPTIONS.map((opt) => (
+          <button
+            key={opt.id}
+            onClick={() => setTheme(opt.id)}
+            className={`flex flex-col items-center gap-1.5 p-2 rounded-lg border transition-colors ${
+              themeName === opt.id
+                ? "border-liberte-accent bg-liberte-accent/10"
+                : "border-liberte-border hover:border-liberte-muted"
+            }`}
+          >
+            {opt.preview.length > 0 ? (
+              <div className="flex gap-0.5">
+                {opt.preview.map((c, i) => (
+                  <div
+                    key={i}
+                    className="w-4 h-4 rounded-sm"
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex gap-0.5">
+                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-purple-500 to-pink-500" />
+                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-blue-500 to-green-500" />
+                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-yellow-500 to-red-500" />
+              </div>
+            )}
+            <span className="text-xs">{opt.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {themeName === "custom" && (
+        <div className="grid grid-cols-3 gap-3 pt-2">
+          {(
+            Object.keys(colors) as Array<keyof typeof colors>
+          ).map((key) => (
+            <label key={key} className="flex items-center gap-2 text-xs">
+              <input
+                type="color"
+                value={colors[key]}
+                onChange={(e) => setCustomColor(key, e.target.value)}
+                className="w-6 h-6 rounded border border-liberte-border cursor-pointer"
+              />
+              <span className="text-liberte-muted">{key}</span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

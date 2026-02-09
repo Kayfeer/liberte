@@ -3,6 +3,18 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --liberte-bg: #1a1a2e;
+    --liberte-surface: #16213e;
+    --liberte-panel: #0f3460;
+    --liberte-accent: #e94560;
+    --liberte-text: #eaeaea;
+    --liberte-muted: #8a8a9a;
+    --liberte-success: #4ade80;
+    --liberte-warning: #fbbf24;
+    --liberte-border: #2a2a4a;
+  }
+
   * {
     @apply border-liberte-border;
   }

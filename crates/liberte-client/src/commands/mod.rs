@@ -6,4 +6,5 @@ pub mod media;
 pub mod messaging;
 pub mod network;
 pub mod premium;
+pub mod profile;
 pub mod settings;

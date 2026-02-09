@@ -38,6 +38,9 @@ export const getMessages = (channelId: string, channelKeyHex: string, limit: num
 export const listChannels = () =>
   invoke<Channel[]>("list_channels");
 
+export const searchMessages = (query: string, channelId?: string) =>
+  invoke<Message[]>("search_messages", { query, channelId });
+
 // Media commands
 export const startCall = (channelId: string) =>
   invoke<void>("start_call", { channelId });
@@ -50,6 +53,19 @@ export const toggleMute = () =>
 
 export const toggleVideo = () =>
   invoke<boolean>("toggle_video");
+
+export const setCallMode = (mode: "mesh" | "sfu") =>
+  invoke<string>("set_call_mode", { mode });
+
+export interface CallStateInfo {
+  inCall: boolean;
+  isMuted: boolean;
+  isVideoEnabled: boolean;
+  mode: string;
+}
+
+export const getCallState = () =>
+  invoke<CallStateInfo>("get_call_state");
 
 // File commands
 export const sendFile = (channelId: string, filePath: string) =>
@@ -126,3 +142,15 @@ export const importBackup = (json: string) =>
 
 export const listBackups = () =>
   invoke<BackupFileInfo[]>("list_backups");
+
+// Profile commands
+export interface ProfileImportResult {
+  publicKey: string;
+  channelsImported: number;
+}
+
+export const exportProfile = () =>
+  invoke<string>("export_profile");
+
+export const importProfile = (json: string) =>
+  invoke<ProfileImportResult>("import_profile", { json });
