@@ -14,7 +14,7 @@ responsibly. **Do not open a public GitHub issue.**
 
 ### How to report
 
-1. **Email**: Send details to **security@liberte-app.dev** (or contact the
+1. **Email**: Send details to **genesistrakd@gmail.com** (or contact the
    maintainer [@Kayfeer](https://github.com/Kayfeer) directly via GitHub
    private message).
 2. Include:
