@@ -13,6 +13,7 @@ liberte-net    = { workspace = true }
 liberte-media  = { workspace = true }
 liberte-store  = { workspace = true }
 tauri = { version = "2", features = ["tray-icon"] }
+rusqlite = { version = "0.31" }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -27,7 +28,6 @@ blake3 = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 libp2p = { workspace = true }
-rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 [lib]

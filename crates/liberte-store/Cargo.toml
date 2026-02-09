@@ -4,9 +4,14 @@ version.workspace = true
 edition.workspace = true
 authors = ["Kayfeer"]
 
+[features]
+default = ["sqlite-plain"]
+sqlite-plain = ["rusqlite/bundled"]
+sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+
 [dependencies]
 liberte-shared = { workspace = true }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

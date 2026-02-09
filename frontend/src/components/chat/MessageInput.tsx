@@ -1,6 +1,8 @@
 import { useState, useRef } from "react";
 import { Send, Paperclip } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useMessageStore } from "../../stores/messageStore";
+import { sendFile } from "../../lib/tauri";
 import { MAX_MESSAGE_LENGTH } from "../../lib/constants";
 
 interface Props {
@@ -36,10 +38,27 @@ export default function MessageInput({ channelId }: Props) {
     }
   };
 
+  const handleFileAttach = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: "Joindre un fichier",
+      });
+      if (selected) {
+        await sendFile(channelId, selected);
+      }
+    } catch (e) {
+      console.error("Failed to attach file:", e);
+    }
+  };
+
   return (
     <div className="px-4 pb-4">
       <div className="flex items-end gap-2 bg-liberte-surface rounded-lg border border-liberte-border p-2">
-        <button className="p-2 text-liberte-muted hover:text-liberte-text transition-colors">
+        <button
+          onClick={handleFileAttach}
+          className="p-2 text-liberte-muted hover:text-liberte-text transition-colors"
+        >
           <Paperclip className="w-5 h-5" />
         </button>
 

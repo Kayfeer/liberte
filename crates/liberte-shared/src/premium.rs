@@ -10,15 +10,29 @@ pub struct PremiumToken {
     pub signature: Vec<u8>,
 }
 
-/// SECURITY: This is a placeholder key. In production, set the real payment
-/// server Ed25519 public key via the `PAYMENT_SERVER_PUBKEY` env var on the
-/// server. The client receives the key from the server's `/info` endpoint.
-/// Using all-zeros will cause `check_premium_status` to always reject tokens
-/// because Ed25519 cannot produce a valid signature for a zero public key.
-pub const PAYMENT_SERVER_PUBKEY: [u8; 32] = [0u8; 32];
+/// Returns the payment server Ed25519 public key.
+///
+/// In production, set the `PAYMENT_SERVER_PUBKEY` environment variable to the
+/// 64-character hex-encoded public key. When unset, falls back to a dev key
+/// that rejects all tokens.
+pub fn payment_server_pubkey() -> [u8; 32] {
+    if let Ok(hex_str) = std::env::var("PAYMENT_SERVER_PUBKEY") {
+        if let Ok(bytes) = hex::decode(&hex_str) {
+            if bytes.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes);
+                return key;
+            }
+        }
+        eprintln!("WARNING: PAYMENT_SERVER_PUBKEY env var is invalid, using default");
+    }
+    // Dev fallback — always rejects tokens
+    [0u8; 32]
+}
 
 pub fn check_premium_status(token: &PremiumToken) -> bool {
-    check_premium_status_with_key(token, &PAYMENT_SERVER_PUBKEY)
+    let key = payment_server_pubkey();
+    check_premium_status_with_key(token, &key)
 }
 
 pub fn check_premium_status_with_key(token: &PremiumToken, server_pubkey: &[u8; 32]) -> bool {

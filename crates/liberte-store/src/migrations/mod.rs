@@ -1,10 +1,11 @@
 pub mod v001_initial;
+pub mod v002_channel_keys;
 
 use rusqlite::Connection;
 
 use crate::error::{Result, StoreError};
 
-const CURRENT_VERSION: u32 = 1;
+const CURRENT_VERSION: u32 = 2;
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -21,11 +22,11 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "user_version", 1)?;
     }
 
-    // Future migrations would be added here:
-    // if current < 2 {
-    //     v002_xxx::up(conn)?;
-    //     conn.pragma_update(None, "user_version", 2)?;
-    // }
+    if current < 2 {
+        tracing::info!("applying migration v002_channel_keys");
+        v002_channel_keys::up(conn).map_err(|e| StoreError::Migration(e.to_string()))?;
+        conn.pragma_update(None, "user_version", 2)?;
+    }
 
     Ok(())
 }

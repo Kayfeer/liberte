@@ -11,7 +11,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn new(_db_key: &[u8; 32]) -> Result<Self> {
+    pub fn new(db_key: &[u8; 32]) -> Result<Self> {
         let project_dirs =
             ProjectDirs::from("com", "liberte", "liberte").ok_or(StoreError::NoDataDir)?;
 
@@ -22,11 +22,22 @@ impl Database {
 
         tracing::info!(path = %db_path.display(), "opening database");
 
-        Self::open_at(&db_path, _db_key)
+        Self::open_at(&db_path, db_key)
     }
 
-    pub fn open_at(path: &Path, _db_key: &[u8; 32]) -> Result<Self> {
+    pub fn open_at(path: &Path, db_key: &[u8; 32]) -> Result<Self> {
         let conn = Connection::open(path)?;
+
+        // Activate SQLCipher encryption when the feature is enabled
+        #[cfg(feature = "sqlcipher")]
+        {
+            let key_hex = hex::encode(db_key);
+            conn.pragma_update(None, "key", &format!("x'{key_hex}'"))?;
+        }
+        #[cfg(not(feature = "sqlcipher"))]
+        {
+            let _ = db_key; // suppress unused warning
+        }
 
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;

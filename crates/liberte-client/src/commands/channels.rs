@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -160,4 +161,22 @@ pub async fn accept_invite(
         name: channel_name,
         channel_key_hex,
     })
+}
+
+#[tauri::command]
+pub fn get_all_channel_keys(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<HashMap<String, String>, String> {
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let keys = db
+        .get_all_channel_keys()
+        .map_err(|e| format!("Failed to load channel keys: {e}"))?;
+
+    // Convert Uuid keys to String for serialization
+    Ok(keys.into_iter().map(|(id, k)| (id.to_string(), k)).collect())
 }

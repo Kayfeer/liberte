@@ -32,7 +32,8 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-dev libwebkit2gtk-4.1-dev \
             libappindicator3-dev librsvg2-dev \
-            patchelf libasound2-dev
+            patchelf libasound2-dev \
+            perl
 
       - uses: dtolnay/rust-toolchain@stable
         with:

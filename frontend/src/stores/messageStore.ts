@@ -28,7 +28,11 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
   loadChannels: async () => {
     const channels = await tauri.listChannels();
-    set({ channels });
+    const channelKeys = await tauri.getAllChannelKeys();
+    set((state) => ({
+      channels,
+      channelKeys: { ...state.channelKeys, ...channelKeys },
+    }));
   },
 
   setActiveChannel: (channelId: string) => {

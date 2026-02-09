@@ -94,3 +94,6 @@ export const generateInvite = (
 
 export const acceptInvite = (inviteCode: string) =>
   invoke<CreateChannelResult>("accept_invite", { inviteCode });
+
+export const getAllChannelKeys = () =>
+  invoke<Record<string, string>>("get_all_channel_keys");

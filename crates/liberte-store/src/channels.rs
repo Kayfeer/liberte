@@ -51,17 +51,29 @@ impl Database {
     }
 
     pub fn store_channel_key(&self, channel_id: Uuid, key_hex: &str) -> Result<()> {
-        self.conn().execute_batch(
-            "CREATE TABLE IF NOT EXISTS channel_keys (
-                channel_id TEXT PRIMARY KEY NOT NULL,
-                key_hex    TEXT NOT NULL
-            );",
-        )?;
         self.conn().execute(
             "INSERT OR REPLACE INTO channel_keys (channel_id, key_hex) VALUES (?1, ?2)",
             params![channel_id.to_string(), key_hex],
         )?;
         Ok(())
+    }
+
+    pub fn get_all_channel_keys(&self) -> Result<std::collections::HashMap<Uuid, String>> {
+        let mut stmt = self.conn().prepare("SELECT channel_id, key_hex FROM channel_keys")?;
+        let rows = stmt.query_map([], |row| {
+            let id_str: String = row.get(0)?;
+            let key: String = row.get(1)?;
+            Ok((id_str, key))
+        })?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (id_str, key) = row.map_err(StoreError::Sqlite)?;
+            if let Ok(id) = Uuid::parse_str(&id_str) {
+                map.insert(id, key);
+            }
+        }
+        Ok(map)
     }
 
     pub fn get_channel_key(&self, channel_id: Uuid) -> Result<String> {
