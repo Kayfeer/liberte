@@ -14,18 +14,75 @@ use liberte_store::{Channel, Message};
 
 use crate::state::AppState;
 
+/// Build a map of hex pubkey → display_name from the users table.
+fn load_display_names(
+    db: &liberte_store::Database,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(mut stmt) = db
+        .conn()
+        .prepare("SELECT pubkey, display_name FROM users WHERE display_name IS NOT NULL")
+    {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                map.insert(row.0, row.1);
+            }
+        }
+    }
+    // Also check app_settings for own display name (overrides users table)
+    if let Ok(json_str) = db.conn().query_row(
+        "SELECT json FROM app_settings WHERE id = 1",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        if let Ok(settings) =
+            serde_json::from_str::<crate::commands::settings::AppSettings>(&json_str)
+        {
+            if let Some(name) = settings.display_name {
+                // Find own pubkey (from local_identity → derive pubkey)
+                if let Ok(secret_hex) = db.conn().query_row(
+                    "SELECT secret_key FROM local_identity WHERE id = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    if let Ok(bytes) = hex::decode(&secret_hex) {
+                        if bytes.len() == 32 {
+                            let mut key = [0u8; 32];
+                            key.copy_from_slice(&bytes);
+                            let id = liberte_shared::identity::Identity::from_secret_bytes(&key);
+                            let pk = hex::encode(id.public_key_bytes());
+                            map.insert(pk, name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageDto {
     pub id: String,
     pub channel_id: String,
     pub sender_id: String,
+    pub sender_display_name: Option<String>,
     pub content: String,
     pub timestamp: String,
 }
 
 impl MessageDto {
-    pub fn from_message(m: Message, channel_key: Option<&[u8; 32]>) -> Self {
+    pub fn from_message(
+        m: Message,
+        channel_key: Option<&[u8; 32]>,
+        sender_display_name: Option<String>,
+    ) -> Self {
         let content = match channel_key {
             Some(key) => match crypto::decrypt(key, &m.encrypted_content) {
                 Ok(bytes) => String::from_utf8(bytes)
@@ -38,6 +95,7 @@ impl MessageDto {
             id: m.id.to_string(),
             channel_id: m.channel_id.to_string(),
             sender_id: hex::encode(m.sender_pubkey),
+            sender_display_name,
             content,
             timestamp: m.timestamp.to_rfc3339(),
         }
@@ -177,9 +235,15 @@ pub fn get_messages(
         .get_messages_for_channel(channel_uuid, limit.unwrap_or(50), offset.unwrap_or(0))
         .map_err(|e| format!("Failed to load messages: {e}"))?;
 
+    let names = load_display_names(db);
+
     Ok(messages
         .into_iter()
-        .map(|m| MessageDto::from_message(m, channel_key.as_ref()))
+        .map(|m| {
+            let sender_hex = hex::encode(m.sender_pubkey);
+            let name = names.get(&sender_hex).cloned();
+            MessageDto::from_message(m, channel_key.as_ref(), name)
+        })
         .collect())
 }
 
@@ -234,6 +298,8 @@ pub fn search_messages(
 
     let mut results = Vec::new();
 
+    let names = load_display_names(db);
+
     for ch_id in target_channels {
         let key_hex = channel_keys.get(&ch_id);
         let channel_key: Option<[u8; 32]> = key_hex.and_then(|hex_str| {
@@ -251,7 +317,9 @@ pub fn search_messages(
             .map_err(|e| format!("Failed to load messages: {e}"))?;
 
         for m in messages {
-            let dto = MessageDto::from_message(m, channel_key.as_ref());
+            let sender_hex = hex::encode(m.sender_pubkey);
+            let name = names.get(&sender_hex).cloned();
+            let dto = MessageDto::from_message(m, channel_key.as_ref(), name);
             if dto.content.to_lowercase().contains(&query_lower) {
                 results.push(dto);
             }

@@ -13,6 +13,7 @@ export interface Message {
   id: string;
   channelId: ChannelId;
   senderId: UserId;
+  senderDisplayName?: string;
   content: string;
   timestamp: string;
 }
@@ -76,6 +77,7 @@ export interface IdentityInfo {
   publicKey: string;
   shortId: string;
   createdAt: string;
+  displayName?: string;
 }
 
 /** Premium subscription status */

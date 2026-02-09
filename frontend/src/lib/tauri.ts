@@ -9,14 +9,17 @@ import type {
 } from "./types";
 
 // Identity commands
-export const createIdentity = () =>
-  invoke<IdentityInfo>("create_identity");
+export const createIdentity = (displayName?: string) =>
+  invoke<IdentityInfo>("create_identity", { displayName: displayName || null });
 
 export const loadIdentity = () =>
   invoke<IdentityInfo | null>("load_identity");
 
 export const exportPubkey = () =>
   invoke<string>("export_pubkey");
+
+export const setDisplayName = (name: string) =>
+  invoke<void>("set_display_name", { name });
 
 // Network commands
 export const connectPeer = (multiaddr: string) =>

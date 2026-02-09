@@ -20,6 +20,8 @@ pub struct ProfilePayload {
     pub secret_key_hex: String,
     /// Hex-encoded Ed25519 public key (32 bytes)
     pub public_key_hex: String,
+    /// Display name / pseudo
+    pub display_name: Option<String>,
     /// Channel list with keys
     pub channels: Vec<ProfileChannel>,
 }
@@ -75,11 +77,22 @@ pub fn export_profile(state: State<'_, Arc<Mutex<AppState>>>) -> Result<String, 
         })
         .collect();
 
+    // Read display name from app_settings
+    let display_name: Option<String> = db
+        .conn()
+        .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| v.get("displayName")?.as_str().map(String::from));
+
     let payload = ProfilePayload {
         version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: chrono::Utc::now().to_rfc3339(),
         secret_key_hex: secret_hex,
         public_key_hex: public_hex.clone(),
+        display_name,
         channels,
     };
 
@@ -157,6 +170,41 @@ pub fn import_profile(
             let _ = db.store_channel_key(channel_id, &ch.key_hex);
         }
         channels_imported += 1;
+    }
+
+    // Restore display name if present
+    if let Some(ref name) = payload.display_name {
+        // Update users table
+        let _ = db.conn().execute(
+            "UPDATE users SET display_name = ?1 WHERE pubkey = ?2",
+            rusqlite::params![name, pubkey_hex],
+        );
+
+        // Update app_settings
+        let _ = db.conn().execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                json TEXT NOT NULL
+            );",
+        );
+        let current: crate::commands::settings::AppSettings =
+            db.conn()
+                .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .ok()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default();
+        let updated = crate::commands::settings::AppSettings {
+            display_name: Some(name.clone()),
+            ..current
+        };
+        if let Ok(json) = serde_json::to_string(&updated) {
+            let _ = db.conn().execute(
+                "INSERT OR REPLACE INTO app_settings (id, json) VALUES (1, ?1)",
+                rusqlite::params![json],
+            );
+        }
     }
 
     info!(

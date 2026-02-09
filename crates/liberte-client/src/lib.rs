@@ -40,6 +40,7 @@ pub fn run() {
             commands::identity::create_identity,
             commands::identity::load_identity,
             commands::identity::export_pubkey,
+            commands::identity::set_display_name,
             commands::network::connect_peer,
             commands::network::list_peers,
             commands::network::get_connection_mode,

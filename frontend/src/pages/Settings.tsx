@@ -20,6 +20,7 @@ import {
   Cloud,
   Download,
   Palette,
+  Pencil,
 } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useBackupStore } from "../stores/backupStore";
@@ -202,11 +203,13 @@ function CameraPreview({ deviceId }: { deviceId: string }) {
 }
 
 export default function Settings() {
-  const { identity } = useIdentityStore();
+  const { identity, setDisplayName } = useIdentityStore();
   const navigate = useNavigationStore((s) => s.navigate);
   const media = useMediaDevices();
   const backup = useBackupStore();
   const [copied, setCopied] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
 
   const copyPubkey = () => {
     if (identity) {
@@ -214,6 +217,11 @@ export default function Settings() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const handleSaveName = async () => {
+    await setDisplayName(nameInput.trim());
+    setEditingName(false);
   };
 
   return (
@@ -257,6 +265,50 @@ export default function Settings() {
 
         {identity && (
           <div className="space-y-2">
+            {/* Display name */}
+            <div>
+              <label className="text-xs text-liberte-muted">Pseudo</label>
+              {editingName ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    type="text"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value.slice(0, 32))}
+                    onKeyDown={(e) => e.key === "Enter" && handleSaveName()}
+                    placeholder="Ex: Kayfeer"
+                    maxLength={32}
+                    autoFocus
+                    className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1
+                               text-sm text-liberte-text placeholder-liberte-muted outline-none
+                               focus:border-liberte-accent transition-colors"
+                  />
+                  <button
+                    onClick={handleSaveName}
+                    className="p-1.5 hover:bg-liberte-panel rounded transition-colors"
+                  >
+                    <Check className="w-4 h-4 text-liberte-success" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-sm font-medium">
+                    {identity.displayName || (
+                      <span className="text-liberte-muted italic">Aucun pseudo défini</span>
+                    )}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setNameInput(identity.displayName || "");
+                      setEditingName(true);
+                    }}
+                    className="p-1 hover:bg-liberte-panel rounded transition-colors"
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-liberte-muted" />
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div>
               <label className="text-xs text-liberte-muted">
                 Clé publique

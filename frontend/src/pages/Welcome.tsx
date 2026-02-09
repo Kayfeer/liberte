@@ -1,14 +1,15 @@
 import { useState } from "react";
-import { Shield, Key, ArrowRight } from "lucide-react";
+import { Shield, Key, ArrowRight, User } from "lucide-react";
 import { useIdentityStore } from "../stores/identityStore";
 
 export default function Welcome() {
   const { createIdentity, loading, error } = useIdentityStore();
   const [_step, setStep] = useState<"intro" | "creating">("intro");
+  const [displayName, setDisplayName] = useState("");
 
   const handleCreate = async () => {
     setStep("creating");
-    await createIdentity();
+    await createIdentity(displayName.trim() || undefined);
   };
 
   return (
@@ -49,6 +50,27 @@ export default function Welcome() {
                 clé Ed25519 générée localement.
               </p>
             </div>
+          </div>
+
+          {/* Display name input */}
+          <div className="space-y-2">
+            <label className="text-sm text-liberte-muted flex items-center gap-2">
+              <User className="w-4 h-4" />
+              Choisissez un pseudo
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value.slice(0, 32))}
+              placeholder="Ex: Kayfeer"
+              maxLength={32}
+              className="w-full bg-liberte-surface border border-liberte-border rounded-lg px-3 py-2
+                         text-sm text-liberte-text placeholder-liberte-muted outline-none
+                         focus:border-liberte-accent transition-colors"
+            />
+            <p className="text-xs text-liberte-muted">
+              Visible par vos correspondants dans le chat. Modifiable plus tard dans les paramètres.
+            </p>
           </div>
 
           {error && (

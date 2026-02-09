@@ -15,9 +15,10 @@ pub struct IdentityInfoDto {
     pub public_key: String,
     pub short_id: String,
     pub created_at: String,
+    pub display_name: Option<String>,
 }
 
-fn make_identity_dto(identity: &Identity) -> IdentityInfoDto {
+fn make_identity_dto(identity: &Identity, display_name: Option<String>) -> IdentityInfoDto {
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let short_id = format!(
         "{}…{}",
@@ -28,22 +29,31 @@ fn make_identity_dto(identity: &Identity) -> IdentityInfoDto {
         public_key: pubkey_hex,
         short_id,
         created_at: chrono::Utc::now().to_rfc3339(),
+        display_name,
     }
 }
 
 #[tauri::command]
-pub fn create_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityInfoDto, String> {
+pub fn create_identity(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    display_name: Option<String>,
+) -> Result<IdentityInfoDto, String> {
     let identity = Identity::generate();
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let db_key = identity.derive_db_key();
 
-    info!(pubkey = %pubkey_hex, "Creating new identity");
+    // Sanitize display name
+    let display_name = display_name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+
+    info!(pubkey = %pubkey_hex, name = ?display_name, "Creating new identity");
 
     let db = Database::new(&db_key).map_err(|e| format!("Failed to open database: {e}"))?;
 
     let user = liberte_store::User {
         pubkey: identity.public_key_bytes(),
-        display_name: None,
+        display_name: display_name.clone(),
         avatar_hash: None,
         created_at: chrono::Utc::now(),
     };
@@ -73,7 +83,26 @@ pub fn create_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Identit
         rusqlite::params![secret_hex],
     );
 
-    let dto = make_identity_dto(&identity);
+    // Also save display name in app_settings
+    if display_name.is_some() {
+        let settings = crate::commands::settings::AppSettings {
+            display_name: display_name.clone(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap_or_default();
+        let _ = db.conn().execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                json TEXT NOT NULL
+            );",
+        );
+        let _ = db.conn().execute(
+            "INSERT OR REPLACE INTO app_settings (id, json) VALUES (1, ?1)",
+            rusqlite::params![json],
+        );
+    }
+
+    let dto = make_identity_dto(&identity, display_name);
 
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     guard.identity = Some(identity);
@@ -86,7 +115,12 @@ pub fn create_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Identit
 pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityInfoDto, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     if let Some(ref id) = guard.identity {
-        return Ok(make_identity_dto(id));
+        // Read display name from settings
+        let display_name = guard
+            .database
+            .as_ref()
+            .and_then(read_display_name);
+        return Ok(make_identity_dto(id, display_name));
     }
     drop(guard);
 
@@ -122,13 +156,41 @@ pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityI
 
     info!(pubkey = %pubkey_hex, "Loaded existing identity");
 
-    let dto = make_identity_dto(&identity);
+    let display_name = read_display_name(&db);
+    let dto = make_identity_dto(&identity, display_name);
 
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     guard.identity = Some(identity);
     guard.database = Some(db);
 
     Ok(dto)
+}
+
+/// Read the display name from app_settings JSON, falling back to users table.
+fn read_display_name(db: &Database) -> Option<String> {
+    // Try app_settings first
+    if let Ok(json_str) = db.conn().query_row(
+        "SELECT json FROM app_settings WHERE id = 1",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        if let Ok(settings) =
+            serde_json::from_str::<crate::commands::settings::AppSettings>(&json_str)
+        {
+            if settings.display_name.is_some() {
+                return settings.display_name;
+            }
+        }
+    }
+    // Fallback: users table (own pubkey row)
+    db.conn()
+        .query_row(
+            "SELECT display_name FROM users LIMIT 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
 }
 
 #[tauri::command]
@@ -140,4 +202,70 @@ pub fn export_pubkey(state: State<'_, Arc<Mutex<AppState>>>) -> Result<String, S
         .ok_or_else(|| "No identity loaded".to_string())?;
 
     Ok(hex::encode(identity.public_key_bytes()))
+}
+
+/// Update the display name for the current user.
+#[tauri::command]
+pub fn set_display_name(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    name: String,
+) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let identity = guard
+        .identity
+        .as_ref()
+        .ok_or_else(|| "No identity loaded".to_string())?;
+
+    let name = name.trim().to_string();
+    let display_name = if name.is_empty() { None } else { Some(name) };
+
+    // Update users table
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    db.conn()
+        .execute(
+            "UPDATE users SET display_name = ?1 WHERE pubkey = ?2",
+            rusqlite::params![display_name, pubkey_hex],
+        )
+        .map_err(|e| format!("Failed to update user: {e}"))?;
+
+    // Also update app_settings
+    let _ = db.conn().execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            json TEXT NOT NULL
+        );",
+    );
+
+    // Read existing settings and update display_name
+    let current: crate::commands::settings::AppSettings =
+        db.conn()
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
+    let updated = crate::commands::settings::AppSettings {
+        display_name: display_name.clone(),
+        ..current
+    };
+
+    let json =
+        serde_json::to_string(&updated).map_err(|e| format!("Serialization failed: {e}"))?;
+    db.conn()
+        .execute(
+            "INSERT OR REPLACE INTO app_settings (id, json) VALUES (1, ?1)",
+            rusqlite::params![json],
+        )
+        .map_err(|e| format!("Failed to save settings: {e}"))?;
+
+    info!(name = ?display_name, "Display name updated");
+    Ok(())
 }
