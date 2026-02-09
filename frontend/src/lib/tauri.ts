@@ -4,7 +4,6 @@ import type {
   Channel,
   IdentityInfo,
   ConnectionMode,
-  CallState,
   UserSettings,
   ServerInfo,
 } from "./types";

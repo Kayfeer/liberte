@@ -4,7 +4,7 @@ import { useIdentityStore } from "../stores/identityStore";
 
 export default function Welcome() {
   const { createIdentity, loading, error } = useIdentityStore();
-  const [step, setStep] = useState<"intro" | "creating">("intro");
+  const [_step, setStep] = useState<"intro" | "creating">("intro");
 
   const handleCreate = async () => {
     setStep("creating");
