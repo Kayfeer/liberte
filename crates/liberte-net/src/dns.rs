@@ -1,9 +1,3 @@
-//! DNS-over-HTTPS resolver that bypasses the OS/ISP DNS entirely.
-//!
-//! Forces all DNS queries through Cloudflare (1.1.1.1) and Google (8.8.8.8)
-//! DoH endpoints so that local network surveillance or censorship cannot
-//! interfere with peer discovery.
-
 use hickory_resolver::{
     config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts},
     TokioAsyncResolver,
@@ -13,16 +7,7 @@ use tracing::info;
 
 use liberte_shared::constants::{DOH_CLOUDFLARE, DOH_GOOGLE};
 
-/// Build a DNS-over-HTTPS async resolver that queries only Cloudflare and Google.
-///
-/// This resolver completely bypasses the operating system's DNS configuration,
-/// preventing ISP-level DNS poisoning, logging, or censorship from affecting
-/// Liberte's peer discovery and connectivity.
-///
-/// # Returns
-///
-/// A `TokioAsyncResolver` configured for DoH with both Cloudflare (1.1.1.1)
-/// and Google (8.8.8.8) as upstream resolvers.
+/// Builds a DoH resolver that bypasses OS/ISP DNS entirely.
 pub fn build_doh_resolver() -> TokioAsyncResolver {
     let cloudflare_addr: IpAddr = DOH_CLOUDFLARE
         .parse()
@@ -54,11 +39,8 @@ pub fn build_doh_resolver() -> TokioAsyncResolver {
     resolver_config.add_name_server(google_ns);
 
     let mut opts = ResolverOpts::default();
-    // Use all configured servers, not just the first
     opts.num_concurrent_reqs = 2;
-    // Cache results for performance
     opts.cache_size = 256;
-    // Rotate between nameservers
     opts.rotate = true;
 
     info!("Built DoH resolver with Cloudflare (1.1.1.1) and Google (8.8.8.8)");
@@ -72,7 +54,6 @@ mod tests {
 
     #[test]
     fn test_build_doh_resolver_does_not_panic() {
-        // Simply verify that construction succeeds without panicking.
         let _resolver = build_doh_resolver();
     }
 }

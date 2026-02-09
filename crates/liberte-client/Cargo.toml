@@ -2,6 +2,7 @@
 name = "liberte-client"
 version.workspace = true
 edition.workspace = true
+authors = ["Kayfeer"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -16,7 +16,6 @@ pub enum AudioError {
     StreamError(String),
 }
 
-/// Audio configuration
 #[derive(Debug, Clone)]
 pub struct AudioConfig {
     pub sample_rate: u32,
@@ -28,20 +27,18 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             sample_rate: 48000,
-            channels: 1, // Mono for voice
-            frame_size_ms: 20, // 20ms frames (Opus standard)
+            channels: 1,
+            frame_size_ms: 20,
         }
     }
 }
 
 impl AudioConfig {
-    /// Number of samples per frame
     pub fn frame_size_samples(&self) -> usize {
         (self.sample_rate as usize * self.frame_size_ms as usize) / 1000
     }
 }
 
-/// Manages audio capture and playback
 pub struct AudioEngine {
     config: AudioConfig,
     is_capturing: bool,
@@ -57,8 +54,6 @@ impl AudioEngine {
         }
     }
 
-    /// Start capturing audio from the default input device.
-    /// Captured frames are sent via the provided channel.
     pub fn start_capture(
         &mut self,
         frame_tx: tokio::sync::mpsc::Sender<Vec<f32>>,
@@ -104,7 +99,7 @@ impl AudioEngine {
             .play()
             .map_err(|e| AudioError::StreamError(e.to_string()))?;
 
-        // Keep stream alive by leaking it (will be cleaned up on drop of AudioEngine)
+        // Keep stream alive by leaking it (cleaned up when process exits)
         std::mem::forget(stream);
 
         self.is_capturing = true;
@@ -112,7 +107,6 @@ impl AudioEngine {
         Ok(())
     }
 
-    /// Start playing audio frames from the provided channel.
     pub fn start_playback(
         &mut self,
         mut frame_rx: tokio::sync::mpsc::Receiver<Vec<f32>>,
@@ -134,7 +128,7 @@ impl AudioEngine {
 
         let (playback_tx, playback_rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
-        // Spawn a task to bridge tokio channel to std channel
+        // Bridge tokio channel to std channel for the audio callback
         tokio::spawn(async move {
             while let Some(frame) = frame_rx.recv().await {
                 if playback_tx.send(frame).is_err() {
@@ -149,14 +143,13 @@ impl AudioEngine {
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                    // Drain available frames into play buffer
                     while let Ok(frame) = playback_rx.try_recv() {
                         play_buffer.extend_from_slice(&frame);
                     }
 
                     for sample in data.iter_mut() {
                         *sample = if play_buffer.is_empty() {
-                            0.0 // Silence when no data
+                            0.0
                         } else {
                             play_buffer.remove(0)
                         };

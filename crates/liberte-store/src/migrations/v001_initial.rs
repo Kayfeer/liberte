@@ -1,15 +1,6 @@
-//! v001 -- Initial schema creation.
-//!
-//! Creates the five core tables: `users`, `channels`, `messages`, `servers`,
-//! and `blobs`.
-
 use rusqlite::Connection;
 
-/// SQL executed when upgrading from version 0 to version 1.
 const UP_SQL: &str = r#"
--- ----------------------------------------------------------------
--- Users
--- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
     pubkey       TEXT PRIMARY KEY NOT NULL,   -- hex-encoded 32-byte Ed25519 pubkey
     display_name TEXT,
@@ -17,9 +8,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at   TEXT NOT NULL                -- ISO-8601 / RFC-3339
 );
 
--- ----------------------------------------------------------------
--- Servers (guilds)
--- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS servers (
     id           TEXT PRIMARY KEY NOT NULL,   -- UUID v4
     name         TEXT NOT NULL,
@@ -27,9 +15,6 @@ CREATE TABLE IF NOT EXISTS servers (
     created_at   TEXT NOT NULL
 );
 
--- ----------------------------------------------------------------
--- Channels
--- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS channels (
     id         TEXT PRIMARY KEY NOT NULL,     -- UUID v4
     name       TEXT NOT NULL,
@@ -41,9 +26,6 @@ CREATE TABLE IF NOT EXISTS channels (
 
 CREATE INDEX IF NOT EXISTS idx_channels_server_id ON channels(server_id);
 
--- ----------------------------------------------------------------
--- Messages
--- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS messages (
     id                TEXT PRIMARY KEY NOT NULL,  -- UUID v4
     channel_id        TEXT NOT NULL,              -- FK -> channels(id)
@@ -57,9 +39,6 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_channel_ts
     ON messages(channel_id, timestamp DESC);
 
--- ----------------------------------------------------------------
--- Blobs (file metadata)
--- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS blobs (
     id          TEXT PRIMARY KEY NOT NULL,    -- UUID v4
     file_name   TEXT NOT NULL,
@@ -71,7 +50,6 @@ CREATE TABLE IF NOT EXISTS blobs (
 );
 "#;
 
-/// Apply the initial migration.
 pub fn up(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(UP_SQL)
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// User identity = Ed25519 public key (32 bytes)
+// User identity = Ed25519 public key (32 bytes)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct UserId(pub [u8; 32]);
 
@@ -17,7 +17,6 @@ impl UserId {
         Ok(Self(arr))
     }
 
-    /// Short display: first 8 hex chars
     pub fn short(&self) -> String {
         self.to_hex()[..8].to_string()
     }
@@ -29,7 +28,6 @@ impl std::fmt::Display for UserId {
     }
 }
 
-/// Unique channel identifier
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChannelId(pub Uuid);
 
@@ -49,7 +47,6 @@ impl Default for ChannelId {
     }
 }
 
-/// Unique server (guild) identifier
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ServerId(pub Uuid);
 
@@ -65,18 +62,13 @@ impl Default for ServerId {
     }
 }
 
-/// Connection mode indicator for the UI
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ConnectionMode {
-    /// Direct P2P connection (free)
     Direct,
-    /// Relayed through VPS (premium)
     Relayed,
-    /// Not connected
     Disconnected,
 }
 
-/// Media frame type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum FrameType {

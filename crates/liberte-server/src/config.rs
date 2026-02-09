@@ -1,63 +1,17 @@
-//! Server configuration loaded from environment variables.
-//!
-//! All settings have sensible defaults so the server can start with zero
-//! configuration for local development.
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-/// Server configuration.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    /// libp2p multiaddr to listen on (QUIC).
-    /// Env: `LISTEN_ADDR`
-    /// Default: `/ip4/0.0.0.0/udp/4001/quic-v1`
     pub listen_addr: String,
-
-    /// Socket address for the HTTP (axum) API server.
-    /// Env: `HTTP_ADDR`
-    /// Default: `0.0.0.0:8080`
     pub http_addr: SocketAddr,
-
-    /// Filesystem path where encrypted blobs are stored.
-    /// Env: `BLOB_STORAGE_PATH`
-    /// Default: `./blobs`
     pub blob_storage_path: PathBuf,
-
-    /// Ed25519 public key of the payment server (hex-encoded, 64 chars).
-    /// Env: `PAYMENT_SERVER_PUBKEY`
-    /// Default: all-zeros (development only).
     pub payment_server_pubkey: [u8; 32],
-
-    /// Maximum blob size in bytes (50 MiB).
     pub max_blob_size: usize,
-
-    // -- Self-hosted instance settings --
-
-    /// Human-readable name for this server instance.
-    /// Env: `INSTANCE_NAME`
-    /// Default: `"Liberté Node"`
     pub instance_name: String,
-
-    /// Whether premium verification is required for SFU/blob access.
-    /// Self-hosted admins can disable this to grant full access to all users.
-    /// Env: `PREMIUM_REQUIRED` (true/false)
-    /// Default: `true`
     pub premium_required: bool,
-
-    /// Admin API bearer token. Required to access /admin/* endpoints.
-    /// Env: `ADMIN_TOKEN`
-    /// Default: empty (admin API disabled).
     pub admin_token: Option<String>,
-
-    /// Whether new users can connect freely.
-    /// Env: `REGISTRATION_OPEN` (true/false)
-    /// Default: `true`
     pub registration_open: bool,
-
-    /// Maximum number of concurrent connected peers (0 = unlimited).
-    /// Env: `MAX_PEERS`
-    /// Default: `0`
     pub max_peers: usize,
 }
 
@@ -68,8 +22,8 @@ impl Default for ServerConfig {
             http_addr: ([0, 0, 0, 0], 8080).into(),
             blob_storage_path: PathBuf::from("./blobs"),
             payment_server_pubkey: [0u8; 32],
-            max_blob_size: 50 * 1024 * 1024, // 50 MiB
-            instance_name: "Liberté Node".to_string(),
+            max_blob_size: 50 * 1024 * 1024,
+            instance_name: "Liberte Node".to_string(),
             premium_required: true,
             admin_token: None,
             registration_open: true,
@@ -79,7 +33,6 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
-    /// Load configuration from environment variables, falling back to defaults.
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
@@ -114,8 +67,6 @@ impl ServerConfig {
             }
         }
 
-        // -- Self-hosted settings --
-
         if let Ok(name) = std::env::var("INSTANCE_NAME") {
             config.instance_name = name;
         }
@@ -140,14 +91,10 @@ impl ServerConfig {
             }
         }
 
-        // RUST_LOG is handled directly by tracing-subscriber's EnvFilter,
-        // so we do not store it here.
-
         config
     }
 }
 
-/// Parse a 64-character hex string into a 32-byte array.
 fn parse_hex_pubkey(hex: &str) -> Result<[u8; 32], String> {
     let hex = hex.trim();
     if hex.len() != 64 {

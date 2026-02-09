@@ -1,9 +1,3 @@
-//! Voice and video call Tauri commands.
-//!
-//! These commands control the local call state (start, end, mute, video
-//! toggle) and update the shared [`AppState`] so the UI can reflect the
-//! current call status.
-
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -12,7 +6,6 @@ use tracing::info;
 
 use crate::state::AppState;
 
-/// Response payload describing the current call state.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallState {
     pub in_call: bool,
@@ -20,11 +13,6 @@ pub struct CallState {
     pub is_video_enabled: bool,
 }
 
-/// Start a voice/video call in the given channel.
-///
-/// In a full implementation this would initialise the WebRTC mesh via
-/// `liberte_media::webrtc_peer::MeshManager` and begin signaling.
-/// For now it flips the `is_in_call` flag and returns the new state.
 #[tauri::command]
 pub fn start_call(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -42,14 +30,9 @@ pub fn start_call(
 
     info!("Call started");
 
-    Ok(CallState {
-        in_call: true,
-        is_muted: false,
-        is_video_enabled: true,
-    })
+    Ok(CallState { in_call: true, is_muted: false, is_video_enabled: true })
 }
 
-/// End the current call and clean up media resources.
 #[tauri::command]
 pub fn end_call(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -66,14 +49,9 @@ pub fn end_call(
 
     info!("Call ended");
 
-    Ok(CallState {
-        in_call: false,
-        is_muted: false,
-        is_video_enabled: true,
-    })
+    Ok(CallState { in_call: false, is_muted: false, is_video_enabled: true })
 }
 
-/// Toggle audio mute state. Returns the new call state.
 #[tauri::command]
 pub fn toggle_mute(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -85,7 +63,6 @@ pub fn toggle_mute(
     }
 
     guard.is_muted = !guard.is_muted;
-
     info!(muted = guard.is_muted, "Mute toggled");
 
     Ok(CallState {
@@ -95,7 +72,6 @@ pub fn toggle_mute(
     })
 }
 
-/// Toggle video camera on/off. Returns the new call state.
 #[tauri::command]
 pub fn toggle_video(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -107,7 +83,6 @@ pub fn toggle_video(
     }
 
     guard.is_video_enabled = !guard.is_video_enabled;
-
     info!(video = guard.is_video_enabled, "Video toggled");
 
     Ok(CallState {

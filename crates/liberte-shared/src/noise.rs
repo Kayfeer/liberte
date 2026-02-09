@@ -4,8 +4,6 @@ use crate::error::NoiseError;
 
 const NOISE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 
-/// Build an initiator (client-side) Noise_XX handshake state.
-/// Uses X25519 key exchange, ChaChaPoly for symmetric encryption, BLAKE2s for hashing.
 pub fn build_initiator(local_private_key: &[u8; 32]) -> Result<HandshakeState, NoiseError> {
     Builder::new(
         NOISE_PATTERN
@@ -17,7 +15,6 @@ pub fn build_initiator(local_private_key: &[u8; 32]) -> Result<HandshakeState, N
     .map_err(|e| NoiseError::Handshake(format!("{e}")))
 }
 
-/// Build a responder (server-side) Noise_XX handshake state.
 pub fn build_responder(local_private_key: &[u8; 32]) -> Result<HandshakeState, NoiseError> {
     Builder::new(
         NOISE_PATTERN
@@ -29,11 +26,7 @@ pub fn build_responder(local_private_key: &[u8; 32]) -> Result<HandshakeState, N
     .map_err(|e| NoiseError::Handshake(format!("{e}")))
 }
 
-/// After the Noise_XX handshake completes (3 messages exchanged),
-/// convert to transport mode and extract a shared symmetric key.
-///
-/// The handshake hash is used as the shared secret from which
-/// channel keys can be derived via `crypto::derive_channel_key`.
+// Finalize handshake -> transport mode, extract shared key from handshake hash
 pub fn into_transport(state: HandshakeState) -> Result<(TransportState, [u8; 32]), NoiseError> {
     let handshake_hash: Vec<u8> = state.get_handshake_hash().to_vec();
     let transport = state
@@ -47,12 +40,11 @@ pub fn into_transport(state: HandshakeState) -> Result<(TransportState, [u8; 32]
     Ok((transport, shared_key))
 }
 
-/// Encrypt a message using a Noise transport state
 pub fn transport_encrypt(
     transport: &mut TransportState,
     plaintext: &[u8],
 ) -> Result<Vec<u8>, NoiseError> {
-    let mut buf = vec![0u8; plaintext.len() + 64]; // Extra space for auth tag
+    let mut buf = vec![0u8; plaintext.len() + 64]; // extra space for auth tag
     let len = transport
         .write_message(plaintext, &mut buf)
         .map_err(|e| NoiseError::Transport(format!("{e}")))?;
@@ -60,7 +52,6 @@ pub fn transport_encrypt(
     Ok(buf)
 }
 
-/// Decrypt a message using a Noise transport state
 pub fn transport_decrypt(
     transport: &mut TransportState,
     ciphertext: &[u8],
@@ -79,7 +70,6 @@ mod tests {
 
     #[test]
     fn test_noise_handshake() {
-        // Generate X25519 keys for both parties
         let initiator_key = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
         let responder_key = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
 
@@ -89,8 +79,8 @@ mod tests {
         let mut initiator = build_initiator(&initiator_bytes).unwrap();
         let mut responder = build_responder(&responder_bytes).unwrap();
 
-        // Noise_XX: 3 message handshake
-        // Message 1: Initiator -> Responder (e)
+        // Noise_XX 3-message handshake
+        // msg1: initiator -> responder (e)
         let mut buf = vec![0u8; 256];
         let len = initiator.write_message(&[], &mut buf).unwrap();
         let msg1 = &buf[..len];
@@ -98,7 +88,7 @@ mod tests {
         let mut buf = vec![0u8; 256];
         let _len = responder.read_message(msg1, &mut buf).unwrap();
 
-        // Message 2: Responder -> Initiator (e, ee, s, es)
+        // msg2: responder -> initiator (e, ee, s, es)
         let mut buf = vec![0u8; 256];
         let len = responder.write_message(&[], &mut buf).unwrap();
         let msg2 = &buf[..len];
@@ -106,7 +96,7 @@ mod tests {
         let mut buf = vec![0u8; 256];
         let _len = initiator.read_message(msg2, &mut buf).unwrap();
 
-        // Message 3: Initiator -> Responder (s, se)
+        // msg3: initiator -> responder (s, se)
         let mut buf = vec![0u8; 256];
         let len = initiator.write_message(&[], &mut buf).unwrap();
         let msg3 = &buf[..len];
@@ -114,14 +104,12 @@ mod tests {
         let mut buf = vec![0u8; 256];
         let _len = responder.read_message(msg3, &mut buf).unwrap();
 
-        // Both should now be ready for transport mode
+        // both ready for transport
         let (mut i_transport, i_key) = into_transport(initiator).unwrap();
         let (mut r_transport, r_key) = into_transport(responder).unwrap();
 
-        // Shared keys should match
         assert_eq!(i_key, r_key);
 
-        // Test transport encryption/decryption
         let message = b"Hello from initiator!";
         let encrypted = transport_encrypt(&mut i_transport, message).unwrap();
         let decrypted = transport_decrypt(&mut r_transport, &encrypted).unwrap();

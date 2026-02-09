@@ -1,3 +1,5 @@
+// Shared types and crypto primitives for Liberté
+
 pub mod constants;
 pub mod crypto;
 pub mod csam;

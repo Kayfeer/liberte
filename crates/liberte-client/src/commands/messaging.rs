@@ -1,9 +1,3 @@
-//! Chat messaging Tauri commands.
-//!
-//! These commands bridge the frontend UI with the encrypted messaging
-//! layer: sending messages via GossipSub, loading message history from the
-//! local database, and listing available channels.
-
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -20,7 +14,6 @@ use liberte_store::{Channel, Message};
 
 use crate::state::AppState;
 
-/// Serializable message returned to the frontend.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageDto {
     pub id: String,
@@ -42,7 +35,6 @@ impl From<Message> for MessageDto {
     }
 }
 
-/// Serializable channel returned to the frontend.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelDto {
     pub id: String,
@@ -62,14 +54,6 @@ impl From<Channel> for ChannelDto {
     }
 }
 
-/// Encrypt a plaintext message with the channel key, publish it to
-/// GossipSub, and persist it locally.
-///
-/// # Arguments (from JS)
-///
-/// * `channel_id` -- UUID string of the target channel.
-/// * `content` -- plaintext message body (will be encrypted).
-/// * `channel_key_hex` -- 32-byte channel symmetric key as hex (64 chars).
 #[tauri::command]
 pub async fn send_message(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -88,28 +72,21 @@ pub async fn send_message(
     let mut channel_key = [0u8; 32];
     channel_key.copy_from_slice(&key_bytes);
 
-    // Read identity and swarm handle from state
     let (sender_pubkey, cmd_tx) = {
         let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-        let identity = guard
-            .identity
-            .as_ref()
+        let identity = guard.identity.as_ref()
             .ok_or_else(|| "No identity loaded".to_string())?;
-        let tx = guard
-            .swarm_cmd_tx
-            .clone()
+        let tx = guard.swarm_cmd_tx.clone()
             .ok_or_else(|| "Swarm not started".to_string())?;
         (identity.public_key_bytes(), tx)
     };
 
-    // Encrypt the content
     let encrypted = crypto::encrypt(&channel_key, content.as_bytes())
         .map_err(|e| format!("Encryption failed: {e}"))?;
 
     let message_id = Uuid::new_v4();
     let timestamp = Utc::now();
 
-    // Build the wire message
     let wire_msg = WireMessage::ChatMessage(ChatMessage {
         sender: liberte_shared::types::UserId(sender_pubkey),
         channel_id: ChannelId(channel_uuid),
@@ -118,21 +95,15 @@ pub async fn send_message(
         message_id,
     });
 
-    // Serialize and publish to GossipSub
     let topic = ChannelId(channel_uuid).to_topic();
-    let wire_bytes = wire_msg
-        .to_bytes()
+    let wire_bytes = wire_msg.to_bytes()
         .map_err(|e| format!("Serialization failed: {e}"))?;
 
     cmd_tx
-        .send(SwarmCommand::PublishMessage {
-            topic,
-            data: wire_bytes,
-        })
+        .send(SwarmCommand::PublishMessage { topic, data: wire_bytes })
         .await
         .map_err(|e| format!("Failed to publish message: {e}"))?;
 
-    // Persist locally
     let msg = Message {
         id: message_id,
         channel_id: channel_uuid,
@@ -149,23 +120,10 @@ pub async fn send_message(
         }
     }
 
-    info!(
-        msg_id = %message_id,
-        channel = %channel_id,
-        "Message sent"
-    );
-
+    info!(msg_id = %message_id, channel = %channel_id, "Message sent");
     Ok(message_id.to_string())
 }
 
-/// Load messages from the local database for a given channel, with
-/// pagination support.
-///
-/// # Arguments (from JS)
-///
-/// * `channel_id` -- UUID string of the channel.
-/// * `limit` -- maximum number of messages to return.
-/// * `offset` -- number of messages to skip.
 #[tauri::command]
 pub fn get_messages(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -177,9 +135,7 @@ pub fn get_messages(
         .map_err(|e| format!("Invalid channel_id: {e}"))?;
 
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    let db = guard
-        .database
-        .as_ref()
+    let db = guard.database.as_ref()
         .ok_or_else(|| "Database not opened".to_string())?;
 
     let messages = db
@@ -189,19 +145,15 @@ pub fn get_messages(
     Ok(messages.into_iter().map(MessageDto::from).collect())
 }
 
-/// List all channels stored in the local database.
 #[tauri::command]
 pub fn list_channels(
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<Vec<ChannelDto>, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    let db = guard
-        .database
-        .as_ref()
+    let db = guard.database.as_ref()
         .ok_or_else(|| "Database not opened".to_string())?;
 
-    let channels = db
-        .list_channels()
+    let channels = db.list_channels()
         .map_err(|e| format!("Failed to list channels: {e}"))?;
 
     Ok(channels.into_iter().map(ChannelDto::from).collect())

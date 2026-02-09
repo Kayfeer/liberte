@@ -1,8 +1,3 @@
-//! Peer connection tracking.
-//!
-//! Maintains an in-memory map of connected peers, their addresses,
-//! connection state, and whether the connection is direct or relayed.
-
 use std::collections::HashMap;
 
 use libp2p::{Multiaddr, PeerId};
@@ -10,40 +5,26 @@ use tracing::debug;
 
 use liberte_shared::types::ConnectionMode;
 
-/// Information about a connected peer.
 #[derive(Debug, Clone)]
 pub struct ConnectionInfo {
-    /// The peer's libp2p ID.
     pub peer_id: PeerId,
-    /// The multiaddr through which we are connected.
     pub address: Multiaddr,
-    /// Whether the connection is direct or via a relay.
     pub mode: ConnectionMode,
-    /// Timestamp of when the connection was established (Unix epoch millis).
     pub connected_at: u64,
 }
 
-/// Tracks all currently connected peers.
 #[derive(Debug, Clone)]
 pub struct PeerTracker {
     peers: HashMap<PeerId, ConnectionInfo>,
 }
 
 impl PeerTracker {
-    /// Create a new, empty peer tracker.
     pub fn new() -> Self {
         Self {
             peers: HashMap::new(),
         }
     }
 
-    /// Record a newly connected peer.
-    ///
-    /// # Arguments
-    ///
-    /// * `peer_id` - The remote peer's ID
-    /// * `address` - The multiaddr of the connection
-    /// * `is_relayed` - Whether the connection goes through a relay
     pub fn on_connected(&mut self, peer_id: PeerId, address: Multiaddr, is_relayed: bool) {
         let mode = if is_relayed {
             ConnectionMode::Relayed
@@ -73,14 +54,12 @@ impl PeerTracker {
         self.peers.insert(peer_id, info);
     }
 
-    /// Remove a peer that has fully disconnected.
     pub fn on_disconnected(&mut self, peer_id: &PeerId) {
         if self.peers.remove(peer_id).is_some() {
             debug!(peer = %peer_id, "Removed peer from tracker");
         }
     }
 
-    /// Update a peer's connection mode (e.g. after DCUtR upgrades relayed to direct).
     pub fn upgrade_to_direct(&mut self, peer_id: &PeerId, new_address: Multiaddr) {
         if let Some(info) = self.peers.get_mut(peer_id) {
             info.mode = ConnectionMode::Direct;
@@ -89,12 +68,10 @@ impl PeerTracker {
         }
     }
 
-    /// Get connection info for a specific peer.
     pub fn get(&self, peer_id: &PeerId) -> Option<&ConnectionInfo> {
         self.peers.get(peer_id)
     }
 
-    /// Get the connection mode for a specific peer.
     pub fn connection_mode(&self, peer_id: &PeerId) -> ConnectionMode {
         self.peers
             .get(peer_id)
@@ -102,17 +79,14 @@ impl PeerTracker {
             .unwrap_or(ConnectionMode::Disconnected)
     }
 
-    /// Return a list of all connected peer IDs.
     pub fn connected_peers(&self) -> Vec<PeerId> {
         self.peers.keys().copied().collect()
     }
 
-    /// Return the number of connected peers.
     pub fn peer_count(&self) -> usize {
         self.peers.len()
     }
 
-    /// Return the number of directly connected peers.
     pub fn direct_count(&self) -> usize {
         self.peers
             .values()
@@ -120,7 +94,6 @@ impl PeerTracker {
             .count()
     }
 
-    /// Return the number of relay-connected peers.
     pub fn relayed_count(&self) -> usize {
         self.peers
             .values()
@@ -128,12 +101,10 @@ impl PeerTracker {
             .count()
     }
 
-    /// Check whether we are connected to a given peer.
     pub fn is_connected(&self, peer_id: &PeerId) -> bool {
         self.peers.contains_key(peer_id)
     }
 
-    /// Return all connection infos (snapshot).
     pub fn all_connections(&self) -> Vec<ConnectionInfo> {
         self.peers.values().cloned().collect()
     }

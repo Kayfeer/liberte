@@ -1,16 +1,4 @@
-//! # liberte-net
-//!
-//! P2P networking layer for Liberte, built on libp2p with QUIC transport.
-//!
-//! This crate provides:
-//! - DNS-over-HTTPS resolution bypassing OS/ISP DNS
-//! - Composed libp2p network behaviour (GossipSub, Kademlia, Identify, Relay, DCUtR)
-//! - QUIC transport construction via `SwarmBuilder`
-//! - Swarm orchestration with command/notification channels
-//! - Bootstrap peer discovery via Kademlia
-//! - Circuit relay v2 client logic
-//! - High-level message publish/subscribe helpers
-//! - Peer connection tracking
+// P2P networking layer built on libp2p with QUIC transport.
 
 pub mod behaviour;
 pub mod discovery;

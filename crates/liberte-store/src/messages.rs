@@ -1,5 +1,3 @@
-//! CRUD operations for [`Message`] records.
-
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use uuid::Uuid;
@@ -9,11 +7,6 @@ use crate::error::{Result, StoreError};
 use crate::models::Message;
 
 impl Database {
-    // ------------------------------------------------------------------
-    // Insert
-    // ------------------------------------------------------------------
-
-    /// Persist a new message.
     pub fn insert_message(&self, message: &Message) -> Result<()> {
         self.conn().execute(
             "INSERT INTO messages (id, channel_id, sender_pubkey, encrypted_content, timestamp)
@@ -29,14 +22,6 @@ impl Database {
         Ok(())
     }
 
-    // ------------------------------------------------------------------
-    // Read
-    // ------------------------------------------------------------------
-
-    /// Fetch messages for a channel ordered newest-first with pagination.
-    ///
-    /// * `limit`  -- maximum number of messages to return.
-    /// * `offset` -- number of messages to skip (for pagination).
     pub fn get_messages_for_channel(
         &self,
         channel_id: Uuid,
@@ -63,13 +48,11 @@ impl Database {
         Ok(messages)
     }
 
-    /// Fetch a single message by its UUID.
     pub fn get_message_by_id(&self, id: Uuid) -> Result<Message> {
         self.conn()
             .query_row(
                 "SELECT id, channel_id, sender_pubkey, encrypted_content, timestamp
-                 FROM messages
-                 WHERE id = ?1",
+                 FROM messages WHERE id = ?1",
                 params![id.to_string()],
                 row_to_message,
             )
@@ -79,11 +62,6 @@ impl Database {
             })
     }
 
-    // ------------------------------------------------------------------
-    // Delete
-    // ------------------------------------------------------------------
-
-    /// Delete a message by its UUID.  Returns `true` if a row was deleted.
     pub fn delete_message(&self, id: Uuid) -> Result<bool> {
         let affected = self
             .conn()
@@ -92,11 +70,6 @@ impl Database {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Map a `rusqlite::Row` to a [`Message`].
 fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let id_str: String = row.get(0)?;
     let channel_id_str: String = row.get(1)?;

@@ -1,29 +1,6 @@
-//! QUIC transport configuration for libp2p.
-//!
-//! In libp2p 0.54 the transport is constructed internally by `SwarmBuilder`.
-//! This module provides configuration helpers and the public type alias
-//! that other crates can reference if they need to name the transport.
-
 use libp2p::identity::Keypair;
 use tracing::info;
 
-/// Build a libp2p `Swarm` with QUIC transport, relay client, and the
-/// Liberte composed behaviour.
-///
-/// This is the primary entry point that wires together:
-/// - QUIC (tokio) transport for direct peer connections
-/// - Relay client transport for NAT-traversed connections
-/// - The [`LiberteBehaviour`](super::behaviour::LiberteBehaviour)
-///
-/// The returned swarm is ready to listen and dial.
-///
-/// # Arguments
-///
-/// * `keypair` - The local node's identity keypair
-///
-/// # Returns
-///
-/// A fully constructed `libp2p::Swarm<LiberteBehaviour>`.
 pub fn build_swarm(
     keypair: Keypair,
 ) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
@@ -46,7 +23,6 @@ pub fn build_swarm(
         .with_behaviour(|key, relay_client| -> std::result::Result<super::behaviour::LiberteBehaviour, Box<dyn std::error::Error + Send + Sync>> {
             let local_peer_id = key.public().to_peer_id();
 
-            // --- GossipSub ---
             let message_id_fn = |message: &gossipsub::Message| {
                 let mut hasher = DefaultHasher::new();
                 message.data.hash(&mut hasher);
@@ -74,19 +50,16 @@ pub fn build_swarm(
                 format!("GossipSub init: {e}").into()
             })?;
 
-            // --- Kademlia ---
             let store = MemoryStore::new(local_peer_id);
             let mut kademlia = kad::Behaviour::new(local_peer_id, store);
             kademlia.set_mode(Some(kad::Mode::Server));
 
-            // --- Identify ---
             let identify_config =
                 identify::Config::new(PROTOCOL_VERSION.to_string(), key.public())
                     .with_push_listen_addr_updates(true)
                     .with_interval(Duration::from_secs(60));
             let identify = identify::Behaviour::new(identify_config);
 
-            // --- DCUtR ---
             let dcutr = dcutr::Behaviour::new(local_peer_id);
 
             Ok(super::behaviour::LiberteBehaviour {

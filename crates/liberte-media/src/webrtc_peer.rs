@@ -19,10 +19,8 @@ pub enum PeerConnectionError {
     MaxPeersReached,
 }
 
-/// Maximum peers in a full mesh call
 const MAX_MESH_PEERS: usize = 8;
 
-/// State of a peer connection
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerState {
     Connecting,
@@ -31,7 +29,6 @@ pub enum PeerState {
     Failed,
 }
 
-/// Info about a connected peer in a call
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     pub user_id: UserId,
@@ -41,14 +38,10 @@ pub struct PeerInfo {
 }
 
 /// Manages P2P WebRTC connections in full mesh mode.
-/// Each participant sends their media directly to all other participants.
 pub struct MeshManager {
     local_user: UserId,
-    /// Session encryption key (all participants share this for E2EE)
     session_key: SymmetricKey,
-    /// Connected peers
     peers: HashMap<String, PeerInfo>,
-    /// Whether we are currently in a call
     in_call: bool,
 }
 
@@ -62,7 +55,6 @@ impl MeshManager {
         }
     }
 
-    /// Start a new call or join an existing one
     pub fn start_call(&mut self) -> Result<(), PeerConnectionError> {
         if self.in_call {
             warn!("Already in a call");
@@ -73,7 +65,6 @@ impl MeshManager {
         Ok(())
     }
 
-    /// Add a peer to the mesh
     pub fn add_peer(&mut self, user_id: UserId) -> Result<(), PeerConnectionError> {
         if self.peers.len() >= MAX_MESH_PEERS {
             return Err(PeerConnectionError::MaxPeersReached);
@@ -99,7 +90,6 @@ impl MeshManager {
         Ok(())
     }
 
-    /// Remove a peer from the mesh
     pub fn remove_peer(&mut self, user_id: &UserId) {
         let key = user_id.to_hex();
         if self.peers.remove(&key).is_some() {
@@ -107,7 +97,6 @@ impl MeshManager {
         }
     }
 
-    /// Update peer state
     pub fn set_peer_state(&mut self, user_id: &UserId, state: PeerState) {
         let key = user_id.to_hex();
         if let Some(peer) = self.peers.get_mut(&key) {
@@ -115,14 +104,12 @@ impl MeshManager {
         }
     }
 
-    /// End the call and disconnect all peers
     pub fn end_call(&mut self) {
         info!("Ending mesh call, disconnecting {} peers", self.peers.len());
         self.peers.clear();
         self.in_call = false;
     }
 
-    /// Get list of connected peers
     pub fn connected_peers(&self) -> Vec<&PeerInfo> {
         self.peers
             .values()
@@ -130,7 +117,6 @@ impl MeshManager {
             .collect()
     }
 
-    /// Get all peers (any state)
     pub fn all_peers(&self) -> Vec<&PeerInfo> {
         self.peers.values().collect()
     }

@@ -1,5 +1,3 @@
-//! CRUD operations for [`Blob`] (file metadata) records.
-
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use uuid::Uuid;
@@ -9,11 +7,6 @@ use crate::error::{Result, StoreError};
 use crate::models::Blob;
 
 impl Database {
-    // ------------------------------------------------------------------
-    // Create
-    // ------------------------------------------------------------------
-
-    /// Insert a new blob metadata record.
     pub fn insert_blob(&self, blob: &Blob) -> Result<()> {
         self.conn().execute(
             "INSERT INTO blobs (id, file_name, file_size, blake3_hash, is_uploaded, local_path, created_at)
@@ -31,11 +24,6 @@ impl Database {
         Ok(())
     }
 
-    // ------------------------------------------------------------------
-    // Read
-    // ------------------------------------------------------------------
-
-    /// Fetch a single blob by UUID.
     pub fn get_blob(&self, id: Uuid) -> Result<Blob> {
         self.conn()
             .query_row(
@@ -51,7 +39,6 @@ impl Database {
             })
     }
 
-    /// List all blobs ordered by creation date descending.
     pub fn list_blobs(&self) -> Result<Vec<Blob>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, file_name, file_size, blake3_hash, is_uploaded, local_path, created_at
@@ -68,11 +55,6 @@ impl Database {
         Ok(blobs)
     }
 
-    // ------------------------------------------------------------------
-    // Update
-    // ------------------------------------------------------------------
-
-    /// Mark a blob as uploaded.  Returns `true` if a row was updated.
     pub fn mark_uploaded(&self, id: Uuid) -> Result<bool> {
         let affected = self.conn().execute(
             "UPDATE blobs SET is_uploaded = 1 WHERE id = ?1",
@@ -81,15 +63,7 @@ impl Database {
         Ok(affected > 0)
     }
 
-    // ------------------------------------------------------------------
-    // Delete
-    // ------------------------------------------------------------------
-
-    /// Delete a blob metadata record by UUID.  Returns `true` if a row was
-    /// deleted.
-    ///
-    /// **Note**: this only removes the database record; callers are responsible
-    /// for deleting the actual file on disk if desired.
+    // only removes the db record, not the file on disk
     pub fn delete_blob(&self, id: Uuid) -> Result<bool> {
         let affected = self
             .conn()
@@ -98,11 +72,6 @@ impl Database {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Map a `rusqlite::Row` to a [`Blob`].
 fn row_to_blob(row: &rusqlite::Row<'_>) -> rusqlite::Result<Blob> {
     let id_str: String = row.get(0)?;
     let file_name: String = row.get(1)?;

@@ -1,5 +1,3 @@
-//! CRUD operations for [`Channel`] records.
-
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use uuid::Uuid;
@@ -9,11 +7,6 @@ use crate::error::{Result, StoreError};
 use crate::models::Channel;
 
 impl Database {
-    // ------------------------------------------------------------------
-    // Create
-    // ------------------------------------------------------------------
-
-    /// Insert a new channel.
     pub fn create_channel(&self, channel: &Channel) -> Result<()> {
         self.conn().execute(
             "INSERT INTO channels (id, name, server_id, created_at)
@@ -28,17 +21,10 @@ impl Database {
         Ok(())
     }
 
-    // ------------------------------------------------------------------
-    // Read
-    // ------------------------------------------------------------------
-
-    /// Fetch a single channel by UUID.
     pub fn get_channel(&self, id: Uuid) -> Result<Channel> {
         self.conn()
             .query_row(
-                "SELECT id, name, server_id, created_at
-                 FROM channels
-                 WHERE id = ?1",
+                "SELECT id, name, server_id, created_at FROM channels WHERE id = ?1",
                 params![id.to_string()],
                 row_to_channel,
             )
@@ -48,46 +34,22 @@ impl Database {
             })
     }
 
-    /// List all channels, ordered by creation date descending.
     pub fn list_channels(&self) -> Result<Vec<Channel>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, name, server_id, created_at
-             FROM channels
-             ORDER BY created_at DESC",
+            "SELECT id, name, server_id, created_at FROM channels ORDER BY created_at DESC",
         )?;
-
         let rows = stmt.query_map([], row_to_channel)?;
-
-        let mut channels = Vec::new();
-        for row in rows {
-            channels.push(row?);
-        }
-        Ok(channels)
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
     }
 
-    /// List channels belonging to a specific server, ordered by name.
     pub fn list_channels_for_server(&self, server_id: Uuid) -> Result<Vec<Channel>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, name, server_id, created_at
-             FROM channels
-             WHERE server_id = ?1
-             ORDER BY name ASC",
+            "SELECT id, name, server_id, created_at FROM channels WHERE server_id = ?1 ORDER BY name ASC",
         )?;
-
         let rows = stmt.query_map(params![server_id.to_string()], row_to_channel)?;
-
-        let mut channels = Vec::new();
-        for row in rows {
-            channels.push(row?);
-        }
-        Ok(channels)
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
     }
 
-    // ------------------------------------------------------------------
-    // Delete
-    // ------------------------------------------------------------------
-
-    /// Delete a channel by UUID.  Returns `true` if a row was deleted.
     pub fn delete_channel(&self, id: Uuid) -> Result<bool> {
         let affected = self
             .conn()
@@ -96,11 +58,6 @@ impl Database {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Map a `rusqlite::Row` to a [`Channel`].
 fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
     let id_str: String = row.get(0)?;
     let name: String = row.get(1)?;
@@ -109,20 +66,13 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
-
     let server_id = server_id_str
         .map(|s| Uuid::parse_str(&s))
         .transpose()
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
-
     let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_str)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
 
-    Ok(Channel {
-        id,
-        name,
-        server_id,
-        created_at,
-    })
+    Ok(Channel { id, name, server_id, created_at })
 }

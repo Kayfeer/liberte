@@ -1,10 +1,4 @@
-//! Encrypted blob storage on the filesystem.
-//!
-//! Blobs are stored as opaque files under `BLOB_STORAGE_PATH/{uuid}`.
-//! The server never decrypts or inspects the contents -- it stores and
-//! serves raw ciphertext uploaded by premium users.
-
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use tokio::fs;
 use tracing::{debug, info};
@@ -12,19 +6,13 @@ use uuid::Uuid;
 
 use crate::error::ServerError;
 
-/// Filesystem-backed encrypted blob store.
 #[derive(Debug, Clone)]
 pub struct BlobStore {
-    /// Root directory where blob files are stored.
     base_path: PathBuf,
-    /// Maximum blob size in bytes.
     max_size: usize,
 }
 
 impl BlobStore {
-    /// Create a new `BlobStore` rooted at `base_path`.
-    ///
-    /// Creates the directory if it does not exist.
     pub async fn new(base_path: PathBuf, max_size: usize) -> Result<Self, ServerError> {
         fs::create_dir_all(&base_path).await.map_err(|e| {
             ServerError::BlobStorage(format!(
@@ -42,9 +30,6 @@ impl BlobStore {
         })
     }
 
-    /// Store an opaque encrypted blob.
-    ///
-    /// Returns the generated `Uuid` that identifies the blob.
     pub async fn store_blob(&self, data: &[u8]) -> Result<Uuid, ServerError> {
         if data.is_empty() {
             return Err(ServerError::BlobStorage("Empty blob".to_string()));
@@ -67,7 +52,6 @@ impl BlobStore {
         Ok(id)
     }
 
-    /// Retrieve a previously stored blob by its id.
     pub async fn get_blob(&self, id: Uuid) -> Result<Vec<u8>, ServerError> {
         let path = self.blob_path(&id);
 
@@ -83,7 +67,6 @@ impl BlobStore {
         Ok(data)
     }
 
-    /// Delete a blob by its id.
     pub async fn delete_blob(&self, id: Uuid) -> Result<(), ServerError> {
         let path = self.blob_path(&id);
 
@@ -99,7 +82,6 @@ impl BlobStore {
         Ok(())
     }
 
-    /// List all stored blob ids.
     pub async fn list_blobs(&self) -> Result<Vec<Uuid>, ServerError> {
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&self.base_path).await.map_err(|e| {
@@ -119,7 +101,6 @@ impl BlobStore {
         Ok(ids)
     }
 
-    /// Compute the filesystem path for a given blob id.
     fn blob_path(&self, id: &Uuid) -> PathBuf {
         self.base_path.join(id.to_string())
     }

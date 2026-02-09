@@ -1,36 +1,9 @@
-//! Bootstrap peer loading and Kademlia discovery helpers.
-//!
-//! Reads a configuration file containing multiaddrs (one per line) and
-//! provides them for the swarm to dial on startup. Also offers a helper
-//! to trigger a Kademlia bootstrap round.
-
 use std::fs;
 use std::path::Path;
 
 use libp2p::Multiaddr;
 use tracing::{debug, info, warn};
 
-/// Load bootstrap peer multiaddrs from a configuration file.
-///
-/// The file format is one multiaddr per line. Empty lines and lines starting
-/// with `#` are ignored.
-///
-/// # Arguments
-///
-/// * `path` - Path to the bootstrap peers file
-///
-/// # Returns
-///
-/// A `Vec<Multiaddr>` of successfully parsed addresses. Malformed lines are
-/// logged and skipped.
-///
-/// # Example file
-///
-/// ```text
-/// # Liberte bootstrap nodes
-/// /ip4/51.158.191.43/udp/4001/quic-v1/p2p/12D3KooW...
-/// /ip4/198.51.100.10/udp/4001/quic-v1/p2p/12D3KooW...
-/// ```
 pub fn load_bootstrap_peers(path: &Path) -> Vec<Multiaddr> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
@@ -71,10 +44,7 @@ pub fn load_bootstrap_peers(path: &Path) -> Vec<Multiaddr> {
     addrs
 }
 
-/// Parse a list of multiaddr strings into validated `Multiaddr` values.
-///
-/// Useful when bootstrap peers are provided as a runtime configuration list
-/// rather than from a file.
+/// Parse raw multiaddr strings into validated values.
 pub fn parse_multiaddrs(raw: &[String]) -> Vec<Multiaddr> {
     raw.iter()
         .filter_map(|s| {

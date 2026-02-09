@@ -1,3 +1,5 @@
+// Media handling: audio, video, WebRTC, and E2EE insertable streams.
+
 pub mod audio;
 pub mod insertable;
 pub mod mixer;

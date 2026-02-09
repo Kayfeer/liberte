@@ -18,17 +18,14 @@ pub enum FrameError {
     InvalidFormat,
 }
 
-/// Frame type byte constants
 pub const FRAME_TYPE_AUDIO: u8 = 0x01;
 pub const FRAME_TYPE_VIDEO: u8 = 0x02;
 
-/// Minimum frame size: 1 byte type + 24 bytes nonce + 16 bytes poly1305 tag
+// 1 byte type + 24 bytes nonce + 16 bytes poly1305 tag
 const MIN_FRAME_SIZE: usize = 1 + 24 + 16;
 
-/// Encrypts a media frame (audio or video) before it enters the WebRTC transport.
-/// The SFU will forward these encrypted frames without being able to decrypt them.
-///
-/// Frame format: `[1 byte frame_type][24 bytes nonce][N bytes encrypted_payload]`
+/// Encrypts a media frame before it hits WebRTC transport.
+/// Format: [1 byte frame_type][24 bytes nonce][N bytes encrypted_payload]
 pub fn encrypt_frame(
     key: &SymmetricKey,
     frame_type: u8,
@@ -50,8 +47,7 @@ pub fn encrypt_frame(
     Ok(frame)
 }
 
-/// Decrypts a media frame received from the SFU or a peer.
-/// Returns `(frame_type, decrypted_payload)`.
+/// Decrypts a media frame. Returns (frame_type, plaintext).
 pub fn decrypt_frame(key: &SymmetricKey, encrypted_frame: &[u8]) -> Result<(u8, Vec<u8>), FrameError> {
     if encrypted_frame.len() < MIN_FRAME_SIZE {
         return Err(FrameError::InvalidFormat);
@@ -89,7 +85,7 @@ mod tests {
     #[test]
     fn test_frame_encrypt_decrypt_video() {
         let key = generate_symmetric_key();
-        let payload = vec![0; 1024]; // Simulated video frame
+        let payload = vec![0; 1024];
 
         let encrypted = encrypt_frame(&key, FRAME_TYPE_VIDEO, &payload).unwrap();
         let (frame_type, decrypted) = decrypt_frame(&key, &encrypted).unwrap();

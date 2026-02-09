@@ -1,8 +1,3 @@
-//! Axum REST API routes.
-//!
-//! Provides HTTP endpoints for health checks, premium verification,
-//! and encrypted blob upload/download.
-
 use std::sync::Arc;
 
 use axum::{
@@ -26,11 +21,6 @@ use crate::rate_limit::{rate_limit_middleware, RateLimiter};
 
 use liberte_shared::premium::PremiumToken;
 
-// ---------------------------------------------------------------------------
-// Shared application state
-// ---------------------------------------------------------------------------
-
-/// Application state shared across all request handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub blob_store: Arc<BlobStore>,
@@ -39,12 +29,6 @@ pub struct AppState {
     pub config: Arc<ServerConfig>,
 }
 
-// ---------------------------------------------------------------------------
-// Router construction
-// ---------------------------------------------------------------------------
-
-/// Build the axum `Router` with all API routes, CORS, tracing, and
-/// rate limiting middleware.
 pub fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -63,11 +47,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/blob/upload", post(blob_upload))
         .route("/blob/{id}", get(blob_download))
         .route("/blob/{id}", delete(blob_delete))
-        // Admin endpoints (require ADMIN_TOKEN)
         .route("/admin/status", get(admin_status))
         .route("/admin/grant-premium", post(admin_grant_premium))
         .route("/admin/revoke-premium", post(admin_revoke_premium))
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50 MiB
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(
             state.rate_limiter.clone(),
             rate_limit_middleware,
@@ -76,10 +59,6 @@ pub fn build_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
-
-// ---------------------------------------------------------------------------
-// Response types
-// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -102,7 +81,6 @@ struct ErrorResponse {
     error: String,
 }
 
-/// Public server info (no auth required).
 #[derive(Serialize)]
 struct ServerInfoResponse {
     name: String,
@@ -126,11 +104,6 @@ struct AdminPremiumRequest {
     user_pubkey_hex: String,
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-/// `GET /health` -- simple liveness / readiness check.
 async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
@@ -138,12 +111,6 @@ async fn health_check() -> Json<HealthResponse> {
     })
 }
 
-/// `POST /premium/verify` -- verify a premium token.
-///
-/// Request body: JSON-serialized `PremiumToken`.
-/// Response: `{ "valid": true/false }`.
-///
-/// When `premium_required` is `false` (self-hosted), always returns `true`.
 async fn premium_verify(
     State(state): State<AppState>,
     Json(token): Json<PremiumToken>,
@@ -155,17 +122,10 @@ async fn premium_verify(
     Json(PremiumVerifyResponse { valid })
 }
 
-/// `POST /blob/upload` -- upload an encrypted blob via multipart form.
-///
-/// The multipart form must contain a field named `file` with the raw
-/// blob bytes. The server stores the data as-is (opaque ciphertext).
-///
-/// Response: `{ "id": "<uuid>" }`.
 async fn blob_upload(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<BlobUploadResponse>, ServerError> {
-    // Find the "file" field in the multipart form.
     while let Some(field) = multipart
         .next_field()
         .await
@@ -191,9 +151,6 @@ async fn blob_upload(
     ))
 }
 
-/// `GET /blob/{id}` -- download a stored blob.
-///
-/// Returns the raw opaque bytes with `application/octet-stream` content type.
 async fn blob_download(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -202,7 +159,6 @@ async fn blob_download(
     Ok(data)
 }
 
-/// `DELETE /blob/{id}` -- delete a stored blob.
 async fn blob_delete(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -211,13 +167,6 @@ async fn blob_delete(
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
-// ---------------------------------------------------------------------------
-// Public server info
-// ---------------------------------------------------------------------------
-
-/// `GET /info` -- public metadata about this server instance.
-///
-/// Clients use this to discover instance settings before connecting.
 async fn server_info(State(state): State<AppState>) -> Json<ServerInfoResponse> {
     Json(ServerInfoResponse {
         name: state.config.instance_name.clone(),
@@ -228,11 +177,6 @@ async fn server_info(State(state): State<AppState>) -> Json<ServerInfoResponse> 
     })
 }
 
-// ---------------------------------------------------------------------------
-// Admin helpers
-// ---------------------------------------------------------------------------
-
-/// Validate the admin bearer token from the Authorization header.
 fn verify_admin_token(headers: &HeaderMap, config: &ServerConfig) -> Result<(), ServerError> {
     let Some(ref expected) = config.admin_token else {
         return Err(ServerError::Forbidden(
@@ -254,7 +198,6 @@ fn verify_admin_token(headers: &HeaderMap, config: &ServerConfig) -> Result<(), 
     Ok(())
 }
 
-/// `GET /admin/status` -- server status (admin only).
 async fn admin_status(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -266,15 +209,10 @@ async fn admin_status(
         premium_required: state.config.premium_required,
         registration_open: state.config.registration_open,
         max_peers: state.config.max_peers,
-        uptime_secs: 0, // TODO: track actual uptime with start instant
+        uptime_secs: 0, // TODO: track with start instant
     }))
 }
 
-/// `POST /admin/grant-premium` -- grant premium to a user (admin only).
-///
-/// On self-hosted instances with `premium_required: false`, this is a no-op
-/// since all users already have full access. When premium IS required, this
-/// lets the admin manually grant access without a payment token.
 async fn admin_grant_premium(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -289,7 +227,6 @@ async fn admin_grant_premium(
     Ok(Json(serde_json::json!({ "granted": true })))
 }
 
-/// `POST /admin/revoke-premium` -- revoke premium from a user (admin only).
 async fn admin_revoke_premium(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -304,7 +241,6 @@ async fn admin_revoke_premium(
     Ok(Json(serde_json::json!({ "revoked": true })))
 }
 
-/// Parse a 64-char hex string into [u8; 32].
 fn parse_hex_32(hex: &str) -> Result<[u8; 32], ServerError> {
     let hex = hex.trim();
     if hex.len() != 64 {
@@ -320,15 +256,6 @@ fn parse_hex_32(hex: &str) -> Result<[u8; 32], ServerError> {
     Ok(arr)
 }
 
-// ---------------------------------------------------------------------------
-// Server start helper
-// ---------------------------------------------------------------------------
-
-/// Start the axum HTTP server on the given address.
-///
-/// This function runs until the server is shut down (never returns under
-/// normal operation). Callers should `tokio::select!` this alongside
-/// other long-running tasks.
 pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let app = build_router(state);
 

@@ -5,14 +5,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::IdentityError;
 use crate::types::UserId;
 
-/// A user's cryptographic identity based on Ed25519.
-/// The public key serves as the user ID. No email, no phone number.
+// Ed25519-based identity. Public key = user ID, no email/phone needed.
 #[derive(Clone)]
 pub struct Identity {
     signing_key: SigningKey,
 }
 
-/// Serializable format for storing/exporting identity
 #[derive(Serialize, Deserialize)]
 pub struct IdentityExport {
     pub secret_key: [u8; 32],
@@ -20,49 +18,40 @@ pub struct IdentityExport {
 }
 
 impl Identity {
-    /// Generate a new random identity
     pub fn generate() -> Self {
         let signing_key = SigningKey::generate(&mut OsRng);
         Self { signing_key }
     }
 
-    /// Restore identity from secret key bytes
     pub fn from_secret_bytes(secret: &[u8; 32]) -> Self {
         let signing_key = SigningKey::from_bytes(secret);
         Self { signing_key }
     }
 
-    /// Restore identity from a serialized export
     pub fn from_export(export: &IdentityExport) -> Self {
         Self::from_secret_bytes(&export.secret_key)
     }
 
-    /// Get the user ID (public key)
     pub fn user_id(&self) -> UserId {
         UserId(self.signing_key.verifying_key().to_bytes())
     }
 
-    /// Get the raw public key bytes
     pub fn public_key_bytes(&self) -> [u8; 32] {
         self.signing_key.verifying_key().to_bytes()
     }
 
-    /// Get the raw secret key bytes
     pub fn secret_bytes(&self) -> &[u8; 32] {
         self.signing_key.as_bytes()
     }
 
-    /// Sign a message
     pub fn sign(&self, message: &[u8]) -> Signature {
         self.signing_key.sign(message)
     }
 
-    /// Get the verifying (public) key
     pub fn verifying_key(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
     }
 
-    /// Export identity for serialization
     pub fn to_export(&self) -> IdentityExport {
         IdentityExport {
             secret_key: *self.signing_key.as_bytes(),
@@ -70,7 +59,7 @@ impl Identity {
         }
     }
 
-    /// Derive a database encryption key from the identity using BLAKE3
+    // Derives a db encryption key from identity via BLAKE3
     pub fn derive_db_key(&self) -> [u8; 32] {
         let mut hasher =
             blake3::Hasher::new_derive_key(crate::constants::KDF_CONTEXT_DB_KEY);
@@ -82,7 +71,6 @@ impl Identity {
     }
 }
 
-/// Verify a signature against a public key
 pub fn verify_signature(
     pubkey_bytes: &[u8; 32],
     message: &[u8],
@@ -121,8 +109,6 @@ mod tests {
         let signature = id.sign(message);
 
         assert!(verify_signature(&id.public_key_bytes(), message, &signature).is_ok());
-
-        // Wrong message should fail
         assert!(verify_signature(&id.public_key_bytes(), b"wrong", &signature).is_err());
     }
 

@@ -2,6 +2,7 @@
 name = "liberte-shared"
 version.workspace = true
 edition.workspace = true
+authors = ["Kayfeer"]
 
 [dependencies]
 serde = { workspace = true }

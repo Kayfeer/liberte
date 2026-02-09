@@ -7,25 +7,21 @@ use rand::RngCore;
 use crate::constants::{KDF_CONTEXT_CHANNEL_KEY, NONCE_SIZE};
 use crate::error::CryptoError;
 
-/// 32-byte symmetric key for XChaCha20-Poly1305
 pub type SymmetricKey = [u8; 32];
 
-/// Generate a cryptographically secure random 32-byte key
 pub fn generate_symmetric_key() -> SymmetricKey {
     let mut key = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut key);
     key
 }
 
-/// Generate a random 24-byte nonce for XChaCha20-Poly1305
 pub fn generate_nonce() -> [u8; NONCE_SIZE] {
     let mut nonce = [0u8; NONCE_SIZE];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     nonce
 }
 
-/// Encrypt plaintext with XChaCha20-Poly1305.
-/// Returns `nonce || ciphertext` as a single Vec (24 bytes nonce prepended).
+// Returns nonce || ciphertext (24 bytes nonce prepended)
 pub fn encrypt(key: &SymmetricKey, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let cipher = XChaCha20Poly1305::new(key.into());
     let nonce_bytes = generate_nonce();
@@ -41,7 +37,6 @@ pub fn encrypt(key: &SymmetricKey, plaintext: &[u8]) -> Result<Vec<u8>, CryptoEr
     Ok(output)
 }
 
-/// Decrypt a `nonce || ciphertext` blob produced by `encrypt`.
 pub fn decrypt(key: &SymmetricKey, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if data.len() < NONCE_SIZE {
         return Err(CryptoError::DecryptionFailed);
@@ -56,8 +51,7 @@ pub fn decrypt(key: &SymmetricKey, data: &[u8]) -> Result<Vec<u8>, CryptoError> 
         .map_err(|_| CryptoError::DecryptionFailed)
 }
 
-/// Derive a channel-specific encryption key from a shared secret + channel ID
-/// using BLAKE3 key derivation with domain separation.
+// BLAKE3 KDF with domain separation
 pub fn derive_channel_key(shared_secret: &[u8], channel_id: &[u8]) -> SymmetricKey {
     let mut hasher = blake3::Hasher::new_derive_key(KDF_CONTEXT_CHANNEL_KEY);
     hasher.update(shared_secret);
@@ -68,7 +62,6 @@ pub fn derive_channel_key(shared_secret: &[u8], channel_id: &[u8]) -> SymmetricK
     key
 }
 
-/// Derive a key from a password/passphrase using BLAKE3
 pub fn derive_key_from_passphrase(passphrase: &[u8], context: &str) -> SymmetricKey {
     let mut hasher = blake3::Hasher::new_derive_key(context);
     hasher.update(passphrase);
@@ -109,7 +102,6 @@ mod tests {
         let plaintext = b"Important data";
 
         let mut encrypted = encrypt(&key, plaintext).unwrap();
-        // Tamper with the last byte
         let len = encrypted.len();
         encrypted[len - 1] ^= 0xFF;
 
@@ -146,7 +138,7 @@ mod tests {
     fn test_nonce_prepended() {
         let key = generate_symmetric_key();
         let encrypted = encrypt(&key, b"test").unwrap();
-        // Should be at least nonce (24) + ciphertext (4 + 16 tag)
+        // nonce (24) + ciphertext (4 + 16 tag)
         assert!(encrypted.len() >= NONCE_SIZE + 4 + 16);
     }
 }

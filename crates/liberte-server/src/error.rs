@@ -1,11 +1,8 @@
-//! Server error types.
-
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Errors that can occur within the server.
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error("Blob not found: {0}")]

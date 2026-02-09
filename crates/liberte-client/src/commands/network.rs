@@ -1,9 +1,3 @@
-//! Network-related Tauri commands.
-//!
-//! These commands expose peer connectivity operations to the frontend:
-//! dialing remote peers, listing connected peers, and querying the
-//! current connection mode.
-
 use std::sync::{Arc, Mutex};
 
 use tauri::State;
@@ -14,10 +8,6 @@ use liberte_shared::types::ConnectionMode;
 
 use crate::state::AppState;
 
-/// Dial a remote peer at the given multiaddr string.
-///
-/// The multiaddr is parsed and forwarded to the swarm task via the
-/// command channel.  Example: `/ip4/1.2.3.4/udp/4001/quic-v1/p2p/12D3Koo...`
 #[tauri::command]
 pub async fn connect_peer(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -45,10 +35,6 @@ pub async fn connect_peer(
     Ok(())
 }
 
-/// Return a list of currently connected peer IDs as hex strings.
-///
-/// Sends a `GetPeers` command to the swarm task and awaits the response
-/// over a oneshot channel.
 #[tauri::command]
 pub async fn list_peers(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -75,8 +61,6 @@ pub async fn list_peers(
     Ok(peers.iter().map(|p| p.to_string()).collect())
 }
 
-/// Return the current connection mode as a string: `"direct"`, `"relayed"`,
-/// or `"disconnected"`.
 #[tauri::command]
 pub fn get_connection_mode(
     state: State<'_, Arc<Mutex<AppState>>>,

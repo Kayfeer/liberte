@@ -16,7 +16,6 @@ pub enum VideoError {
     DecodeError(String),
 }
 
-/// Video configuration
 #[derive(Debug, Clone)]
 pub struct VideoConfig {
     pub width: u32,
@@ -36,7 +35,6 @@ impl Default for VideoConfig {
     }
 }
 
-/// Video frame data
 #[derive(Debug, Clone)]
 pub struct VideoFrame {
     pub width: u32,
@@ -45,7 +43,6 @@ pub struct VideoFrame {
     pub timestamp_ms: u64,
 }
 
-/// Manages video capture and encoding pipeline
 pub struct VideoEngine {
     config: VideoConfig,
     is_capturing: bool,
@@ -61,10 +58,6 @@ impl VideoEngine {
         }
     }
 
-    /// Start video capture.
-    /// Frames are encoded and sent via the provided channel.
-    /// Note: Actual camera capture will use webrtc-rs built-in capture
-    /// or platform-specific APIs. This is the processing pipeline.
     pub fn start(&mut self) -> Result<(), VideoError> {
         info!(
             width = self.config.width,
