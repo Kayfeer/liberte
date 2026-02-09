@@ -3,13 +3,16 @@ import { listen } from "@tauri-apps/api/event";
 import { EVENTS } from "../lib/constants";
 import { useMessageStore } from "../stores/messageStore";
 import { useNetworkStore } from "../stores/networkStore";
+import { useNavigationStore } from "../stores/navigationStore";
 import Sidebar from "../components/layout/Sidebar";
 import Header from "../components/layout/Header";
 import MainPanel from "../components/layout/MainPanel";
+import Settings from "./Settings";
 
 export default function Home() {
   const { loadChannels, addMessage } = useMessageStore();
   const { refreshPeers, setPeers } = useNetworkStore();
+  const currentPage = useNavigationStore((s) => s.currentPage);
 
   useEffect(() => {
     loadChannels();
@@ -42,8 +45,14 @@ export default function Home() {
     <div className="flex h-screen bg-liberte-bg overflow-hidden">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0">
-        <Header />
-        <MainPanel />
+        {currentPage === "settings" ? (
+          <Settings />
+        ) : (
+          <>
+            <Header />
+            <MainPanel />
+          </>
+        )}
       </div>
     </div>
   );

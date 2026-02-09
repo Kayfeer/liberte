@@ -8,17 +8,20 @@ use uuid::Uuid;
 
 /// Opaque encrypted media frame -- the SFU never decrypts this.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EncryptedFrame {
     pub sender: PeerId,
     pub payload: Vec<u8>,
 }
 
+#[allow(dead_code)]
 pub struct SfuRoom {
     pub room_id: Uuid,
     participants: HashSet<PeerId>,
     senders: HashMap<PeerId, mpsc::Sender<EncryptedFrame>>,
 }
 
+#[allow(dead_code)]
 impl SfuRoom {
     pub fn new(room_id: Uuid) -> Self {
         Self {
@@ -64,7 +67,7 @@ impl SfuRoom {
                 continue;
             }
 
-            if let Err(_) = tx.try_send(frame.clone()) {
+            if tx.try_send(frame.clone()).is_err() {
                 debug!(
                     room = %self.room_id,
                     target = %peer_id,
@@ -88,10 +91,12 @@ impl SfuRoom {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct SfuManager {
     rooms: Arc<RwLock<HashMap<Uuid, SfuRoom>>>,
 }
 
+#[allow(dead_code)]
 impl SfuManager {
     pub fn new() -> Self {
         Self {

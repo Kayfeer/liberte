@@ -15,6 +15,7 @@ export default function Welcome() {
     <div className="flex items-center justify-center min-h-screen bg-liberte-bg p-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
+          <img src="/logo.png" alt="Liberté" className="w-24 h-24 mx-auto mb-4 rounded-2xl" />
           <h1 className="text-4xl font-bold text-liberte-accent mb-2">
             Liberté
           </h1>

@@ -77,6 +77,7 @@ struct BlobUploadResponse {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct ErrorResponse {
     error: String,
 }
@@ -191,7 +192,13 @@ fn verify_admin_token(headers: &HeaderMap, config: &ServerConfig) -> Result<(), 
 
     let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
 
-    if token != expected.as_str() {
+    // Constant-time comparison to prevent timing attacks on admin token.
+    use subtle::ConstantTimeEq;
+    let token_bytes = token.as_bytes();
+    let expected_bytes = expected.as_bytes();
+    if token_bytes.len() != expected_bytes.len()
+        || token_bytes.ct_eq(expected_bytes).unwrap_u8() != 1
+    {
         return Err(ServerError::Forbidden("Invalid admin token".into()));
     }
 

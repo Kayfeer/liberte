@@ -65,17 +65,92 @@ jobs:
           args: --target ${{ matrix.target }}
 
   build-server:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+            artifact: liberte-server
+          - platform: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            label: linux-aarch64
+            artifact: liberte-server
+            cross: true
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+            artifact: liberte-server.exe
+
+    name: Server (${{ matrix.label }})
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: server-${{ matrix.target }}
+
+      # Cross-compilation for aarch64 Linux
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build server (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --bin liberte-server --target ${{ matrix.target }}
+
+      - name: Build server (cross)
+        if: matrix.cross
+        run: cross build --release --bin liberte-server --target ${{ matrix.target }}
+
+      - name: Package server binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../liberte-server-${{ matrix.label }}.tar.gz ${{ matrix.artifact }}
+          cd ../../..
+          sha256sum liberte-server-${{ matrix.label }}.tar.gz > liberte-server-${{ matrix.label }}.tar.gz.sha256
+
+      - name: Package server binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.artifact }}" -DestinationPath "liberte-server-${{ matrix.label }}.zip"
+          (Get-FileHash "liberte-server-${{ matrix.label }}.zip" -Algorithm SHA256).Hash.ToLower() + "  liberte-server-${{ matrix.label }}.zip" | Out-File -Encoding ascii "liberte-server-${{ matrix.label }}.zip.sha256"
+
+      - name: Upload server binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            liberte-server-${{ matrix.label }}.*
+
+  build-server-docker:
     name: Server Docker Image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU (for multi-arch)
+        uses: docker/setup-qemu-action@v3
+
       - name: Build Docker image
         run: |
-          docker build -f docker/Dockerfile -t liberte-server:${{ github.ref_name }} .
-          docker save liberte-server:${{ github.ref_name }} | gzip > liberte-server-${{ github.ref_name }}.tar.gz
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -f docker/Dockerfile \
+            -t liberte-server:${{ github.ref_name }} \
+            --output type=docker,dest=- . | gzip > liberte-server-docker-${{ github.ref_name }}.tar.gz
 
       - name: Upload server image
         uses: softprops/action-gh-release@v2
         with:
-          files: liberte-server-${{ github.ref_name }}.tar.gz
+          files: liberte-server-docker-${{ github.ref_name }}.tar.gz

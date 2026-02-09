@@ -1,3 +1,4 @@
+pub mod channels;
 pub mod files;
 pub mod identity;
 pub mod media;

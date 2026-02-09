@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::error::ServerError;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BlobStore {
     base_path: PathBuf,
     max_size: usize,
@@ -82,6 +83,7 @@ impl BlobStore {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn list_blobs(&self) -> Result<Vec<Uuid>, ServerError> {
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&self.base_path).await.map_err(|e| {

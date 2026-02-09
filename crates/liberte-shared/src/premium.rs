@@ -10,7 +10,11 @@ pub struct PremiumToken {
     pub signature: Vec<u8>,
 }
 
-// TODO: replace with real key in production
+/// SECURITY: This is a placeholder key. In production, set the real payment
+/// server Ed25519 public key via the `PAYMENT_SERVER_PUBKEY` env var on the
+/// server. The client receives the key from the server's `/info` endpoint.
+/// Using all-zeros will cause `check_premium_status` to always reject tokens
+/// because Ed25519 cannot produce a valid signature for a zero public key.
 pub const PAYMENT_SERVER_PUBKEY: [u8; 32] = [0u8; 32];
 
 pub fn check_premium_status(token: &PremiumToken) -> bool {

@@ -5,6 +5,7 @@ pub mod crypto;
 pub mod csam;
 pub mod error;
 pub mod identity;
+pub mod invite;
 pub mod noise;
 pub mod premium;
 pub mod protocol;

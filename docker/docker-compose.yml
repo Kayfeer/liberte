@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   liberte-relay:
     build:
@@ -13,17 +11,28 @@ services:
     volumes:
       - liberte-data:/data
     environment:
-      - RUST_LOG=liberte=info,libp2p=warn
+      - RUST_LOG=${RUST_LOG:-liberte=info,libp2p=warn}
       - LISTEN_ADDR=/ip4/0.0.0.0/udp/4001/quic-v1
       - HTTP_ADDR=0.0.0.0:8080
       - BLOB_STORAGE_PATH=/data/blobs
-      - PAYMENT_SERVER_PUBKEY=${PAYMENT_SERVER_PUBKEY}
+      - PAYMENT_SERVER_PUBKEY=${PAYMENT_SERVER_PUBKEY:-0000000000000000000000000000000000000000000000000000000000000000}
       # Self-hosted settings
       - INSTANCE_NAME=${INSTANCE_NAME:-Liberté Node}
       - PREMIUM_REQUIRED=${PREMIUM_REQUIRED:-false}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - REGISTRATION_OPEN=${REGISTRATION_OPEN:-true}
       - MAX_PEERS=${MAX_PEERS:-0}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:

@@ -50,6 +50,33 @@ impl Database {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
     }
 
+    pub fn store_channel_key(&self, channel_id: Uuid, key_hex: &str) -> Result<()> {
+        self.conn().execute_batch(
+            "CREATE TABLE IF NOT EXISTS channel_keys (
+                channel_id TEXT PRIMARY KEY NOT NULL,
+                key_hex    TEXT NOT NULL
+            );",
+        )?;
+        self.conn().execute(
+            "INSERT OR REPLACE INTO channel_keys (channel_id, key_hex) VALUES (?1, ?2)",
+            params![channel_id.to_string(), key_hex],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_channel_key(&self, channel_id: Uuid) -> Result<String> {
+        self.conn()
+            .query_row(
+                "SELECT key_hex FROM channel_keys WHERE channel_id = ?1",
+                params![channel_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound,
+                other => StoreError::Sqlite(other),
+            })
+    }
+
     pub fn delete_channel(&self, id: Uuid) -> Result<bool> {
         let affected = self
             .conn()

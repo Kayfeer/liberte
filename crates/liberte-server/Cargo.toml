@@ -23,6 +23,7 @@ chrono = { workspace = true }
 ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+subtle = "2"
 
 [dev-dependencies]
 rand = { workspace = true }

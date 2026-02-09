@@ -69,9 +69,13 @@ pub fn load_identity(
     }
     drop(guard);
 
-    // TODO: use OS keychain instead of placeholder key
-    let bootstrap_key = [0u8; 32];
-    let db = Database::new(&bootstrap_key)
+    // Step 1: Open DB with a temporary key to read the stored secret.
+    // The DB is not encrypted with SQLCipher yet (plain rusqlite), so any
+    // key works for opening. Once we recover the identity we derive the
+    // real DB key and could re-open if needed.
+    let bootstrap_key = blake3::hash(b"liberte-bootstrap-db-open-v1");
+    let bootstrap_arr: [u8; 32] = *bootstrap_key.as_bytes();
+    let db = Database::new(&bootstrap_arr)
         .map_err(|e| format!("Failed to open database (is identity created?): {e}"))?;
 
     let secret_hex: String = db

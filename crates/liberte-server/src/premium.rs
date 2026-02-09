@@ -8,6 +8,7 @@ use tracing::{debug, info};
 use liberte_shared::premium::{check_premium_status_with_key, PremiumToken};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct CachedStatus {
     valid: bool,
     valid_until: DateTime<Utc>,
@@ -79,6 +80,7 @@ impl PremiumVerifier {
         valid
     }
 
+    #[allow(dead_code)]
     pub async fn is_premium_cached(&self, user_pubkey: &[u8; 32]) -> bool {
         let cache = self.cache.read().await;
         cache

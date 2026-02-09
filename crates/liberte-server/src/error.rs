@@ -15,6 +15,7 @@ pub enum ServerError {
     BlobStorage(String),
 
     #[error("Premium verification failed")]
+    #[allow(dead_code)]
     PremiumVerificationFailed,
 
     #[error("Invalid request: {0}")]
@@ -24,6 +25,7 @@ pub enum ServerError {
     Forbidden(String),
 
     #[error("Internal error: {0}")]
+    #[allow(dead_code)]
     Internal(String),
 }
 

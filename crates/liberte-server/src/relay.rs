@@ -20,7 +20,7 @@ pub struct RelayServerBehaviour {
 #[derive(Debug)]
 pub enum RelayServerEvent {
     Relay(relay::Event),
-    Identify(identify::Event),
+    Identify(Box<identify::Event>),
 }
 
 impl From<relay::Event> for RelayServerEvent {
@@ -31,7 +31,7 @@ impl From<relay::Event> for RelayServerEvent {
 
 impl From<identify::Event> for RelayServerEvent {
     fn from(event: identify::Event) -> Self {
-        RelayServerEvent::Identify(event)
+        RelayServerEvent::Identify(Box::new(event))
     }
 }
 
@@ -131,14 +131,14 @@ pub async fn spawn_relay(listen_addr: &str) -> anyhow::Result<PeerId> {
                     }
                 }
 
-                SwarmEvent::Behaviour(RelayServerEvent::Identify(
-                    identify::Event::Received { peer_id, info, .. },
-                )) => {
-                    debug!(
-                        peer = %peer_id,
-                        protocol = ?info.protocol_version,
-                        "Identify: received info from peer"
-                    );
+                SwarmEvent::Behaviour(RelayServerEvent::Identify(event)) => {
+                    if let identify::Event::Received { peer_id, info, .. } = *event {
+                        debug!(
+                            peer = %peer_id,
+                            protocol = ?info.protocol_version,
+                            "Identify: received info from peer"
+                        );
+                    }
                 }
 
                 SwarmEvent::NewListenAddr { address, .. } => {

@@ -27,3 +27,7 @@ Thumbs.db
 *.AppImage
 *.msi
 *.deb
+dist/
+
+# Sensitive documents
+Liberté.txt

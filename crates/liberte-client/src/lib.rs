@@ -53,6 +53,9 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::get_server_info,
+            commands::channels::create_channel,
+            commands::channels::generate_invite,
+            commands::channels::accept_invite,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run Tauri application");

@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.liberte.app",
   "build": {
-    "frontendDist": "../../../ui/dist",
+    "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [

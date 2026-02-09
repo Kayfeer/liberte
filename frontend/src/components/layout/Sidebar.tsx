@@ -1,16 +1,26 @@
-import { Hash, Plus, Settings, Users } from "lucide-react";
+import { useState } from "react";
+import { Hash, Plus, Settings, Users, UserPlus } from "lucide-react";
 import { useMessageStore } from "../../stores/messageStore";
 import { useNetworkStore } from "../../stores/networkStore";
+import { useNavigationStore } from "../../stores/navigationStore";
+import CreateChannelModal from "../channels/CreateChannelModal";
+import JoinChannelModal from "../channels/JoinChannelModal";
 
 export default function Sidebar() {
   const { channels, activeChannelId, setActiveChannel } = useMessageStore();
   const { peers } = useNetworkStore();
+  const { currentPage, navigate } = useNavigationStore();
+  const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [showJoinChannel, setShowJoinChannel] = useState(false);
 
   return (
     <div className="w-60 bg-liberte-surface flex flex-col border-r border-liberte-border">
       {/* Header */}
       <div className="p-4 border-b border-liberte-border">
-        <h1 className="text-lg font-bold text-liberte-accent">Liberté</h1>
+        <div className="flex items-center gap-2">
+          <img src="/logo.png" alt="Liberté" className="w-8 h-8 rounded-lg" />
+          <h1 className="text-lg font-bold text-liberte-accent">Liberté</h1>
+        </div>
         <div className="flex items-center gap-1 mt-1">
           <Users className="w-3 h-3 text-liberte-muted" />
           <span className="text-xs text-liberte-muted">
@@ -26,7 +36,11 @@ export default function Sidebar() {
           <span className="text-xs font-semibold text-liberte-muted uppercase tracking-wider">
             Canaux
           </span>
-          <button className="p-1 hover:bg-liberte-panel rounded transition-colors">
+          <button
+            onClick={() => setShowCreateChannel(true)}
+            className="p-1 hover:bg-liberte-panel rounded transition-colors"
+            title="Créer un canal"
+          >
             <Plus className="w-3 h-3 text-liberte-muted" />
           </button>
         </div>
@@ -54,12 +68,35 @@ export default function Sidebar() {
       </div>
 
       {/* Bottom bar */}
-      <div className="p-2 border-t border-liberte-border">
-        <button className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg transition-colors">
+      <div className="p-2 border-t border-liberte-border space-y-1">
+        <button
+          onClick={() => setShowJoinChannel(true)}
+          className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg transition-colors"
+        >
+          <UserPlus className="w-4 h-4" />
+          <span>Rejoindre un canal</span>
+        </button>
+        <button
+          onClick={() => navigate(currentPage === "settings" ? "home" : "settings")}
+          className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors ${
+            currentPage === "settings"
+              ? "bg-liberte-panel text-liberte-text"
+              : "text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg"
+          }`}
+        >
           <Settings className="w-4 h-4" />
           <span>Paramètres</span>
         </button>
       </div>
+
+      <CreateChannelModal
+        isOpen={showCreateChannel}
+        onClose={() => setShowCreateChannel(false)}
+      />
+      <JoinChannelModal
+        isOpen={showJoinChannel}
+        onClose={() => setShowJoinChannel(false)}
+      />
     </div>
   );
 }

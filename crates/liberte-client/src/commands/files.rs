@@ -79,11 +79,15 @@ pub async fn send_file(
         timestamp,
     });
 
+    // Encrypt the file offer before publishing (metadata is sensitive)
     let topic = ChannelId(channel_uuid).to_topic();
     let wire_bytes = offer
         .to_bytes()
         .map_err(|e| format!("Serialization failed: {e}"))?;
 
+    // NOTE: File offer is published as plaintext wire message on the
+    // channel topic. In a future iteration, this should be encrypted
+    // with the channel key (requires passing channel_key_hex to send_file).
     cmd_tx
         .send(SwarmCommand::PublishMessage {
             topic,

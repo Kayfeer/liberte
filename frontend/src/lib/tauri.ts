@@ -30,8 +30,8 @@ export const getConnectionMode = () =>
   invoke<ConnectionMode>("get_connection_mode");
 
 // Messaging commands
-export const sendMessage = (channelId: string, content: string) =>
-  invoke<void>("send_message", { channelId, content });
+export const sendMessage = (channelId: string, content: string, channelKeyHex: string) =>
+  invoke<void>("send_message", { channelId, content, channelKeyHex });
 
 export const getMessages = (channelId: string, limit: number, offset: number) =>
   invoke<Message[]>("get_messages", { channelId, limit, offset });
@@ -56,15 +56,15 @@ export const toggleVideo = () =>
 export const sendFile = (channelId: string, filePath: string) =>
   invoke<void>("send_file", { channelId, filePath });
 
-export const uploadPremiumBlob = (channelId: string, filePath: string) =>
-  invoke<void>("upload_premium_blob", { channelId, filePath });
+export const uploadPremiumBlob = (filePath: string, channelKeyHex: string) =>
+  invoke<string>("upload_premium_blob", { filePath, channelKeyHex });
 
 // Premium commands
 export const checkPremium = () =>
   invoke<boolean>("check_premium");
 
-export const activatePremium = (token: string) =>
-  invoke<void>("activate_premium", { token });
+export const activatePremium = (tokenJson: string) =>
+  invoke<void>("activate_premium", { tokenJson });
 
 // Settings commands
 export const getSettings = () =>
@@ -76,3 +76,22 @@ export const updateSettings = (settings: UserSettings) =>
 // Server info (self-hosted)
 export const getServerInfo = (serverUrl: string) =>
   invoke<ServerInfo>("get_server_info", { serverUrl });
+
+// Channel management commands
+export interface CreateChannelResult {
+  id: string;
+  name: string;
+  channelKeyHex: string;
+}
+
+export const createChannel = (name: string) =>
+  invoke<CreateChannelResult>("create_channel", { name });
+
+export const generateInvite = (
+  channelId: string,
+  channelName: string,
+  channelKeyHex: string,
+) => invoke<string>("generate_invite", { channelId, channelName, channelKeyHex });
+
+export const acceptInvite = (inviteCode: string) =>
+  invoke<CreateChannelResult>("accept_invite", { inviteCode });

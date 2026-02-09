@@ -28,6 +28,7 @@ pub enum SfuState {
 
 /// Client-side SFU connection.
 /// The SFU never decrypts media -- all frames are E2EE via insertable streams.
+#[allow(dead_code)]
 pub struct SfuClient {
     local_user: UserId,
     session_key: SymmetricKey,

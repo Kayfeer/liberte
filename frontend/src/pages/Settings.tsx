@@ -1,16 +1,12 @@
 import { useIdentityStore } from "../stores/identityStore";
-import { Shield, Copy, Check, Server, Wifi } from "lucide-react";
+import { useNavigationStore } from "../stores/navigationStore";
+import { Shield, Copy, Check, Server, ArrowLeft } from "lucide-react";
 import { useState } from "react";
-import { getServerInfo, updateSettings, getSettings } from "../lib/tauri";
-import type { ServerInfo } from "../lib/types";
 
 export default function Settings() {
   const { identity } = useIdentityStore();
+  const navigate = useNavigationStore((s) => s.navigate);
   const [copied, setCopied] = useState(false);
-  const [serverUrl, setServerUrl] = useState("");
-  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
-  const [serverError, setServerError] = useState("");
-  const [serverLoading, setServerLoading] = useState(false);
 
   const copyPubkey = () => {
     if (identity) {
@@ -20,86 +16,31 @@ export default function Settings() {
     }
   };
 
-  const testServer = async () => {
-    if (!serverUrl.trim()) return;
-    setServerLoading(true);
-    setServerError("");
-    setServerInfo(null);
-    try {
-      const info = await getServerInfo(serverUrl.trim());
-      setServerInfo(info);
-    } catch (e) {
-      setServerError(String(e));
-    } finally {
-      setServerLoading(false);
-    }
-  };
-
-  const saveServer = async () => {
-    try {
-      const current = await getSettings();
-      await updateSettings({ ...current, serverUrl: serverUrl.trim() });
-    } catch (e) {
-      setServerError(String(e));
-    }
-  };
-
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-6">
-      <h2 className="text-xl font-bold">Paramètres</h2>
+    <div className="p-6 max-w-2xl mx-auto space-y-6 overflow-y-auto flex-1">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => navigate("home")}
+          className="p-1.5 hover:bg-liberte-panel rounded transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5 text-liberte-muted" />
+        </button>
+        <h2 className="text-xl font-bold">Paramètres</h2>
+      </div>
 
       {/* Server / Self-hosted */}
-      <div className="panel p-4 space-y-4">
+      <div className="panel p-4 space-y-4 opacity-60">
         <h3 className="font-medium flex items-center gap-2">
           <Server className="w-4 h-4 text-liberte-accent" />
           Serveur relais
+          <span className="text-xs bg-liberte-panel text-liberte-muted px-2 py-0.5 rounded-full">
+            Bientôt disponible
+          </span>
         </h3>
         <p className="text-sm text-liberte-muted">
-          Connectez-vous à un serveur Liberté géré ou auto-hébergé.
-          Laissez vide pour le mode P2P pur.
+          La connexion à un serveur relais auto-hébergé sera disponible dans une prochaine mise à jour.
+          En attendant, Liberté fonctionne en mode pair-à-pair pur.
         </p>
-
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="https://liberte.example.com"
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            className="flex-1 bg-liberte-bg border border-liberte-panel rounded px-3 py-2 text-sm focus:outline-none focus:border-liberte-accent"
-          />
-          <button
-            onClick={testServer}
-            disabled={serverLoading || !serverUrl.trim()}
-            className="btn-primary text-sm disabled:opacity-50"
-          >
-            {serverLoading ? "..." : "Tester"}
-          </button>
-        </div>
-
-        {serverError && (
-          <p className="text-sm text-liberte-accent">{serverError}</p>
-        )}
-
-        {serverInfo && (
-          <div className="bg-liberte-bg rounded p-3 space-y-2 text-sm">
-            <div className="flex items-center gap-2">
-              <Wifi className="w-4 h-4 text-liberte-success" />
-              <span className="font-medium">{serverInfo.name}</span>
-              <span className="text-liberte-muted">v{serverInfo.version}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-1 text-xs text-liberte-muted">
-              <span>Premium requis:</span>
-              <span>{serverInfo.premiumRequired ? "Oui" : "Non"}</span>
-              <span>Inscriptions:</span>
-              <span>{serverInfo.registrationOpen ? "Ouvertes" : "Fermées"}</span>
-              <span>Max peers:</span>
-              <span>{serverInfo.maxPeers === 0 ? "Illimité" : serverInfo.maxPeers}</span>
-            </div>
-            <button onClick={saveServer} className="btn-primary text-sm mt-2">
-              Enregistrer ce serveur
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Identity */}
