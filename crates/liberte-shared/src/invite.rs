@@ -73,8 +73,8 @@ impl InviteToken {
         let payload_bytes =
             bincode::serialize(&self.payload).map_err(|_| InviteError::InvalidFormat)?;
 
-        let signature = Signature::from_slice(&self.signature)
-            .map_err(|_| InviteError::InvalidSignature)?;
+        let signature =
+            Signature::from_slice(&self.signature).map_err(|_| InviteError::InvalidSignature)?;
 
         let verifying_key = VerifyingKey::from_bytes(&self.payload.inviter_pubkey)
             .map_err(|_| InviteError::InvalidSignature)?;
@@ -144,12 +144,8 @@ mod tests {
     #[test]
     fn test_invite_tampered_fails() {
         let identity = Identity::generate();
-        let token = InviteToken::create(
-            &identity,
-            Uuid::new_v4(),
-            "channel".to_string(),
-            [0u8; 32],
-        );
+        let token =
+            InviteToken::create(&identity, Uuid::new_v4(), "channel".to_string(), [0u8; 32]);
 
         let mut bad_token = token;
         bad_token.payload.channel_name = "hacked".to_string();

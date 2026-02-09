@@ -72,9 +72,7 @@ pub fn try_decode_notification(
     channel_key: &SymmetricKey,
 ) -> Option<WireMessage> {
     match notification {
-        SwarmNotification::MessageReceived {
-            topic, data, ..
-        } => {
+        SwarmNotification::MessageReceived { topic, data, .. } => {
             let expected_topic = channel_id.to_topic();
             if topic != &expected_topic {
                 return None;

@@ -14,8 +14,13 @@ import {
   Construction,
   AudioLines,
   RefreshCw,
+  HardDriveDownload,
+  FolderOpen,
+  Cloud,
+  Download,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useBackupStore } from "../stores/backupStore";
 
 /* ─── Reusable sub-components ─── */
 
@@ -139,10 +144,66 @@ function Toggle({
 
 /* ─── Main Settings page ─── */
 
+function CameraPreview({ deviceId }: { deviceId: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const startPreview = useCallback(async () => {
+    // Stop any existing stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+
+    if (!deviceId) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId }, width: 640, height: 360 },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch {
+      // Camera unavailable — silently ignore
+    }
+  }, [deviceId]);
+
+  useEffect(() => {
+    startPreview();
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [startPreview]);
+
+  return (
+    <div className="relative rounded-lg overflow-hidden bg-liberte-bg border border-liberte-border aspect-video">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="w-full h-full object-cover mirror"
+      />
+      {!deviceId && (
+        <div className="absolute inset-0 flex items-center justify-center text-liberte-muted text-sm">
+          Aucune caméra sélectionnée
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Settings() {
   const { identity } = useIdentityStore();
   const navigate = useNavigationStore((s) => s.navigate);
   const media = useMediaDevices();
+  const backup = useBackupStore();
   const [copied, setCopied] = useState(false);
 
   const copyPubkey = () => {
@@ -328,12 +389,119 @@ export default function Settings() {
           onChange={(id) => media.update({ selectedVideoInput: id })}
         />
 
+        {media.videoInputs.length > 0 && (
+          <CameraPreview deviceId={media.selectedVideoInput} />
+        )}
+
         {media.videoInputs.length === 0 && !media.loading && (
           <p className="text-xs text-liberte-muted">
             Aucune caméra détectée. Branchez une webcam et cliquez sur
             rafraîchir.
           </p>
         )}
+      </div>
+
+      {/* ── Sauvegarde ── */}
+      <div className="panel p-4 space-y-5">
+        <h3 className="font-medium flex items-center gap-2">
+          <HardDriveDownload className="w-4 h-4 text-liberte-accent" />
+          Sauvegarde
+        </h3>
+
+        <Toggle
+          label="Sauvegarde automatique"
+          description={`Exporte automatiquement vos données toutes les ${backup.intervalMinutes} minutes`}
+          checked={backup.autoBackupEnabled}
+          onChange={(v) => backup.setAutoBackup(v)}
+        />
+
+        {backup.autoBackupEnabled && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-liberte-muted">Fréquence</label>
+              <span className="text-xs font-mono text-liberte-muted">
+                {backup.intervalMinutes} min
+              </span>
+            </div>
+            <input
+              type="range"
+              min={5}
+              max={120}
+              step={5}
+              value={backup.intervalMinutes}
+              onChange={(e) => backup.setInterval(Number(e.target.value))}
+              className="w-full h-1.5 bg-liberte-border rounded-full appearance-none cursor-pointer accent-liberte-accent"
+            />
+          </div>
+        )}
+
+        {backup.lastBackupTime && (
+          <p className="text-xs text-liberte-muted">
+            Dernière sauvegarde :{" "}
+            {new Date(backup.lastBackupTime).toLocaleString()}
+          </p>
+        )}
+
+        {backup.error && (
+          <p className="text-xs text-red-400 bg-red-400/10 p-2 rounded">
+            ⚠ {backup.error}
+          </p>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => backup.runAutoBackup()}
+            disabled={backup.isBackingUp}
+            className="btn-secondary text-xs flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {backup.isBackingUp ? "Sauvegarde..." : "Sauvegarder maintenant"}
+          </button>
+
+          <button
+            onClick={async () => {
+              const { save } = await import("@tauri-apps/plugin-dialog");
+              const path = await save({
+                defaultPath: `liberte_backup_${new Date().toISOString().slice(0, 10)}.json`,
+                filters: [{ name: "JSON", extensions: ["json"] }],
+              });
+              if (path) await backup.saveToFile(path);
+            }}
+            disabled={backup.isBackingUp}
+            className="btn-secondary text-xs flex items-center gap-1.5"
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+            Exporter vers un fichier
+          </button>
+
+          <button
+            onClick={async () => {
+              const { open: openFile } = await import(
+                "@tauri-apps/plugin-dialog"
+              );
+              const path = await openFile({
+                multiple: false,
+                filters: [{ name: "JSON", extensions: ["json"] }],
+                title: "Importer une sauvegarde",
+              });
+              if (path) {
+                const { readTextFile } = await import(
+                  "@tauri-apps/plugin-fs"
+                );
+                const json = await readTextFile(path);
+                const stats = await backup.importFromFile(json);
+                alert(
+                  `Importé : ${stats.channelsImported} channels, ${stats.messagesImported} messages, ${stats.keysImported} clés`
+                );
+              }
+            }}
+            disabled={backup.isRestoring}
+            className="btn-secondary text-xs flex items-center gap-1.5"
+          >
+            <Cloud className="w-3.5 h-3.5" />
+            {backup.isRestoring ? "Importation..." : "Importer"}
+          </button>
+        </div>
       </div>
 
       {/* ── Premium (en cours de confection) ── */}

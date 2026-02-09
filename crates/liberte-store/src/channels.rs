@@ -39,7 +39,8 @@ impl Database {
             "SELECT id, name, server_id, created_at FROM channels ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_channel)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     pub fn list_channels_for_server(&self, server_id: Uuid) -> Result<Vec<Channel>> {
@@ -47,7 +48,8 @@ impl Database {
             "SELECT id, name, server_id, created_at FROM channels WHERE server_id = ?1 ORDER BY name ASC",
         )?;
         let rows = stmt.query_map(params![server_id.to_string()], row_to_channel)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     pub fn store_channel_key(&self, channel_id: Uuid, key_hex: &str) -> Result<()> {
@@ -59,7 +61,9 @@ impl Database {
     }
 
     pub fn get_all_channel_keys(&self) -> Result<std::collections::HashMap<Uuid, String>> {
-        let mut stmt = self.conn().prepare("SELECT channel_id, key_hex FROM channel_keys")?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT channel_id, key_hex FROM channel_keys")?;
         let rows = stmt.query_map([], |row| {
             let id_str: String = row.get(0)?;
             let key: String = row.get(1)?;
@@ -90,9 +94,10 @@ impl Database {
     }
 
     pub fn delete_channel(&self, id: Uuid) -> Result<bool> {
-        let affected = self
-            .conn()
-            .execute("DELETE FROM channels WHERE id = ?1", params![id.to_string()])?;
+        let affected = self.conn().execute(
+            "DELETE FROM channels WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         Ok(affected > 0)
     }
 }
@@ -103,15 +108,25 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
     let server_id_str: Option<String> = row.get(2)?;
     let created_str: String = row.get(3)?;
 
-    let id = Uuid::parse_str(&id_str)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+    let id = Uuid::parse_str(&id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     let server_id = server_id_str
         .map(|s| Uuid::parse_str(&s))
         .transpose()
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+        })?;
     let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
-    Ok(Channel { id, name, server_id, created_at })
+    Ok(Channel {
+        id,
+        name,
+        server_id,
+        created_at,
+    })
 }

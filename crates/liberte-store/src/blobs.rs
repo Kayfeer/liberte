@@ -81,12 +81,15 @@ fn row_to_blob(row: &rusqlite::Row<'_>) -> rusqlite::Result<Blob> {
     let local_path: String = row.get(5)?;
     let created_str: String = row.get(6)?;
 
-    let id = Uuid::parse_str(&id_str)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+    let id = Uuid::parse_str(&id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
 
     let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
     Ok(Blob {
         id,

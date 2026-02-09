@@ -132,11 +132,8 @@ mod tests {
         let server_pubkey = server_key.verifying_key().to_bytes();
         let user_pubkey = [42u8; 32];
 
-        let token = create_premium_token(
-            &user_pubkey,
-            Utc::now() + Duration::days(30),
-            &server_key,
-        );
+        let token =
+            create_premium_token(&user_pubkey, Utc::now() + Duration::days(30), &server_key);
 
         let verifier = PremiumVerifier::new(server_pubkey);
         assert!(verifier.verify(&token).await);
@@ -149,11 +146,7 @@ mod tests {
         let server_pubkey = server_key.verifying_key().to_bytes();
         let user_pubkey = [42u8; 32];
 
-        let token = create_premium_token(
-            &user_pubkey,
-            Utc::now() - Duration::days(1),
-            &server_key,
-        );
+        let token = create_premium_token(&user_pubkey, Utc::now() - Duration::days(1), &server_key);
 
         let verifier = PremiumVerifier::new(server_pubkey);
         assert!(!verifier.verify(&token).await);
@@ -166,11 +159,8 @@ mod tests {
         let wrong_pubkey = wrong_key.verifying_key().to_bytes();
         let user_pubkey = [42u8; 32];
 
-        let token = create_premium_token(
-            &user_pubkey,
-            Utc::now() + Duration::days(30),
-            &server_key,
-        );
+        let token =
+            create_premium_token(&user_pubkey, Utc::now() + Duration::days(30), &server_key);
 
         let verifier = PremiumVerifier::new(wrong_pubkey);
         assert!(!verifier.verify(&token).await);

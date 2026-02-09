@@ -24,6 +24,9 @@ pub enum ServerError {
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
+    #[error("Not found: {0}")]
+    NotFound(String),
+
     #[error("Internal error: {0}")]
     #[allow(dead_code)]
     Internal(String),
@@ -33,20 +36,19 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             ServerError::BlobNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            ServerError::BlobTooLarge { .. } => {
-                (StatusCode::PAYLOAD_TOO_LARGE, self.to_string())
-            }
-            ServerError::BlobStorage(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Blob storage error".to_string())
-            }
-            ServerError::PremiumVerificationFailed => {
-                (StatusCode::UNAUTHORIZED, self.to_string())
-            }
+            ServerError::BlobTooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
+            ServerError::BlobStorage(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Blob storage error".to_string(),
+            ),
+            ServerError::PremiumVerificationFailed => (StatusCode::UNAUTHORIZED, self.to_string()),
             ServerError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ServerError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
-            ServerError::Internal(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
-            }
+            ServerError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+            ServerError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
         };
 
         let body = serde_json::json!({

@@ -26,8 +26,8 @@ pub async fn send_file(
     channel_id: String,
     file_path: String,
 ) -> Result<FileSendResult, String> {
-    let channel_uuid = Uuid::parse_str(&channel_id)
-        .map_err(|e| format!("Invalid channel_id: {e}"))?;
+    let channel_uuid =
+        Uuid::parse_str(&channel_id).map_err(|e| format!("Invalid channel_id: {e}"))?;
 
     let path = std::path::Path::new(&file_path);
     let file_name = path
@@ -141,8 +141,8 @@ pub async fn upload_premium_blob(
         }
     }
 
-    let key_bytes = hex::decode(&channel_key_hex)
-        .map_err(|e| format!("Invalid channel key hex: {e}"))?;
+    let key_bytes =
+        hex::decode(&channel_key_hex).map_err(|e| format!("Invalid channel key hex: {e}"))?;
     if key_bytes.len() != 32 {
         return Err("Channel key must be 32 bytes (64 hex chars)".into());
     }

@@ -14,6 +14,6 @@ pub use discovery::load_bootstrap_peers;
 pub use dns::build_doh_resolver;
 pub use messages::{publish_message, subscribe_topic};
 pub use peers::{ConnectionInfo, PeerTracker};
-pub use relay::{request_relay_reservation, dial_via_relay};
+pub use relay::{dial_via_relay, request_relay_reservation};
 pub use swarm::{spawn_swarm, SwarmCommand, SwarmNotification};
 pub use transport::build_swarm;

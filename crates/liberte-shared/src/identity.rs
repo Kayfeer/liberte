@@ -61,8 +61,7 @@ impl Identity {
 
     // Derives a db encryption key from identity via BLAKE3
     pub fn derive_db_key(&self) -> [u8; 32] {
-        let mut hasher =
-            blake3::Hasher::new_derive_key(crate::constants::KDF_CONTEXT_DB_KEY);
+        let mut hasher = blake3::Hasher::new_derive_key(crate::constants::KDF_CONTEXT_DB_KEY);
         hasher.update(self.signing_key.as_bytes());
         let hash = hasher.finalize();
         let mut key = [0u8; 32];

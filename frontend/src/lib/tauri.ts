@@ -97,3 +97,32 @@ export const acceptInvite = (inviteCode: string) =>
 
 export const getAllChannelKeys = () =>
   invoke<Record<string, string>>("get_all_channel_keys");
+
+// Backup commands
+export interface BackupFileInfo {
+  fileName: string;
+  filePath: string;
+  sizeBytes: number;
+  modified: string;
+}
+
+export interface ImportStats {
+  channelsImported: number;
+  messagesImported: number;
+  keysImported: number;
+}
+
+export const exportBackup = () =>
+  invoke<string>("export_backup");
+
+export const saveBackupToFile = (filePath: string) =>
+  invoke<string>("save_backup_to_file", { filePath });
+
+export const autoBackup = () =>
+  invoke<string>("auto_backup");
+
+export const importBackup = (json: string) =>
+  invoke<ImportStats>("import_backup", { json });
+
+export const listBackups = () =>
+  invoke<BackupFileInfo[]>("list_backups");

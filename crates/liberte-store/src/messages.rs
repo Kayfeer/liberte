@@ -63,9 +63,10 @@ impl Database {
     }
 
     pub fn delete_message(&self, id: Uuid) -> Result<bool> {
-        let affected = self
-            .conn()
-            .execute("DELETE FROM messages WHERE id = ?1", params![id.to_string()])?;
+        let affected = self.conn().execute(
+            "DELETE FROM messages WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         Ok(affected > 0)
     }
 }
@@ -77,13 +78,16 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let encrypted_content: Vec<u8> = row.get(3)?;
     let ts_str: String = row.get(4)?;
 
-    let id = Uuid::parse_str(&id_str)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
-    let channel_id = Uuid::parse_str(&channel_id_str)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
+    let id = Uuid::parse_str(&id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let channel_id = Uuid::parse_str(&channel_id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e))
+    })?;
 
-    let sender_bytes = hex::decode(&sender_hex)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
+    let sender_bytes = hex::decode(&sender_hex).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     let mut sender_pubkey = [0u8; 32];
     if sender_bytes.len() == 32 {
         sender_pubkey.copy_from_slice(&sender_bytes);
@@ -91,7 +95,9 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
 
     let timestamp: DateTime<Utc> = DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
     Ok(Message {
         id,

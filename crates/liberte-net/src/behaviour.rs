@@ -1,7 +1,5 @@
 use libp2p::{
-    dcutr,
-    gossipsub,
-    identify,
+    dcutr, gossipsub, identify,
     kad::{self, store::MemoryStore},
     relay,
     swarm::NetworkBehaviour,

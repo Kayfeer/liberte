@@ -51,10 +51,9 @@ pub async fn spawn_relay(listen_addr: &str) -> anyhow::Result<PeerId> {
             let relay_config = relay::Config::default();
             let relay_behaviour = relay::Behaviour::new(peer_id, relay_config);
 
-            let identify_config =
-                identify::Config::new(PROTOCOL_VERSION.to_string(), key.public())
-                    .with_push_listen_addr_updates(true)
-                    .with_interval(Duration::from_secs(60));
+            let identify_config = identify::Config::new(PROTOCOL_VERSION.to_string(), key.public())
+                .with_push_listen_addr_updates(true)
+                .with_interval(Duration::from_secs(60));
             let identify_behaviour = identify::Behaviour::new(identify_config);
 
             Ok(RelayServerBehaviour {
@@ -75,61 +74,56 @@ pub async fn spawn_relay(listen_addr: &str) -> anyhow::Result<PeerId> {
     tokio::spawn(async move {
         loop {
             match swarm.select_next_some().await {
-                SwarmEvent::Behaviour(RelayServerEvent::Relay(event)) => {
-                    match &event {
-                        relay::Event::ReservationReqAccepted {
-                            src_peer_id,
-                            ..
-                        } => {
-                            info!(
-                                peer = %src_peer_id,
-                                "Relay reservation accepted"
-                            );
-                        }
-                        relay::Event::ReservationTimedOut { src_peer_id, .. } => {
-                            debug!(
-                                peer = %src_peer_id,
-                                "Relay reservation timed out"
-                            );
-                        }
-                        relay::Event::CircuitReqDenied {
-                            src_peer_id,
-                            dst_peer_id,
-                            ..
-                        } => {
-                            debug!(
-                                src = %src_peer_id,
-                                dst = %dst_peer_id,
-                                "Circuit request denied"
-                            );
-                        }
-                        relay::Event::CircuitReqAccepted {
-                            src_peer_id,
-                            dst_peer_id,
-                            ..
-                        } => {
-                            info!(
-                                src = %src_peer_id,
-                                dst = %dst_peer_id,
-                                "Circuit relay established"
-                            );
-                        }
-                        relay::Event::CircuitClosed {
-                            src_peer_id,
-                            dst_peer_id,
-                            ..
-                        } => {
-                            debug!(
-                                src = %src_peer_id,
-                                dst = %dst_peer_id,
-                                "Circuit relay closed"
-                            );
-                        }
-                        _ => {
-                            debug!(event = ?event, "Relay event");
-                        }
+                SwarmEvent::Behaviour(RelayServerEvent::Relay(event)) => match &event {
+                    relay::Event::ReservationReqAccepted { src_peer_id, .. } => {
+                        info!(
+                            peer = %src_peer_id,
+                            "Relay reservation accepted"
+                        );
                     }
-                }
+                    relay::Event::ReservationTimedOut { src_peer_id, .. } => {
+                        debug!(
+                            peer = %src_peer_id,
+                            "Relay reservation timed out"
+                        );
+                    }
+                    relay::Event::CircuitReqDenied {
+                        src_peer_id,
+                        dst_peer_id,
+                        ..
+                    } => {
+                        debug!(
+                            src = %src_peer_id,
+                            dst = %dst_peer_id,
+                            "Circuit request denied"
+                        );
+                    }
+                    relay::Event::CircuitReqAccepted {
+                        src_peer_id,
+                        dst_peer_id,
+                        ..
+                    } => {
+                        info!(
+                            src = %src_peer_id,
+                            dst = %dst_peer_id,
+                            "Circuit relay established"
+                        );
+                    }
+                    relay::Event::CircuitClosed {
+                        src_peer_id,
+                        dst_peer_id,
+                        ..
+                    } => {
+                        debug!(
+                            src = %src_peer_id,
+                            dst = %dst_peer_id,
+                            "Circuit relay closed"
+                        );
+                    }
+                    _ => {
+                        debug!(event = ?event, "Relay event");
+                    }
+                },
 
                 SwarmEvent::Behaviour(RelayServerEvent::Identify(event)) => {
                     if let identify::Event::Received { peer_id, info, .. } = *event {

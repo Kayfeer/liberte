@@ -31,6 +31,10 @@ impl BlobStore {
         })
     }
 
+    pub fn base_path(&self) -> &std::path::Path {
+        &self.base_path
+    }
+
     pub async fn store_blob(&self, data: &[u8]) -> Result<Uuid, ServerError> {
         if data.is_empty() {
             return Err(ServerError::BlobStorage("Empty blob".to_string()));
@@ -45,9 +49,9 @@ impl BlobStore {
         let id = Uuid::new_v4();
         let path = self.blob_path(&id);
 
-        fs::write(&path, data).await.map_err(|e| {
-            ServerError::BlobStorage(format!("Failed to write blob {}: {}", id, e))
-        })?;
+        fs::write(&path, data)
+            .await
+            .map_err(|e| ServerError::BlobStorage(format!("Failed to write blob {}: {}", id, e)))?;
 
         debug!(id = %id, size = data.len(), "Stored blob");
         Ok(id)
@@ -60,9 +64,9 @@ impl BlobStore {
             return Err(ServerError::BlobNotFound(id));
         }
 
-        let data = fs::read(&path).await.map_err(|e| {
-            ServerError::BlobStorage(format!("Failed to read blob {}: {}", id, e))
-        })?;
+        let data = fs::read(&path)
+            .await
+            .map_err(|e| ServerError::BlobStorage(format!("Failed to read blob {}: {}", id, e)))?;
 
         debug!(id = %id, size = data.len(), "Retrieved blob");
         Ok(data)
@@ -86,9 +90,9 @@ impl BlobStore {
     #[allow(dead_code)]
     pub async fn list_blobs(&self) -> Result<Vec<Uuid>, ServerError> {
         let mut ids = Vec::new();
-        let mut entries = fs::read_dir(&self.base_path).await.map_err(|e| {
-            ServerError::BlobStorage(format!("Failed to list blobs: {}", e))
-        })?;
+        let mut entries = fs::read_dir(&self.base_path)
+            .await
+            .map_err(|e| ServerError::BlobStorage(format!("Failed to list blobs: {}", e)))?;
 
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
             ServerError::BlobStorage(format!("Failed to read directory entry: {}", e))
@@ -115,7 +119,9 @@ mod tests {
 
     async fn test_store() -> (BlobStore, TempDir) {
         let dir = TempDir::new().unwrap();
-        let store = BlobStore::new(dir.path().to_path_buf(), 1024 * 1024).await.unwrap();
+        let store = BlobStore::new(dir.path().to_path_buf(), 1024 * 1024)
+            .await
+            .unwrap();
         (store, dir)
     }
 

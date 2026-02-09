@@ -20,18 +20,15 @@ pub struct CsamFilter {
 
 impl CsamFilter {
     pub fn load(bloom_path: &std::path::Path) -> Result<Self, CsamError> {
-        let data = std::fs::read(bloom_path)
-            .map_err(|e| CsamError::BloomFilterError(format!("Failed to read bloom filter: {e}")))?;
+        let data = std::fs::read(bloom_path).map_err(|e| {
+            CsamError::BloomFilterError(format!("Failed to read bloom filter: {e}"))
+        })?;
 
         let bd: BloomData = bincode::deserialize(&data)
             .map_err(|e| CsamError::BloomFilterError(format!("Failed to deserialize: {e}")))?;
 
-        let bloom = bloomfilter::Bloom::from_existing(
-            &bd.bitmap,
-            bd.bitmap_bits,
-            bd.k_num,
-            bd.sip_keys,
-        );
+        let bloom =
+            bloomfilter::Bloom::from_existing(&bd.bitmap, bd.bitmap_bits, bd.k_num, bd.sip_keys);
 
         let hasher_config = HasherConfig::new()
             .hash_alg(HashAlg::DoubleGradient)
@@ -118,9 +115,8 @@ mod tests {
 
     fn create_test_image() -> Vec<u8> {
         use image::{ImageBuffer, Rgb};
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(10, 10, |_, _| {
-            Rgb([255, 0, 0])
-        });
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(10, 10, |_, _| Rgb([255, 0, 0]));
         let mut buf = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buf);
         img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();

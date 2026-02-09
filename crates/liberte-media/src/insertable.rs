@@ -48,7 +48,10 @@ pub fn encrypt_frame(
 }
 
 /// Decrypts a media frame. Returns (frame_type, plaintext).
-pub fn decrypt_frame(key: &SymmetricKey, encrypted_frame: &[u8]) -> Result<(u8, Vec<u8>), FrameError> {
+pub fn decrypt_frame(
+    key: &SymmetricKey,
+    encrypted_frame: &[u8],
+) -> Result<(u8, Vec<u8>), FrameError> {
     if encrypted_frame.len() < MIN_FRAME_SIZE {
         return Err(FrameError::InvalidFormat);
     }

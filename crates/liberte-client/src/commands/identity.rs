@@ -19,7 +19,11 @@ pub struct IdentityInfoDto {
 
 fn make_identity_dto(identity: &Identity) -> IdentityInfoDto {
     let pubkey_hex = hex::encode(identity.public_key_bytes());
-    let short_id = format!("{}…{}", &pubkey_hex[..8], &pubkey_hex[pubkey_hex.len()-8..]);
+    let short_id = format!(
+        "{}…{}",
+        &pubkey_hex[..8],
+        &pubkey_hex[pubkey_hex.len() - 8..]
+    );
     IdentityInfoDto {
         public_key: pubkey_hex,
         short_id,
@@ -28,9 +32,7 @@ fn make_identity_dto(identity: &Identity) -> IdentityInfoDto {
 }
 
 #[tauri::command]
-pub fn create_identity(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<IdentityInfoDto, String> {
+pub fn create_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityInfoDto, String> {
     let identity = Identity::generate();
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let db_key = identity.derive_db_key();
@@ -81,9 +83,7 @@ pub fn create_identity(
 }
 
 #[tauri::command]
-pub fn load_identity(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<IdentityInfoDto, String> {
+pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityInfoDto, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     if let Some(ref id) = guard.identity {
         return Ok(make_identity_dto(id));
@@ -108,8 +108,8 @@ pub fn load_identity(
         )
         .map_err(|e| format!("No identity found in database: {e}"))?;
 
-    let secret_bytes = hex::decode(&secret_hex)
-        .map_err(|e| format!("Corrupt identity data: {e}"))?;
+    let secret_bytes =
+        hex::decode(&secret_hex).map_err(|e| format!("Corrupt identity data: {e}"))?;
 
     if secret_bytes.len() != 32 {
         return Err("Corrupt identity: expected 32-byte secret key".into());
@@ -132,9 +132,7 @@ pub fn load_identity(
 }
 
 #[tauri::command]
-pub fn export_pubkey(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<String, String> {
+pub fn export_pubkey(state: State<'_, Arc<Mutex<AppState>>>) -> Result<String, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     let identity = guard
         .identity

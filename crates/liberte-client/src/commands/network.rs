@@ -36,9 +36,7 @@ pub async fn connect_peer(
 }
 
 #[tauri::command]
-pub async fn list_peers(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<Vec<String>, String> {
+pub async fn list_peers(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<String>, String> {
     let cmd_tx = {
         let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
         guard
@@ -62,9 +60,7 @@ pub async fn list_peers(
 }
 
 #[tauri::command]
-pub fn get_connection_mode(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<String, String> {
+pub fn get_connection_mode(state: State<'_, Arc<Mutex<AppState>>>) -> Result<String, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
 
     let mode = match guard.connection_mode {

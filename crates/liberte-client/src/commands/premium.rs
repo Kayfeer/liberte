@@ -15,9 +15,7 @@ pub struct PremiumStatus {
 }
 
 #[tauri::command]
-pub fn check_premium(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<PremiumStatus, String> {
+pub fn check_premium(state: State<'_, Arc<Mutex<AppState>>>) -> Result<PremiumStatus, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
 
     Ok(PremiumStatus {
@@ -31,8 +29,8 @@ pub fn activate_premium(
     state: State<'_, Arc<Mutex<AppState>>>,
     token_json: String,
 ) -> Result<PremiumStatus, String> {
-    let token: premium::PremiumToken = serde_json::from_str(&token_json)
-        .map_err(|e| format!("Invalid token JSON: {e}"))?;
+    let token: premium::PremiumToken =
+        serde_json::from_str(&token_json).map_err(|e| format!("Invalid token JSON: {e}"))?;
 
     let is_valid = premium::check_premium_status(&token);
 

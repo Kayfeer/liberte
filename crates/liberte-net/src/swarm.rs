@@ -2,11 +2,7 @@ use std::path::PathBuf;
 
 use futures::StreamExt;
 use libp2p::{
-    gossipsub, identify, kad,
-    multiaddr::Protocol,
-    relay,
-    swarm::SwarmEvent,
-    Multiaddr, PeerId,
+    gossipsub, identify, kad, multiaddr::Protocol, relay, swarm::SwarmEvent, Multiaddr, PeerId,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -21,10 +17,7 @@ use liberte_shared::constants::DEFAULT_QUIC_PORT;
 #[derive(Debug)]
 pub enum SwarmCommand {
     Dial(Multiaddr),
-    PublishMessage {
-        topic: String,
-        data: Vec<u8>,
-    },
+    PublishMessage { topic: String, data: Vec<u8> },
     SubscribeTopic(String),
     GetPeers(tokio::sync::oneshot::Sender<Vec<PeerId>>),
     Shutdown,

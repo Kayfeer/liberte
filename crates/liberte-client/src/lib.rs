@@ -11,7 +11,9 @@ use crate::state::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("liberte_client_lib=debug,liberte_net=debug,liberte_store=info,liberte_media=info,warn")
+        EnvFilter::new(
+            "liberte_client_lib=debug,liberte_net=debug,liberte_store=info,liberte_media=info,warn",
+        )
     });
 
     fmt()
@@ -31,6 +33,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::identity::create_identity,
@@ -57,6 +61,11 @@ pub fn run() {
             commands::channels::generate_invite,
             commands::channels::accept_invite,
             commands::channels::get_all_channel_keys,
+            commands::backup::export_backup,
+            commands::backup::save_backup_to_file,
+            commands::backup::auto_backup,
+            commands::backup::import_backup,
+            commands::backup::list_backups,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run Tauri application");

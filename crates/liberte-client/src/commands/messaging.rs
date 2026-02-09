@@ -71,11 +71,11 @@ pub async fn send_message(
     content: String,
     channel_key_hex: String,
 ) -> Result<String, String> {
-    let channel_uuid = Uuid::parse_str(&channel_id)
-        .map_err(|e| format!("Invalid channel_id: {e}"))?;
+    let channel_uuid =
+        Uuid::parse_str(&channel_id).map_err(|e| format!("Invalid channel_id: {e}"))?;
 
-    let key_bytes = hex::decode(&channel_key_hex)
-        .map_err(|e| format!("Invalid channel key hex: {e}"))?;
+    let key_bytes =
+        hex::decode(&channel_key_hex).map_err(|e| format!("Invalid channel key hex: {e}"))?;
     if key_bytes.len() != 32 {
         return Err("Channel key must be 32 bytes (64 hex chars)".into());
     }
@@ -84,9 +84,13 @@ pub async fn send_message(
 
     let (sender_pubkey, cmd_tx) = {
         let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-        let identity = guard.identity.as_ref()
+        let identity = guard
+            .identity
+            .as_ref()
             .ok_or_else(|| "No identity loaded".to_string())?;
-        let tx = guard.swarm_cmd_tx.clone()
+        let tx = guard
+            .swarm_cmd_tx
+            .clone()
             .ok_or_else(|| "Swarm not started".to_string())?;
         (identity.public_key_bytes(), tx)
     };
@@ -106,11 +110,15 @@ pub async fn send_message(
     });
 
     let topic = ChannelId(channel_uuid).to_topic();
-    let wire_bytes = wire_msg.to_bytes()
+    let wire_bytes = wire_msg
+        .to_bytes()
         .map_err(|e| format!("Serialization failed: {e}"))?;
 
     cmd_tx
-        .send(SwarmCommand::PublishMessage { topic, data: wire_bytes })
+        .send(SwarmCommand::PublishMessage {
+            topic,
+            data: wire_bytes,
+        })
         .await
         .map_err(|e| format!("Failed to publish message: {e}"))?;
 
@@ -142,13 +150,13 @@ pub fn get_messages(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<MessageDto>, String> {
-    let channel_uuid = Uuid::parse_str(&channel_id)
-        .map_err(|e| format!("Invalid channel_id: {e}"))?;
+    let channel_uuid =
+        Uuid::parse_str(&channel_id).map_err(|e| format!("Invalid channel_id: {e}"))?;
 
     let channel_key: Option<[u8; 32]> = match channel_key_hex {
         Some(ref hex_str) if !hex_str.is_empty() => {
-            let bytes = hex::decode(hex_str)
-                .map_err(|e| format!("Invalid channel key hex: {e}"))?;
+            let bytes =
+                hex::decode(hex_str).map_err(|e| format!("Invalid channel key hex: {e}"))?;
             if bytes.len() != 32 {
                 return Err("Channel key must be 32 bytes".into());
             }
@@ -160,25 +168,31 @@ pub fn get_messages(
     };
 
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    let db = guard.database.as_ref()
+    let db = guard
+        .database
+        .as_ref()
         .ok_or_else(|| "Database not opened".to_string())?;
 
     let messages = db
         .get_messages_for_channel(channel_uuid, limit.unwrap_or(50), offset.unwrap_or(0))
         .map_err(|e| format!("Failed to load messages: {e}"))?;
 
-    Ok(messages.into_iter().map(|m| MessageDto::from_message(m, channel_key.as_ref())).collect())
+    Ok(messages
+        .into_iter()
+        .map(|m| MessageDto::from_message(m, channel_key.as_ref()))
+        .collect())
 }
 
 #[tauri::command]
-pub fn list_channels(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<Vec<ChannelDto>, String> {
+pub fn list_channels(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ChannelDto>, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    let db = guard.database.as_ref()
+    let db = guard
+        .database
+        .as_ref()
         .ok_or_else(|| "Database not opened".to_string())?;
 
-    let channels = db.list_channels()
+    let channels = db
+        .list_channels()
         .map_err(|e| format!("Failed to list channels: {e}"))?;
 
     Ok(channels.into_iter().map(ChannelDto::from).collect())

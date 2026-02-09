@@ -88,9 +88,7 @@ pub fn generate_invite(
     let mut channel_key = [0u8; 32];
     channel_key.copy_from_slice(&key_bytes);
 
-    let guard = state
-        .lock()
-        .map_err(|e| format!("Lock poisoned: {e}"))?;
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     let identity = guard
         .identity
         .as_ref()
@@ -129,9 +127,7 @@ pub async fn accept_invite(
     };
 
     let cmd_tx = {
-        let guard = state
-            .lock()
-            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
         let db = guard
             .database
             .as_ref()
@@ -178,5 +174,8 @@ pub fn get_all_channel_keys(
         .map_err(|e| format!("Failed to load channel keys: {e}"))?;
 
     // Convert Uuid keys to String for serialization
-    Ok(keys.into_iter().map(|(id, k)| (id.to_string(), k)).collect())
+    Ok(keys
+        .into_iter()
+        .map(|(id, k)| (id.to_string(), k))
+        .collect())
 }

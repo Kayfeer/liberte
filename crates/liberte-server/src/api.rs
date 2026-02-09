@@ -32,12 +32,7 @@ pub struct AppState {
 pub fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers(Any);
 
     Router::new()
@@ -47,6 +42,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/blob/upload", post(blob_upload))
         .route("/blob/{id}", get(blob_download))
         .route("/blob/{id}", delete(blob_delete))
+        .route("/backup/sync", post(backup_sync_upload))
+        .route("/backup/{pubkey_hex}", get(backup_sync_download))
         .route("/admin/status", get(admin_status))
         .route("/admin/grant-premium", post(admin_grant_premium))
         .route("/admin/revoke-premium", post(admin_revoke_premium))
@@ -256,11 +253,85 @@ fn parse_hex_32(hex: &str) -> Result<[u8; 32], ServerError> {
             hex.len()
         )));
     }
-    let bytes = hex::decode(hex)
-        .map_err(|e| ServerError::BadRequest(format!("Invalid hex: {e}")))?;
+    let bytes =
+        hex::decode(hex).map_err(|e| ServerError::BadRequest(format!("Invalid hex: {e}")))?;
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(arr)
+}
+
+// ─── Backup sync endpoints ───
+
+#[derive(Deserialize)]
+struct BackupSyncRequest {
+    /// User's Ed25519 pubkey (hex, 64 chars)
+    user_pubkey_hex: String,
+    /// Encrypted backup data (the client encrypts before sending)
+    encrypted_data: String,
+}
+
+#[derive(Serialize)]
+struct BackupSyncResponse {
+    stored: bool,
+    size_bytes: usize,
+}
+
+/// Upload an encrypted backup blob, keyed by user pubkey.
+/// Overwrites any previous backup for that user.
+async fn backup_sync_upload(
+    State(state): State<AppState>,
+    Json(req): Json<BackupSyncRequest>,
+) -> Result<Json<BackupSyncResponse>, ServerError> {
+    let _pubkey = parse_hex_32(&req.user_pubkey_hex)?;
+    let data = req.encrypted_data.as_bytes();
+
+    // Store backup in a dedicated sub-path: backups/<pubkey_hex>.enc
+    let backup_dir = state.blob_store.base_path().join("backups");
+    tokio::fs::create_dir_all(&backup_dir)
+        .await
+        .map_err(|e| ServerError::Internal(format!("Failed to create backup dir: {e}")))?;
+
+    let file_path = backup_dir.join(format!("{}.enc", req.user_pubkey_hex));
+    tokio::fs::write(&file_path, data)
+        .await
+        .map_err(|e| ServerError::Internal(format!("Failed to write backup: {e}")))?;
+
+    info!(
+        user = %req.user_pubkey_hex,
+        size = data.len(),
+        "Backup synced to server"
+    );
+
+    Ok(Json(BackupSyncResponse {
+        stored: true,
+        size_bytes: data.len(),
+    }))
+}
+
+/// Download the encrypted backup for a given user pubkey.
+async fn backup_sync_download(
+    State(state): State<AppState>,
+    Path(pubkey_hex): Path<String>,
+) -> Result<String, ServerError> {
+    let _pubkey = parse_hex_32(&pubkey_hex)?;
+
+    let file_path = state
+        .blob_store
+        .base_path()
+        .join("backups")
+        .join(format!("{pubkey_hex}.enc"));
+
+    if !file_path.exists() {
+        return Err(ServerError::NotFound(
+            "No backup found for this user".into(),
+        ));
+    }
+
+    let data = tokio::fs::read_to_string(&file_path)
+        .await
+        .map_err(|e| ServerError::Internal(format!("Failed to read backup: {e}")))?;
+
+    Ok(data)
 }
 
 pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Result<()> {

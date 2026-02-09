@@ -21,16 +21,14 @@ pub fn load_bootstrap_peers(path: &Path) -> Vec<Multiaddr> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|line| {
-            match line.parse::<Multiaddr>() {
-                Ok(addr) => {
-                    debug!(addr = %addr, "Loaded bootstrap peer");
-                    Some(addr)
-                }
-                Err(e) => {
-                    warn!(line = %line, error = %e, "Skipping invalid multiaddr");
-                    None
-                }
+        .filter_map(|line| match line.parse::<Multiaddr>() {
+            Ok(addr) => {
+                debug!(addr = %addr, "Loaded bootstrap peer");
+                Some(addr)
+            }
+            Err(e) => {
+                warn!(line = %line, error = %e, "Skipping invalid multiaddr");
+                None
             }
         })
         .collect();

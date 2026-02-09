@@ -1,13 +1,21 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-utils/schema.json",
   "productName": "Liberté",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "com.liberte.app",
   "build": {
     "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Kayfeer/liberte/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   },
   "app": {
     "windows": [

@@ -35,11 +35,12 @@ impl Database {
     }
 
     pub fn list_servers(&self) -> Result<Vec<Server>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, name, owner_pubkey, created_at FROM servers ORDER BY name ASC",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT id, name, owner_pubkey, created_at FROM servers ORDER BY name ASC")?;
         let rows = stmt.query_map([], row_to_server)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     // ON DELETE CASCADE: channels + messages go with it
@@ -57,17 +58,26 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> rusqlite::Result<Server> {
     let owner_hex: String = row.get(2)?;
     let created_str: String = row.get(3)?;
 
-    let id = Uuid::parse_str(&id_str)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
-    let owner_bytes = hex::decode(&owner_hex)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
+    let id = Uuid::parse_str(&id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let owner_bytes = hex::decode(&owner_hex).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     let mut owner_pubkey = [0u8; 32];
     if owner_bytes.len() == 32 {
         owner_pubkey.copy_from_slice(&owner_bytes);
     }
     let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
-    Ok(Server { id, name, owner_pubkey, created_at })
+    Ok(Server {
+        id,
+        name,
+        owner_pubkey,
+        created_at,
+    })
 }

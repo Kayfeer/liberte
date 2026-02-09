@@ -53,4 +53,8 @@
   .panel {
     @apply bg-liberte-surface rounded-lg border border-liberte-border;
   }
+
+  .mirror {
+    transform: scaleX(-1);
+  }
 }

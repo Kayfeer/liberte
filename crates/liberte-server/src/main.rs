@@ -27,7 +27,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    info!("Starting Liberte relay server v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Starting Liberte relay server v{}",
+        env!("CARGO_PKG_VERSION")
+    );
 
     let config = ServerConfig::from_env();
     info!(?config, "Loaded configuration");
@@ -39,9 +42,8 @@ async fn main() -> anyhow::Result<()> {
         "Self-hosted instance settings"
     );
 
-    let blob_store = Arc::new(
-        BlobStore::new(config.blob_storage_path.clone(), config.max_blob_size).await?,
-    );
+    let blob_store =
+        Arc::new(BlobStore::new(config.blob_storage_path.clone(), config.max_blob_size).await?);
 
     let premium_verifier = Arc::new(PremiumVerifier::new(config.payment_server_pubkey));
 

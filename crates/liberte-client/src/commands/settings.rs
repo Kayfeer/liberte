@@ -35,9 +35,7 @@ impl Default for AppSettings {
 }
 
 #[tauri::command]
-pub fn get_settings(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<AppSettings, String> {
+pub fn get_settings(state: State<'_, Arc<Mutex<AppState>>>) -> Result<AppSettings, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
 
     let Some(ref db) = guard.database else {
@@ -51,16 +49,16 @@ pub fn get_settings(
         );",
     );
 
-    let result: Result<String, _> = db.conn().query_row(
-        "SELECT json FROM app_settings WHERE id = 1",
-        [],
-        |row| row.get(0),
-    );
+    let result: Result<String, _> =
+        db.conn()
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get(0)
+            });
 
     match result {
         Ok(json) => {
-            let settings: AppSettings = serde_json::from_str(&json)
-                .map_err(|e| format!("Corrupt settings JSON: {e}"))?;
+            let settings: AppSettings =
+                serde_json::from_str(&json).map_err(|e| format!("Corrupt settings JSON: {e}"))?;
             Ok(settings)
         }
         Err(_) => Ok(AppSettings::default()),
