@@ -15,27 +15,37 @@ use liberte_store::{Channel, Message};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageDto {
     pub id: String,
     pub channel_id: String,
-    pub sender: String,
-    pub encrypted_content: Vec<u8>,
+    pub sender_id: String,
+    pub content: String,
     pub timestamp: String,
 }
 
-impl From<Message> for MessageDto {
-    fn from(m: Message) -> Self {
+impl MessageDto {
+    pub fn from_message(m: Message, channel_key: Option<&[u8; 32]>) -> Self {
+        let content = match channel_key {
+            Some(key) => match crypto::decrypt(key, &m.encrypted_content) {
+                Ok(bytes) => String::from_utf8(bytes)
+                    .unwrap_or_else(|_| "[déchiffrement impossible]".to_string()),
+                Err(_) => "[déchiffrement impossible]".to_string(),
+            },
+            None => "[clé manquante]".to_string(),
+        };
         Self {
             id: m.id.to_string(),
             channel_id: m.channel_id.to_string(),
-            sender: hex::encode(m.sender_pubkey),
-            encrypted_content: m.encrypted_content,
+            sender_id: hex::encode(m.sender_pubkey),
+            content,
             timestamp: m.timestamp.to_rfc3339(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChannelDto {
     pub id: String,
     pub name: String,
@@ -128,11 +138,26 @@ pub async fn send_message(
 pub fn get_messages(
     state: State<'_, Arc<Mutex<AppState>>>,
     channel_id: String,
+    channel_key_hex: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<MessageDto>, String> {
     let channel_uuid = Uuid::parse_str(&channel_id)
         .map_err(|e| format!("Invalid channel_id: {e}"))?;
+
+    let channel_key: Option<[u8; 32]> = match channel_key_hex {
+        Some(ref hex_str) if !hex_str.is_empty() => {
+            let bytes = hex::decode(hex_str)
+                .map_err(|e| format!("Invalid channel key hex: {e}"))?;
+            if bytes.len() != 32 {
+                return Err("Channel key must be 32 bytes".into());
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            Some(key)
+        }
+        _ => None,
+    };
 
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     let db = guard.database.as_ref()
@@ -142,7 +167,7 @@ pub fn get_messages(
         .get_messages_for_channel(channel_uuid, limit.unwrap_or(50), offset.unwrap_or(0))
         .map_err(|e| format!("Failed to load messages: {e}"))?;
 
-    Ok(messages.into_iter().map(MessageDto::from).collect())
+    Ok(messages.into_iter().map(|m| MessageDto::from_message(m, channel_key.as_ref())).collect())
 }
 
 #[tauri::command]

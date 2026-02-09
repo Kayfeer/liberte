@@ -8,9 +8,11 @@ pub const EVENT_CALL_STATE_CHANGED: &str = "call-state-changed";
 pub const EVENT_CONNECTION_MODE_CHANGED: &str = "connection-mode-changed";
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewMessagePayload {
     pub channel_id: String,
     pub sender: String,
+    pub message_id: String,
     pub timestamp: String,
 }
 

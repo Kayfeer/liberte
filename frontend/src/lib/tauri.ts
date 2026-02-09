@@ -4,7 +4,7 @@ import type {
   Channel,
   IdentityInfo,
   ConnectionMode,
-  UserSettings,
+  PremiumStatus,
   ServerInfo,
 } from "./types";
 
@@ -32,8 +32,8 @@ export const getConnectionMode = () =>
 export const sendMessage = (channelId: string, content: string, channelKeyHex: string) =>
   invoke<void>("send_message", { channelId, content, channelKeyHex });
 
-export const getMessages = (channelId: string, limit: number, offset: number) =>
-  invoke<Message[]>("get_messages", { channelId, limit, offset });
+export const getMessages = (channelId: string, channelKeyHex: string, limit: number, offset: number) =>
+  invoke<Message[]>("get_messages", { channelId, channelKeyHex, limit, offset });
 
 export const listChannels = () =>
   invoke<Channel[]>("list_channels");
@@ -60,16 +60,16 @@ export const uploadPremiumBlob = (filePath: string, channelKeyHex: string) =>
 
 // Premium commands
 export const checkPremium = () =>
-  invoke<boolean>("check_premium");
+  invoke<PremiumStatus>("check_premium");
 
 export const activatePremium = (tokenJson: string) =>
-  invoke<void>("activate_premium", { tokenJson });
+  invoke<PremiumStatus>("activate_premium", { tokenJson });
 
 // Settings commands
 export const getSettings = () =>
-  invoke<UserSettings>("get_settings");
+  invoke<Record<string, unknown>>("get_settings");
 
-export const updateSettings = (settings: UserSettings) =>
+export const updateSettings = (settings: Record<string, unknown>) =>
   invoke<void>("update_settings", { settings });
 
 // Server info (self-hosted)

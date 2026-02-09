@@ -10,8 +10,8 @@ import MainPanel from "../components/layout/MainPanel";
 import Settings from "./Settings";
 
 export default function Home() {
-  const { loadChannels, addMessage } = useMessageStore();
-  const { refreshPeers, setPeers } = useNetworkStore();
+  const { loadChannels, loadMessages } = useMessageStore();
+  const { refreshPeers } = useNetworkStore();
   const currentPage = useNavigationStore((s) => s.currentPage);
 
   useEffect(() => {
@@ -21,10 +21,14 @@ export default function Home() {
     // Listen for real-time events from Tauri backend
     const unlisten: (() => void)[] = [];
 
-    listen<{ message: import("../lib/types").Message }>(
+    listen<{ channelId: string }>(
       EVENTS.NEW_MESSAGE,
       (event) => {
-        addMessage(event.payload.message);
+        // Reload messages for the channel that received a new message
+        const channelId = event.payload.channelId;
+        if (channelId) {
+          loadMessages(channelId);
+        }
       }
     ).then((u) => unlisten.push(u));
 
@@ -39,7 +43,7 @@ export default function Home() {
     return () => {
       unlisten.forEach((u) => u());
     };
-  }, [loadChannels, addMessage, refreshPeers, setPeers]);
+  }, [loadChannels, loadMessages, refreshPeers]);
 
   return (
     <div className="flex h-screen bg-liberte-bg overflow-hidden">

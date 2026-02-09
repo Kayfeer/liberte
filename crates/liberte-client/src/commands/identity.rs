@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use tauri::State;
 use tracing::info;
 
@@ -8,10 +9,28 @@ use liberte_store::Database;
 
 use crate::state::AppState;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityInfoDto {
+    pub public_key: String,
+    pub short_id: String,
+    pub created_at: String,
+}
+
+fn make_identity_dto(identity: &Identity) -> IdentityInfoDto {
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    let short_id = format!("{}…{}", &pubkey_hex[..8], &pubkey_hex[pubkey_hex.len()-8..]);
+    IdentityInfoDto {
+        public_key: pubkey_hex,
+        short_id,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
 #[tauri::command]
 pub fn create_identity(
     state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<String, String> {
+) -> Result<IdentityInfoDto, String> {
     let identity = Identity::generate();
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let db_key = identity.derive_db_key();
@@ -52,20 +71,22 @@ pub fn create_identity(
         rusqlite::params![secret_hex],
     );
 
+    let dto = make_identity_dto(&identity);
+
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     guard.identity = Some(identity);
     guard.database = Some(db);
 
-    Ok(pubkey_hex)
+    Ok(dto)
 }
 
 #[tauri::command]
 pub fn load_identity(
     state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<String, String> {
+) -> Result<IdentityInfoDto, String> {
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     if let Some(ref id) = guard.identity {
-        return Ok(hex::encode(id.public_key_bytes()));
+        return Ok(make_identity_dto(id));
     }
     drop(guard);
 
@@ -101,11 +122,13 @@ pub fn load_identity(
 
     info!(pubkey = %pubkey_hex, "Loaded existing identity");
 
+    let dto = make_identity_dto(&identity);
+
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     guard.identity = Some(identity);
     guard.database = Some(db);
 
-    Ok(pubkey_hex)
+    Ok(dto)
 }
 
 #[tauri::command]

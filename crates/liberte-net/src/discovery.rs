@@ -76,7 +76,7 @@ mod tests {
         let mut f = fs::File::create(&file_path).unwrap();
         writeln!(f, "# bootstrap nodes").unwrap();
         writeln!(f, "/ip4/127.0.0.1/udp/4001/quic-v1").unwrap();
-        writeln!(f, "").unwrap();
+        writeln!(f).unwrap();
         writeln!(f, "invalid-addr").unwrap();
         writeln!(f, "/ip4/127.0.0.2/udp/4001/quic-v1").unwrap();
         drop(f);

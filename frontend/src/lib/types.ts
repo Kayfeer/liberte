@@ -77,3 +77,9 @@ export interface IdentityInfo {
   shortId: string;
   createdAt: string;
 }
+
+/** Premium subscription status */
+export interface PremiumStatus {
+  isPremium: boolean;
+  validUntil: string | null;
+}

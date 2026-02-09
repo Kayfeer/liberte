@@ -7,6 +7,7 @@ use tracing::info;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub display_name: Option<String>,
     pub notifications_enabled: bool,
@@ -97,7 +98,8 @@ pub fn update_settings(
 
     info!("Settings updated");
 
-    // sync server_url to live state
+    // sync server_url to live state — drop first guard before re-locking
+    drop(guard);
     if let Ok(mut guard) = state.lock() {
         guard.server_url = settings.server_url.clone();
     }

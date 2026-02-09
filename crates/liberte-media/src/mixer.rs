@@ -41,7 +41,7 @@ mod tests {
     #[test]
     fn test_mix_single_frame() {
         let frame = vec![0.5, -0.5, 0.25];
-        let result = mix_frames(&[frame.clone()]);
+        let result = mix_frames(std::slice::from_ref(&frame));
         assert_eq!(result, frame);
     }
 

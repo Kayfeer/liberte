@@ -55,7 +55,7 @@ pub fn end_call(
 #[tauri::command]
 pub fn toggle_mute(
     state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<CallState, String> {
+) -> Result<bool, String> {
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
 
     if !guard.is_in_call {
@@ -65,17 +65,13 @@ pub fn toggle_mute(
     guard.is_muted = !guard.is_muted;
     info!(muted = guard.is_muted, "Mute toggled");
 
-    Ok(CallState {
-        in_call: true,
-        is_muted: guard.is_muted,
-        is_video_enabled: guard.is_video_enabled,
-    })
+    Ok(guard.is_muted)
 }
 
 #[tauri::command]
 pub fn toggle_video(
     state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<CallState, String> {
+) -> Result<bool, String> {
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
 
     if !guard.is_in_call {
@@ -85,9 +81,5 @@ pub fn toggle_video(
     guard.is_video_enabled = !guard.is_video_enabled;
     info!(video = guard.is_video_enabled, "Video toggled");
 
-    Ok(CallState {
-        in_call: true,
-        is_muted: guard.is_muted,
-        is_video_enabled: guard.is_video_enabled,
-    })
+    Ok(guard.is_video_enabled)
 }

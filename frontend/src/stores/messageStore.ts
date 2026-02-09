@@ -39,7 +39,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
   loadMessages: async (channelId: string) => {
     set({ loading: true });
     try {
-      const msgs = await tauri.getMessages(channelId, MESSAGE_PAGE_SIZE, 0);
+      const keyHex = get().channelKeys[channelId] || "";
+      const msgs = await tauri.getMessages(channelId, keyHex, MESSAGE_PAGE_SIZE, 0);
       set((state) => ({
         messages: { ...state.messages, [channelId]: msgs },
         loading: false,
