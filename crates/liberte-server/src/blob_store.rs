@@ -10,12 +10,14 @@ use crate::error::ServerError;
 /// Prevents path traversal attacks.
 fn ensure_within(base: &Path, target: &Path) -> Result<PathBuf, ServerError> {
     // Canonicalize base; target may not exist yet so normalize manually
-    let canonical_base = base
-        .canonicalize()
-        .unwrap_or_else(|_| base.to_path_buf());
+    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     // Build the full path and strip out any `..` components
     let mut resolved = canonical_base.clone();
-    for component in target.strip_prefix(&canonical_base).unwrap_or(target).components() {
+    for component in target
+        .strip_prefix(&canonical_base)
+        .unwrap_or(target)
+        .components()
+    {
         match component {
             std::path::Component::Normal(c) => resolved.push(c),
             std::path::Component::ParentDir => {
@@ -144,10 +146,16 @@ impl BlobStore {
     /// Build a safe path for a sub-directory file (e.g. backups).
     pub fn safe_subpath(&self, subdir: &str, filename: &str) -> Result<PathBuf, ServerError> {
         // Reject any path separator or traversal characters in inputs
-        if subdir.contains('/') || subdir.contains('\\') || subdir.contains("..")
-            || filename.contains('/') || filename.contains('\\') || filename.contains("..")
+        if subdir.contains('/')
+            || subdir.contains('\\')
+            || subdir.contains("..")
+            || filename.contains('/')
+            || filename.contains('\\')
+            || filename.contains("..")
         {
-            return Err(ServerError::BadRequest("Path traversal detected".to_string()));
+            return Err(ServerError::BadRequest(
+                "Path traversal detected".to_string(),
+            ));
         }
         let target = self.base_path.join(subdir).join(filename);
         ensure_within(&self.base_path, &target)

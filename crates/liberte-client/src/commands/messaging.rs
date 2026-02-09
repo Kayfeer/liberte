@@ -15,19 +15,14 @@ use liberte_store::{Channel, Message};
 use crate::state::AppState;
 
 /// Build a map of hex pubkey → display_name from the users table.
-fn load_display_names(
-    db: &liberte_store::Database,
-) -> std::collections::HashMap<String, String> {
+fn load_display_names(db: &liberte_store::Database) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     if let Ok(mut stmt) = db
         .conn()
         .prepare("SELECT pubkey, display_name FROM users WHERE display_name IS NOT NULL")
     {
         if let Ok(rows) = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         }) {
             for row in rows.flatten() {
                 map.insert(row.0, row.1);
@@ -35,11 +30,12 @@ fn load_display_names(
         }
     }
     // Also check app_settings for own display name (overrides users table)
-    if let Ok(json_str) = db.conn().query_row(
-        "SELECT json FROM app_settings WHERE id = 1",
-        [],
-        |row| row.get::<_, String>(0),
-    ) {
+    if let Ok(json_str) =
+        db.conn()
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+    {
         if let Ok(settings) =
             serde_json::from_str::<crate::commands::settings::AppSettings>(&json_str)
         {

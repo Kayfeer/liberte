@@ -187,14 +187,14 @@ pub fn import_profile(
                 json TEXT NOT NULL
             );",
         );
-        let current: crate::commands::settings::AppSettings =
-            db.conn()
-                .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
-                    row.get::<_, String>(0)
-                })
-                .ok()
-                .and_then(|json| serde_json::from_str(&json).ok())
-                .unwrap_or_default();
+        let current: crate::commands::settings::AppSettings = db
+            .conn()
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
         let updated = crate::commands::settings::AppSettings {
             display_name: Some(name.clone()),
             ..current

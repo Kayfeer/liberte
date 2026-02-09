@@ -293,9 +293,7 @@ async fn backup_sync_upload(
         .map_err(|e| ServerError::Internal(format!("Failed to create backup dir: {e}")))?;
 
     let filename = format!("{}.enc", req.user_pubkey_hex);
-    let file_path = state
-        .blob_store
-        .safe_subpath("backups", &filename)?;
+    let file_path = state.blob_store.safe_subpath("backups", &filename)?;
     tokio::fs::write(&file_path, data)
         .await
         .map_err(|e| ServerError::Internal(format!("Failed to write backup: {e}")))?;
@@ -321,9 +319,7 @@ async fn backup_sync_download(
     let _pubkey = parse_hex_32(&pubkey_hex)?;
 
     let filename = format!("{pubkey_hex}.enc");
-    let file_path = state
-        .blob_store
-        .safe_subpath("backups", &filename)?;
+    let file_path = state.blob_store.safe_subpath("backups", &filename)?;
 
     if !file_path.exists() {
         return Err(ServerError::NotFound(

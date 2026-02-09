@@ -116,10 +116,7 @@ pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityI
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     if let Some(ref id) = guard.identity {
         // Read display name from settings
-        let display_name = guard
-            .database
-            .as_ref()
-            .and_then(read_display_name);
+        let display_name = guard.database.as_ref().and_then(read_display_name);
         return Ok(make_identity_dto(id, display_name));
     }
     drop(guard);
@@ -169,11 +166,12 @@ pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityI
 /// Read the display name from app_settings JSON, falling back to users table.
 fn read_display_name(db: &Database) -> Option<String> {
     // Try app_settings first
-    if let Ok(json_str) = db.conn().query_row(
-        "SELECT json FROM app_settings WHERE id = 1",
-        [],
-        |row| row.get::<_, String>(0),
-    ) {
+    if let Ok(json_str) =
+        db.conn()
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+    {
         if let Ok(settings) =
             serde_json::from_str::<crate::commands::settings::AppSettings>(&json_str)
         {
@@ -184,11 +182,9 @@ fn read_display_name(db: &Database) -> Option<String> {
     }
     // Fallback: users table (own pubkey row)
     db.conn()
-        .query_row(
-            "SELECT display_name FROM users LIMIT 1",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
+        .query_row("SELECT display_name FROM users LIMIT 1", [], |row| {
+            row.get::<_, Option<String>>(0)
+        })
         .ok()
         .flatten()
 }
@@ -243,22 +239,21 @@ pub fn set_display_name(
     );
 
     // Read existing settings and update display_name
-    let current: crate::commands::settings::AppSettings =
-        db.conn()
-            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
-                row.get::<_, String>(0)
-            })
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_default();
+    let current: crate::commands::settings::AppSettings = db
+        .conn()
+        .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
 
     let updated = crate::commands::settings::AppSettings {
         display_name: display_name.clone(),
         ..current
     };
 
-    let json =
-        serde_json::to_string(&updated).map_err(|e| format!("Serialization failed: {e}"))?;
+    let json = serde_json::to_string(&updated).map_err(|e| format!("Serialization failed: {e}"))?;
     db.conn()
         .execute(
             "INSERT OR REPLACE INTO app_settings (id, json) VALUES (1, ?1)",
