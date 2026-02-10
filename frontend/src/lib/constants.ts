@@ -1,5 +1,5 @@
 export const APP_NAME = "Liberté";
-export const APP_VERSION = "0.3.0";
+export const APP_VERSION = "2.3.0";
 
 // Tauri event names
 export const EVENTS = {
