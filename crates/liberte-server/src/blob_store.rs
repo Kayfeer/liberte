@@ -180,10 +180,7 @@ impl BlobStore {
 
     /// Create a sub-directory safely (validates against traversal).
     pub async fn ensure_subdir(&self, subdir: &str) -> Result<PathBuf, ServerError> {
-        if subdir.contains('/')
-            || subdir.contains('\\')
-            || subdir.contains("..")
-        {
+        if subdir.contains('/') || subdir.contains('\\') || subdir.contains("..") {
             return Err(ServerError::BadRequest(
                 "Path traversal detected".to_string(),
             ));
