@@ -9,15 +9,23 @@ use crate::error::ServerError;
 /// Verify that a resolved path stays within the expected base directory.
 /// Prevents path traversal attacks.
 fn ensure_within(base: &Path, target: &Path) -> Result<PathBuf, ServerError> {
-    // Canonicalize base; target may not exist yet so normalize manually
-    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
-    // Build the full path and strip out any `..` components
+    // Canonicalize base — must succeed (directory created at init).
+    let canonical_base = base.canonicalize().map_err(|e| {
+        ServerError::Internal(format!(
+            "Base path '{}' cannot be resolved: {e}",
+            base.display()
+        ))
+    })?;
+
+    // Extract the relative portion after the base prefix.
+    let relative = target
+        .strip_prefix(base)
+        .or_else(|_| target.strip_prefix(&canonical_base))
+        .map_err(|_| ServerError::BadRequest("Path traversal detected".to_string()))?;
+
+    // Rebuild using only Normal components (rejects `..`, `/`, etc.)
     let mut resolved = canonical_base.clone();
-    for component in target
-        .strip_prefix(&canonical_base)
-        .unwrap_or(target)
-        .components()
-    {
+    for component in relative.components() {
         match component {
             std::path::Component::Normal(c) => resolved.push(c),
             std::path::Component::ParentDir => {
@@ -25,7 +33,7 @@ fn ensure_within(base: &Path, target: &Path) -> Result<PathBuf, ServerError> {
                     "Path traversal detected".to_string(),
                 ));
             }
-            _ => {} // RootDir, CurDir, Prefix — skip
+            _ => {} // CurDir — skip
         }
     }
     if !resolved.starts_with(&canonical_base) {
@@ -61,6 +69,7 @@ impl BlobStore {
         })
     }
 
+    #[allow(dead_code)]
     pub fn base_path(&self) -> &std::path::Path {
         &self.base_path
     }
@@ -139,8 +148,16 @@ impl BlobStore {
 
     /// Safe blob path that validates against traversal.
     fn safe_blob_path(&self, id: &Uuid) -> Result<PathBuf, ServerError> {
-        let raw = self.base_path.join(id.to_string());
-        ensure_within(&self.base_path, &raw)
+        let filename = id.to_string();
+        // Allowlist: UUID strings contain only hex digits and hyphens.
+        // This explicit check satisfies static-analysis path-traversal audits.
+        if !filename.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return Err(ServerError::BadRequest(
+                "Invalid blob ID format".to_string(),
+            ));
+        }
+        let path = self.base_path.join(&filename);
+        ensure_within(&self.base_path, &path)
     }
 
     /// Build a safe path for a sub-directory file (e.g. backups).
@@ -159,6 +176,27 @@ impl BlobStore {
         }
         let target = self.base_path.join(subdir).join(filename);
         ensure_within(&self.base_path, &target)
+    }
+
+    /// Create a sub-directory safely (validates against traversal).
+    pub async fn ensure_subdir(&self, subdir: &str) -> Result<PathBuf, ServerError> {
+        if subdir.contains('/')
+            || subdir.contains('\\')
+            || subdir.contains("..")
+        {
+            return Err(ServerError::BadRequest(
+                "Path traversal detected".to_string(),
+            ));
+        }
+        let dir_path = self.base_path.join(subdir);
+        let safe_path = ensure_within(&self.base_path, &dir_path)?;
+        fs::create_dir_all(&safe_path).await.map_err(|e| {
+            ServerError::Internal(format!(
+                "Failed to create directory '{}': {e}",
+                safe_path.display()
+            ))
+        })?;
+        Ok(safe_path)
     }
 }
 

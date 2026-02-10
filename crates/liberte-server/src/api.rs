@@ -283,23 +283,24 @@ async fn backup_sync_upload(
     Json(req): Json<BackupSyncRequest>,
 ) -> Result<Json<BackupSyncResponse>, ServerError> {
     // Validate pubkey is exactly 64 hex chars (rejects any path-traversal chars)
-    let _pubkey = parse_hex_32(&req.user_pubkey_hex)?;
+    let pubkey = parse_hex_32(&req.user_pubkey_hex)?;
     let data = req.encrypted_data.as_bytes();
 
-    // Store backup in a dedicated sub-path: backups/<pubkey_hex>.enc
-    let backup_dir = state.blob_store.base_path().join("backups");
-    tokio::fs::create_dir_all(&backup_dir)
-        .await
-        .map_err(|e| ServerError::Internal(format!("Failed to create backup dir: {e}")))?;
+    // Re-encode from validated bytes — produces a guaranteed-safe hex string
+    // that is detached from the raw user input (breaks taint chain).
+    let safe_hex = hex::encode(pubkey);
 
-    let filename = format!("{}.enc", req.user_pubkey_hex);
+    // Ensure backups directory exists via safe path construction
+    state.blob_store.ensure_subdir("backups").await?;
+
+    let filename = format!("{safe_hex}.enc");
     let file_path = state.blob_store.safe_subpath("backups", &filename)?;
     tokio::fs::write(&file_path, data)
         .await
         .map_err(|e| ServerError::Internal(format!("Failed to write backup: {e}")))?;
 
     info!(
-        user = %req.user_pubkey_hex,
+        user = %safe_hex,
         size = data.len(),
         "Backup synced to server"
     );
@@ -316,9 +317,12 @@ async fn backup_sync_download(
     Path(pubkey_hex): Path<String>,
 ) -> Result<String, ServerError> {
     // Validate pubkey is exactly 64 hex chars (rejects any path-traversal chars)
-    let _pubkey = parse_hex_32(&pubkey_hex)?;
+    let pubkey = parse_hex_32(&pubkey_hex)?;
 
-    let filename = format!("{pubkey_hex}.enc");
+    // Re-encode from validated bytes — produces a guaranteed-safe hex string
+    // that is detached from the raw user input (breaks taint chain).
+    let safe_hex = hex::encode(pubkey);
+    let filename = format!("{safe_hex}.enc");
     let file_path = state.blob_store.safe_subpath("backups", &filename)?;
 
     if !file_path.exists() {
