@@ -16,6 +16,8 @@ pub enum WireMessage {
     TypingIndicator(TypingIndicator),
     StatusUpdate(StatusUpdate),
     MessageReaction(MessageReactionMsg),
+    VoiceFrame(VoiceFrame),
+    VoiceEvent(VoiceEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +122,30 @@ pub struct MessageReactionMsg {
 pub enum ReactionAction {
     Add,
     Remove,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceFrame {
+    pub sender: UserId,
+    pub channel_id: ChannelId,
+    pub sequence: u32,
+    pub audio_data: Vec<u8>, // 16-bit PCM, 16kHz mono, 20ms = 640 bytes
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceEvent {
+    pub user_id: UserId,
+    pub channel_id: ChannelId,
+    pub event_type: VoiceEventType,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VoiceEventType {
+    Join,
+    Leave,
+    Mute,
+    Unmute,
 }
 
 impl WireMessage {

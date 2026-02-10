@@ -364,6 +364,92 @@ fn handle_incoming_message(
             // Could be used for presence tracking in the future
         }
 
+        WireMessage::VoiceFrame(frame) => {
+            // Skip our own voice frames
+            if let Some(own_pk) = own_pubkey {
+                if frame.sender.0 == own_pk {
+                    return;
+                }
+            }
+
+            // Convert i16 PCM bytes back to f32 samples and upsample 16kHz → 48kHz
+            let i16_samples: Vec<i16> = frame
+                .audio_data
+                .chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .collect();
+
+            let mut f32_samples = Vec::with_capacity(i16_samples.len() * 3);
+            for &s in &i16_samples {
+                let f = s as f32 / 32767.0;
+                // Simple upsample: repeat each sample 3x (16kHz → 48kHz)
+                f32_samples.push(f);
+                f32_samples.push(f);
+                f32_samples.push(f);
+            }
+
+            // Send to playback pipeline
+            let guard = match state.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if let Some(ref tx) = guard.voice_playback_tx {
+                let _ = tx.try_send(f32_samples);
+            }
+        }
+
+        WireMessage::VoiceEvent(event) => {
+            let user_hex = event.user_id.to_hex();
+            let ch_id = event.channel_id.0.to_string();
+
+            match event.event_type {
+                liberte_shared::protocol::VoiceEventType::Join => {
+                    info!(user = %user_hex, channel = %ch_id, "Voice peer joined");
+                    emit_event(
+                        app,
+                        EVENT_VOICE_PEER_JOINED,
+                        VoicePeerPayload {
+                            channel_id: ch_id,
+                            user_id: user_hex,
+                        },
+                    );
+                }
+                liberte_shared::protocol::VoiceEventType::Leave => {
+                    info!(user = %user_hex, channel = %ch_id, "Voice peer left");
+                    emit_event(
+                        app,
+                        EVENT_VOICE_PEER_LEFT,
+                        VoicePeerPayload {
+                            channel_id: ch_id,
+                            user_id: user_hex,
+                        },
+                    );
+                }
+                liberte_shared::protocol::VoiceEventType::Mute => {
+                    emit_event(
+                        app,
+                        EVENT_VOICE_PEER_MUTED,
+                        VoicePeerMutedPayload {
+                            channel_id: ch_id,
+                            user_id: user_hex,
+                            muted: true,
+                        },
+                    );
+                }
+                liberte_shared::protocol::VoiceEventType::Unmute => {
+                    emit_event(
+                        app,
+                        EVENT_VOICE_PEER_MUTED,
+                        VoicePeerMutedPayload {
+                            channel_id: ch_id,
+                            user_id: user_hex,
+                            muted: false,
+                        },
+                    );
+                }
+            }
+        }
+
         other => {
             debug!(msg = ?other, "Unhandled wire message type on bridge");
         }

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
@@ -42,7 +44,8 @@ impl AudioConfig {
 pub struct AudioEngine {
     config: AudioConfig,
     is_capturing: bool,
-    is_muted: bool,
+    is_muted: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
 }
 
 impl AudioEngine {
@@ -50,8 +53,17 @@ impl AudioEngine {
         Self {
             config,
             is_capturing: false,
-            is_muted: false,
+            is_muted: Arc::new(AtomicBool::new(false)),
+            active: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn mute_flag(&self) -> Arc<AtomicBool> {
+        self.is_muted.clone()
+    }
+
+    pub fn active_flag(&self) -> Arc<AtomicBool> {
+        self.active.clone()
     }
 
     pub fn start_capture(
@@ -75,12 +87,24 @@ impl AudioEngine {
 
         let frame_size = self.config.frame_size_samples();
         let mut buffer = Vec::with_capacity(frame_size);
+        let muted = self.is_muted.clone();
+        let active = self.active.clone();
+
+        active.store(true, Ordering::SeqCst);
 
         let stream = device
             .build_input_stream(
                 &config,
                 move |data: &[f32], _info: &cpal::InputCallbackInfo| {
-                    buffer.extend_from_slice(data);
+                    if !active.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if muted.load(Ordering::Relaxed) {
+                        // Send silence when muted so playback stays in sync
+                        buffer.extend(std::iter::repeat_n(0.0f32, data.len()));
+                    } else {
+                        buffer.extend_from_slice(data);
+                    }
                     while buffer.len() >= frame_size {
                         let frame: Vec<f32> = buffer.drain(..frame_size).collect();
                         if frame_tx.try_send(frame).is_err() {
@@ -99,7 +123,7 @@ impl AudioEngine {
             .play()
             .map_err(|e| AudioError::StreamError(e.to_string()))?;
 
-        // Keep stream alive by leaking it (cleaned up when process exits)
+        // Keep stream alive (cleaned up via active flag — callback becomes no-op)
         std::mem::forget(stream);
 
         self.is_capturing = true;
@@ -127,32 +151,36 @@ impl AudioEngine {
         };
 
         let (playback_tx, playback_rx) = std::sync::mpsc::channel::<Vec<f32>>();
+        let active = self.active.clone();
 
         // Bridge tokio channel to std channel for the audio callback
+        let active_bridge = active.clone();
         tokio::spawn(async move {
-            while let Some(frame) = frame_rx.recv().await {
-                if playback_tx.send(frame).is_err() {
-                    break;
+            while active_bridge.load(Ordering::Relaxed) {
+                match frame_rx.recv().await {
+                    Some(frame) => {
+                        if playback_tx.send(frame).is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
                 }
             }
         });
 
-        let mut play_buffer: Vec<f32> = Vec::new();
+        let mut play_buffer: std::collections::VecDeque<f32> = std::collections::VecDeque::new();
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                    // Drain available frames into play buffer
                     while let Ok(frame) = playback_rx.try_recv() {
-                        play_buffer.extend_from_slice(&frame);
+                        play_buffer.extend(frame.iter());
                     }
 
                     for sample in data.iter_mut() {
-                        *sample = if play_buffer.is_empty() {
-                            0.0
-                        } else {
-                            play_buffer.remove(0)
-                        };
+                        *sample = play_buffer.pop_front().unwrap_or(0.0);
                     }
                 },
                 move |err| {
@@ -171,13 +199,21 @@ impl AudioEngine {
         Ok(())
     }
 
+    pub fn stop(&mut self) {
+        self.active.store(false, Ordering::SeqCst);
+        self.is_capturing = false;
+        // Reset mute state
+        self.is_muted.store(false, Ordering::SeqCst);
+        debug!("Audio engine stopped");
+    }
+
     pub fn set_muted(&mut self, muted: bool) {
-        self.is_muted = muted;
+        self.is_muted.store(muted, Ordering::SeqCst);
         debug!(muted, "Audio mute state changed");
     }
 
     pub fn is_muted(&self) -> bool {
-        self.is_muted
+        self.is_muted.load(Ordering::Relaxed)
     }
 
     pub fn is_capturing(&self) -> bool {
