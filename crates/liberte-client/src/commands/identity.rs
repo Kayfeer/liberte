@@ -43,13 +43,14 @@ fn make_identity_dto(
 }
 
 #[tauri::command]
-pub fn create_identity(
+pub async fn create_identity(
     state: State<'_, Arc<Mutex<AppState>>>,
     display_name: Option<String>,
 ) -> Result<IdentityInfoDto, String> {
     let identity = Identity::generate();
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let db_key = identity.derive_db_key();
+    let secret_bytes = *identity.secret_bytes();
 
     // Sanitize display name
     let display_name = display_name
@@ -115,27 +116,38 @@ pub fn create_identity(
 
     let dto = make_identity_dto(&identity, display_name, None, "online".to_string());
 
-    let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    guard.identity = Some(identity);
-    guard.database = Some(db);
+    let (app_handle, state_arc) = {
+        let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+        guard.identity = Some(identity);
+        guard.database = Some(db);
+        (guard.app_handle.clone(), state.inner().clone())
+    };
+
+    // Start the libp2p swarm and notification bridge
+    if let Some(app) = app_handle {
+        crate::swarm_bridge::start_swarm_and_bridge(app, state_arc, secret_bytes).await?;
+    }
 
     Ok(dto)
 }
 
 #[tauri::command]
-pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityInfoDto, String> {
-    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    if let Some(ref id) = guard.identity {
-        // Read display name from settings
-        let display_name = guard.database.as_ref().and_then(read_display_name);
-        let (bio, status) = guard
-            .database
-            .as_ref()
-            .and_then(|db| read_profile(db, id))
-            .unwrap_or((None, "online".to_string()));
-        return Ok(make_identity_dto(id, display_name, bio, status));
+pub async fn load_identity(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<IdentityInfoDto, String> {
+    // If identity is already loaded and swarm already running, just return the DTO
+    {
+        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+        if let Some(ref id) = guard.identity {
+            let display_name = guard.database.as_ref().and_then(read_display_name);
+            let (bio, status) = guard
+                .database
+                .as_ref()
+                .and_then(|db| read_profile(db, id))
+                .unwrap_or((None, "online".to_string()));
+            return Ok(make_identity_dto(id, display_name, bio, status));
+        }
     }
-    drop(guard);
 
     // Step 1: Open DB with a temporary key to read the stored secret.
     // The DB is not encrypted with SQLCipher yet (plain rusqlite), so any
@@ -173,9 +185,17 @@ pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityI
     let (bio, status) = read_profile(&db, &identity).unwrap_or((None, "online".to_string()));
     let dto = make_identity_dto(&identity, display_name, bio, status);
 
-    let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    guard.identity = Some(identity);
-    guard.database = Some(db);
+    let (app_handle, state_arc) = {
+        let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+        guard.identity = Some(identity);
+        guard.database = Some(db);
+        (guard.app_handle.clone(), state.inner().clone())
+    };
+
+    // Start the libp2p swarm and notification bridge
+    if let Some(app) = app_handle {
+        crate::swarm_bridge::start_swarm_and_bridge(app, state_arc, key).await?;
+    }
 
     Ok(dto)
 }

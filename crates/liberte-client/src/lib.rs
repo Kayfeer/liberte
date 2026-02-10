@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod events;
 pub mod state;
+pub mod swarm_bridge;
 
 use std::sync::{Arc, Mutex};
 
@@ -35,7 +36,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(app_state)
+        .manage(app_state.clone())
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            if let Ok(mut guard) = app_state.lock() {
+                guard.app_handle = Some(handle);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::identity::create_identity,
             commands::identity::load_identity,
