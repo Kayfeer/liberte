@@ -27,6 +27,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = { workspace = true }
 blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
 chrono = { workspace = true }
 directories = "5"
 uuid = { workspace = true }

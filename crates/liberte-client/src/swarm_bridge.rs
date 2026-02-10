@@ -21,10 +21,16 @@ pub async fn start_swarm_and_bridge(
     state: Arc<Mutex<AppState>>,
     identity_secret: [u8; 32],
 ) -> Result<(), String> {
-    // Derive a libp2p Ed25519 keypair from the identity secret via BLAKE3 KDF
-    // (libp2p uses a different Ed25519 implementation, so we derive a separate key)
-    let kdf_key = blake3::derive_key("liberte-libp2p-keypair-v1", &identity_secret);
-    let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(kdf_key)
+    // Derive a libp2p Ed25519 keypair from the identity secret via BLAKE3 KDF.
+    // libp2p's ed25519_from_bytes expects 64 bytes: 32-byte secret seed + 32-byte public key.
+    // We derive a 32-byte seed, then use ed25519-dalek to expand it into the full keypair.
+    let seed = blake3::derive_key("liberte-libp2p-keypair-v1", &identity_secret);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let public_key = signing_key.verifying_key();
+    let mut keypair_bytes = [0u8; 64];
+    keypair_bytes[..32].copy_from_slice(&seed);
+    keypair_bytes[32..].copy_from_slice(public_key.as_bytes());
+    let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(keypair_bytes)
         .map_err(|e| format!("Failed to create libp2p keypair: {e}"))?;
 
     let config = liberte_net::swarm::SwarmConfig::default();

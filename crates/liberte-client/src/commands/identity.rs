@@ -123,9 +123,13 @@ pub async fn create_identity(
         (guard.app_handle.clone(), state.inner().clone())
     };
 
-    // Start the libp2p swarm and notification bridge
+    // Start the libp2p swarm and notification bridge (non-blocking: don't fail identity)
     if let Some(app) = app_handle {
-        crate::swarm_bridge::start_swarm_and_bridge(app, state_arc, secret_bytes).await?;
+        if let Err(e) =
+            crate::swarm_bridge::start_swarm_and_bridge(app, state_arc, secret_bytes).await
+        {
+            tracing::error!(error = %e, "Failed to start swarm, continuing without P2P");
+        }
     }
 
     Ok(dto)
@@ -192,9 +196,11 @@ pub async fn load_identity(
         (guard.app_handle.clone(), state.inner().clone())
     };
 
-    // Start the libp2p swarm and notification bridge
+    // Start the libp2p swarm and notification bridge (non-blocking: don't fail identity)
     if let Some(app) = app_handle {
-        crate::swarm_bridge::start_swarm_and_bridge(app, state_arc, key).await?;
+        if let Err(e) = crate::swarm_bridge::start_swarm_and_bridge(app, state_arc, key).await {
+            tracing::error!(error = %e, "Failed to start swarm, continuing without P2P");
+        }
     }
 
     Ok(dto)
