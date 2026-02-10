@@ -8,6 +8,15 @@ export type ServerId = string;
 /** Connection mode between peers */
 export type ConnectionMode = "direct" | "relayed" | "disconnected";
 
+/** User status (Discord-style) */
+export type UserStatus = "online" | "dnd" | "idle" | "invisible";
+
+/** A grouped emoji reaction */
+export interface ReactionGroup {
+  emoji: string;
+  users: UserId[];
+}
+
 /** A chat message */
 export interface Message {
   id: string;
@@ -16,6 +25,7 @@ export interface Message {
   senderDisplayName?: string;
   content: string;
   timestamp: string;
+  reactions: ReactionGroup[];
 }
 
 /** A channel */
@@ -78,10 +88,19 @@ export interface IdentityInfo {
   shortId: string;
   createdAt: string;
   displayName?: string;
+  bio?: string;
+  status: UserStatus;
 }
 
 /** Premium subscription status */
 export interface PremiumStatus {
   isPremium: boolean;
   validUntil: string | null;
+}
+
+/** Typing indicator event payload */
+export interface TypingEvent {
+  channelId: ChannelId;
+  userId: UserId;
+  displayName?: string;
 }

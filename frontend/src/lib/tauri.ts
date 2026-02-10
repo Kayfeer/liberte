@@ -6,6 +6,7 @@ import type {
   ConnectionMode,
   PremiumStatus,
   ServerInfo,
+  ReactionGroup,
 } from "./types";
 
 // Identity commands
@@ -20,6 +21,12 @@ export const exportPubkey = () =>
 
 export const setDisplayName = (name: string) =>
   invoke<void>("set_display_name", { name });
+
+export const setBio = (bio: string) =>
+  invoke<void>("set_bio", { bio });
+
+export const setStatus = (status: string) =>
+  invoke<void>("set_status", { status });
 
 // Network commands
 export const connectPeer = (multiaddr: string) =>
@@ -157,3 +164,13 @@ export const exportProfile = () =>
 
 export const importProfile = (json: string) =>
   invoke<ProfileImportResult>("import_profile", { json });
+
+// Reaction commands
+export const addReaction = (channelId: string, messageId: string, emoji: string) =>
+  invoke<void>("add_reaction", { channelId, messageId, emoji });
+
+export const removeReaction = (messageId: string, emoji: string) =>
+  invoke<void>("remove_reaction", { messageId, emoji });
+
+export const getReactions = (messageId: string) =>
+  invoke<ReactionGroup[]>("get_reactions", { messageId });

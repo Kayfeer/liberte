@@ -71,6 +71,15 @@ pub struct MessageDto {
     pub sender_display_name: Option<String>,
     pub content: String,
     pub timestamp: String,
+    pub reactions: Vec<ReactionGroupDto>,
+}
+
+/// A grouped reaction (emoji + list of user pubkeys who reacted).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionGroupDto {
+    pub emoji: String,
+    pub users: Vec<String>,
 }
 
 impl MessageDto {
@@ -78,6 +87,7 @@ impl MessageDto {
         m: Message,
         channel_key: Option<&[u8; 32]>,
         sender_display_name: Option<String>,
+        reactions: Vec<ReactionGroupDto>,
     ) -> Self {
         let content = match channel_key {
             Some(key) => match crypto::decrypt(key, &m.encrypted_content) {
@@ -94,6 +104,7 @@ impl MessageDto {
             sender_display_name,
             content,
             timestamp: m.timestamp.to_rfc3339(),
+            reactions,
         }
     }
 }
@@ -233,12 +244,17 @@ pub fn get_messages(
 
     let names = load_display_names(db);
 
+    // Load reactions for all messages in batch
+    let msg_ids: Vec<uuid::Uuid> = messages.iter().map(|m| m.id).collect();
+    let reactions_map = db.get_reactions_for_messages(&msg_ids).unwrap_or_default();
+
     Ok(messages
         .into_iter()
         .map(|m| {
             let sender_hex = hex::encode(m.sender_pubkey);
             let name = names.get(&sender_hex).cloned();
-            MessageDto::from_message(m, channel_key.as_ref(), name)
+            let reactions = group_reactions(reactions_map.get(&m.id));
+            MessageDto::from_message(m, channel_key.as_ref(), name, reactions)
         })
         .collect())
 }
@@ -315,7 +331,8 @@ pub fn search_messages(
         for m in messages {
             let sender_hex = hex::encode(m.sender_pubkey);
             let name = names.get(&sender_hex).cloned();
-            let dto = MessageDto::from_message(m, channel_key.as_ref(), name);
+            let reactions = group_reactions(db.get_reactions_for_message(m.id).ok().as_ref());
+            let dto = MessageDto::from_message(m, channel_key.as_ref(), name, reactions);
             if dto.content.to_lowercase().contains(&query_lower) {
                 results.push(dto);
             }
@@ -329,4 +346,110 @@ pub fn search_messages(
     results.truncate(100);
 
     Ok(results)
+}
+
+/// Group raw Reaction rows into ReactionGroupDto (emoji → list of user pubkeys).
+fn group_reactions(reactions: Option<&Vec<liberte_store::Reaction>>) -> Vec<ReactionGroupDto> {
+    let Some(reactions) = reactions else {
+        return Vec::new();
+    };
+
+    let mut map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for r in reactions {
+        map.entry(r.emoji.clone())
+            .or_default()
+            .push(r.user_pubkey.clone());
+    }
+
+    map.into_iter()
+        .map(|(emoji, users)| ReactionGroupDto { emoji, users })
+        .collect()
+}
+
+#[tauri::command]
+pub fn add_reaction(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+) -> Result<(), String> {
+    let channel_uuid =
+        Uuid::parse_str(&channel_id).map_err(|e| format!("Invalid channel_id: {e}"))?;
+    let message_uuid =
+        Uuid::parse_str(&message_id).map_err(|e| format!("Invalid message_id: {e}"))?;
+
+    let emoji = emoji.trim().to_string();
+    if emoji.is_empty() || emoji.len() > 32 {
+        return Err("Invalid emoji".into());
+    }
+
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let identity = guard
+        .identity
+        .as_ref()
+        .ok_or_else(|| "No identity loaded".to_string())?;
+
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    db.add_reaction(message_uuid, channel_uuid, &pubkey_hex, &emoji)
+        .map_err(|e| format!("Failed to add reaction: {e}"))?;
+
+    info!(emoji = %emoji, message = %message_id, "Reaction added");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_reaction(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    message_id: String,
+    emoji: String,
+) -> Result<(), String> {
+    let message_uuid =
+        Uuid::parse_str(&message_id).map_err(|e| format!("Invalid message_id: {e}"))?;
+
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let identity = guard
+        .identity
+        .as_ref()
+        .ok_or_else(|| "No identity loaded".to_string())?;
+
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    db.remove_reaction(message_uuid, &pubkey_hex, &emoji)
+        .map_err(|e| format!("Failed to remove reaction: {e}"))?;
+
+    info!(emoji = %emoji, message = %message_id, "Reaction removed");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_reactions(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    message_id: String,
+) -> Result<Vec<ReactionGroupDto>, String> {
+    let message_uuid =
+        Uuid::parse_str(&message_id).map_err(|e| format!("Invalid message_id: {e}"))?;
+
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let reactions = db
+        .get_reactions_for_message(message_uuid)
+        .map_err(|e| format!("Failed to get reactions: {e}"))?;
+
+    Ok(group_reactions(Some(&reactions)))
 }

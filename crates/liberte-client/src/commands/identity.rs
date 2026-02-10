@@ -16,9 +16,16 @@ pub struct IdentityInfoDto {
     pub short_id: String,
     pub created_at: String,
     pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub status: String,
 }
 
-fn make_identity_dto(identity: &Identity, display_name: Option<String>) -> IdentityInfoDto {
+fn make_identity_dto(
+    identity: &Identity,
+    display_name: Option<String>,
+    bio: Option<String>,
+    status: String,
+) -> IdentityInfoDto {
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let short_id = format!(
         "{}…{}",
@@ -30,6 +37,8 @@ fn make_identity_dto(identity: &Identity, display_name: Option<String>) -> Ident
         short_id,
         created_at: chrono::Utc::now().to_rfc3339(),
         display_name,
+        bio,
+        status,
     }
 }
 
@@ -55,6 +64,8 @@ pub fn create_identity(
         pubkey: identity.public_key_bytes(),
         display_name: display_name.clone(),
         avatar_hash: None,
+        bio: None,
+        status: "online".to_string(),
         created_at: chrono::Utc::now(),
     };
 
@@ -102,7 +113,7 @@ pub fn create_identity(
         );
     }
 
-    let dto = make_identity_dto(&identity, display_name);
+    let dto = make_identity_dto(&identity, display_name, None, "online".to_string());
 
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     guard.identity = Some(identity);
@@ -117,7 +128,12 @@ pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityI
     if let Some(ref id) = guard.identity {
         // Read display name from settings
         let display_name = guard.database.as_ref().and_then(read_display_name);
-        return Ok(make_identity_dto(id, display_name));
+        let (bio, status) = guard
+            .database
+            .as_ref()
+            .and_then(|db| read_profile(db, id))
+            .unwrap_or((None, "online".to_string()));
+        return Ok(make_identity_dto(id, display_name, bio, status));
     }
     drop(guard);
 
@@ -154,7 +170,8 @@ pub fn load_identity(state: State<'_, Arc<Mutex<AppState>>>) -> Result<IdentityI
     info!(pubkey = %pubkey_hex, "Loaded existing identity");
 
     let display_name = read_display_name(&db);
-    let dto = make_identity_dto(&identity, display_name);
+    let (bio, status) = read_profile(&db, &identity).unwrap_or((None, "online".to_string()));
+    let dto = make_identity_dto(&identity, display_name, bio, status);
 
     let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
     guard.identity = Some(identity);
@@ -262,5 +279,73 @@ pub fn set_display_name(
         .map_err(|e| format!("Failed to save settings: {e}"))?;
 
     info!(name = ?display_name, "Display name updated");
+    Ok(())
+}
+
+/// Read bio and status from the users table for the given identity.
+fn read_profile(db: &Database, identity: &Identity) -> Option<(Option<String>, String)> {
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    db.get_user_profile(&pubkey_hex).ok()
+}
+
+/// Update the bio for the current user.
+#[tauri::command]
+pub fn set_bio(state: State<'_, Arc<Mutex<AppState>>>, bio: String) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let identity = guard
+        .identity
+        .as_ref()
+        .ok_or_else(|| "No identity loaded".to_string())?;
+
+    let bio_val = bio.trim().to_string();
+    let bio_opt = if bio_val.is_empty() {
+        None
+    } else {
+        Some(bio_val.as_str())
+    };
+
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    db.set_user_bio(&pubkey_hex, bio_opt)
+        .map_err(|e| format!("Failed to update bio: {e}"))?;
+
+    info!(bio = ?bio_opt, "Bio updated");
+    Ok(())
+}
+
+/// Update the status for the current user (online, dnd, idle, invisible).
+#[tauri::command]
+pub fn set_status(state: State<'_, Arc<Mutex<AppState>>>, status: String) -> Result<(), String> {
+    let valid = ["online", "dnd", "idle", "invisible"];
+    if !valid.contains(&status.as_str()) {
+        return Err(format!(
+            "Invalid status '{}'. Must be one of: {}",
+            status,
+            valid.join(", ")
+        ));
+    }
+
+    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+
+    let db = guard
+        .database
+        .as_ref()
+        .ok_or_else(|| "Database not opened".to_string())?;
+
+    let identity = guard
+        .identity
+        .as_ref()
+        .ok_or_else(|| "No identity loaded".to_string())?;
+
+    let pubkey_hex = hex::encode(identity.public_key_bytes());
+    db.set_user_status(&pubkey_hex, &status)
+        .map_err(|e| format!("Failed to update status: {e}"))?;
+
+    info!(status = %status, "Status updated");
     Ok(())
 }

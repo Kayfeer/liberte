@@ -7,6 +7,8 @@ pub struct User {
     pub pubkey: [u8; 32],
     pub display_name: Option<String>,
     pub avatar_hash: Option<String>,
+    pub bio: Option<String>,
+    pub status: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -43,5 +45,15 @@ pub struct Blob {
     pub blake3_hash: String,
     pub is_uploaded: bool,
     pub local_path: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Reaction {
+    pub id: Uuid,
+    pub message_id: Uuid,
+    pub channel_id: Uuid,
+    pub user_pubkey: String,
+    pub emoji: String,
     pub created_at: DateTime<Utc>,
 }

@@ -2,6 +2,7 @@ import { useMessageStore } from "../../stores/messageStore";
 import { useMediaStore } from "../../stores/mediaStore";
 import MessageList from "../chat/MessageList";
 import MessageInput from "../chat/MessageInput";
+import TypingIndicator from "../chat/TypingIndicator";
 import VoicePanel from "../voice/VoicePanel";
 
 export default function MainPanel() {
@@ -27,6 +28,7 @@ export default function MainPanel() {
     <div className="flex-1 flex flex-col min-h-0">
       {inCall && <VoicePanel />}
       <MessageList channelId={activeChannelId} />
+      <TypingIndicator channelId={activeChannelId} />
       <MessageInput channelId={activeChannelId} />
     </div>
   );

@@ -6,6 +6,9 @@ pub const EVENT_PEER_CONNECTED: &str = "peer-connected";
 pub const EVENT_PEER_DISCONNECTED: &str = "peer-disconnected";
 pub const EVENT_CALL_STATE_CHANGED: &str = "call-state-changed";
 pub const EVENT_CONNECTION_MODE_CHANGED: &str = "connection-mode-changed";
+pub const EVENT_TYPING_INDICATOR: &str = "typing-indicator";
+pub const EVENT_STATUS_CHANGED: &str = "status-changed";
+pub const EVENT_MESSAGE_REACTION: &str = "message-reaction";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +34,31 @@ pub struct CallStatePayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectionModePayload {
     pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypingPayload {
+    pub channel_id: String,
+    pub user_id: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusChangedPayload {
+    pub user_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionPayload {
+    pub channel_id: String,
+    pub message_id: String,
+    pub user_id: String,
+    pub emoji: String,
+    pub action: String, // "add" or "remove"
 }
 
 pub fn emit_event<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {

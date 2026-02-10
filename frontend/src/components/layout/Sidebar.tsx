@@ -3,15 +3,26 @@ import { Hash, Plus, Settings, UserPlus, Circle } from "lucide-react";
 import { useMessageStore } from "../../stores/messageStore";
 import { useNetworkStore } from "../../stores/networkStore";
 import { useNavigationStore } from "../../stores/navigationStore";
+import { useIdentityStore } from "../../stores/identityStore";
 import CreateChannelModal from "../channels/CreateChannelModal";
 import JoinChannelModal from "../channels/JoinChannelModal";
+import StatusSelector from "../identity/StatusSelector";
+import ProfileModal from "../identity/ProfileModal";
 
 export default function Sidebar() {
   const { channels, activeChannelId, setActiveChannel } = useMessageStore();
   const { peers } = useNetworkStore();
   const { currentPage, navigate } = useNavigationStore();
+  const identity = useIdentityStore((s) => s.identity);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
   const [showJoinChannel, setShowJoinChannel] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+
+  const displayName = identity?.displayName;
+  const shortId = identity?.shortId || "";
+  const avatarLetters = displayName
+    ? displayName.slice(0, 2).toUpperCase()
+    : shortId.slice(0, 2).toUpperCase();
 
   return (
     <div className="w-60 bg-liberte-surface flex flex-col border-r border-liberte-border">
@@ -91,26 +102,49 @@ export default function Sidebar() {
         )}
       </div>
 
-      {/* Bottom bar */}
-      <div className="p-2 border-t border-liberte-border space-y-1">
-        <button
-          onClick={() => setShowJoinChannel(true)}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg transition-colors"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Rejoindre un canal</span>
-        </button>
-        <button
-          onClick={() => navigate(currentPage === "settings" ? "home" : "settings")}
-          className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors ${
-            currentPage === "settings"
-              ? "bg-liberte-panel text-liberte-text"
-              : "text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg"
-          }`}
-        >
-          <Settings className="w-4 h-4" />
-          <span>Paramètres</span>
-        </button>
+      {/* Bottom bar — User profile card + navigation */}
+      <div className="border-t border-liberte-border">
+        {/* User card (Discord-style) */}
+        <div className="p-2 flex items-center gap-2">
+          <button
+            onClick={() => setShowProfile(true)}
+            className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
+            style={{
+              backgroundColor: identity
+                ? `hsl(${hashCode(identity.publicKey) % 360}, 60%, 40%)`
+                : "#555",
+            }}
+          >
+            {avatarLetters}
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">
+              {displayName || shortId}
+            </p>
+            <StatusSelector />
+          </div>
+        </div>
+
+        <div className="px-2 pb-2 space-y-1">
+          <button
+            onClick={() => setShowJoinChannel(true)}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg transition-colors"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Rejoindre un canal</span>
+          </button>
+          <button
+            onClick={() => navigate(currentPage === "settings" ? "home" : "settings")}
+            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors ${
+              currentPage === "settings"
+                ? "bg-liberte-panel text-liberte-text"
+                : "text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg"
+            }`}
+          >
+            <Settings className="w-4 h-4" />
+            <span>Paramètres</span>
+          </button>
+        </div>
       </div>
 
       <CreateChannelModal
@@ -121,6 +155,19 @@ export default function Sidebar() {
         isOpen={showJoinChannel}
         onClose={() => setShowJoinChannel(false)}
       />
+      <ProfileModal
+        isOpen={showProfile}
+        onClose={() => setShowProfile(false)}
+      />
     </div>
   );
+}
+
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
 }

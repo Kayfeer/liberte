@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { IdentityInfo } from "@/lib/types";
+import type { IdentityInfo, UserStatus } from "@/lib/types";
 import * as tauri from "@/lib/tauri";
 
 interface IdentityState {
@@ -9,6 +9,8 @@ interface IdentityState {
   createIdentity: (displayName?: string) => Promise<void>;
   loadIdentity: () => Promise<void>;
   setDisplayName: (name: string) => Promise<void>;
+  setBio: (bio: string) => Promise<void>;
+  setStatus: (status: UserStatus) => Promise<void>;
 }
 
 export const useIdentityStore = create<IdentityState>((set, get) => ({
@@ -47,6 +49,34 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       }
     } catch (e) {
       console.error("Failed to set display name:", e);
+    }
+  },
+
+  setBio: async (bio: string) => {
+    try {
+      await tauri.setBio(bio);
+      const current = get().identity;
+      if (current) {
+        set({
+          identity: { ...current, bio: bio || undefined },
+        });
+      }
+    } catch (e) {
+      console.error("Failed to set bio:", e);
+    }
+  },
+
+  setStatus: async (status: UserStatus) => {
+    try {
+      await tauri.setStatus(status);
+      const current = get().identity;
+      if (current) {
+        set({
+          identity: { ...current, status },
+        });
+      }
+    } catch (e) {
+      console.error("Failed to set status:", e);
     }
   },
 }));

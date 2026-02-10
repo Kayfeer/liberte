@@ -7,13 +7,18 @@ interface Props {
 }
 
 export default function MessageList({ channelId }: Props) {
-  const { messages, loading } = useMessageStore();
+  const { messages, loading, loadMessages } = useMessageStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const channelMessages = messages[channelId] || [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [channelMessages.length]);
+
+  const handleReactionChange = () => {
+    // Reload messages to get updated reactions
+    loadMessages(channelId);
+  };
 
   if (loading) {
     return (
@@ -36,7 +41,11 @@ export default function MessageList({ channelId }: Props) {
   return (
     <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
       {channelMessages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          onReactionChange={handleReactionChange}
+        />
       ))}
       <div ref={bottomRef} />
     </div>

@@ -13,6 +13,9 @@ pub enum WireMessage {
     PeerStatus(PeerStatus),
     ChannelInvite(ChannelInvite),
     PremiumAuth(PremiumAuth),
+    TypingIndicator(TypingIndicator),
+    StatusUpdate(StatusUpdate),
+    MessageReaction(MessageReactionMsg),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +89,37 @@ pub struct ChannelInvite {
 pub struct PremiumAuth {
     pub user_id: UserId,
     pub token: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypingIndicator {
+    pub sender: UserId,
+    pub channel_id: ChannelId,
+    pub sender_display_name: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusUpdate {
+    pub user_id: UserId,
+    pub status: String, // "online", "dnd", "idle", "invisible"
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageReactionMsg {
+    pub sender: UserId,
+    pub channel_id: ChannelId,
+    pub message_id: uuid::Uuid,
+    pub emoji: String,
+    pub action: ReactionAction,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ReactionAction {
+    Add,
+    Remove,
 }
 
 impl WireMessage {

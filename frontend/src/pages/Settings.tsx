@@ -203,13 +203,15 @@ function CameraPreview({ deviceId }: { deviceId: string }) {
 }
 
 export default function Settings() {
-  const { identity, setDisplayName } = useIdentityStore();
+  const { identity, setDisplayName, setBio } = useIdentityStore();
   const navigate = useNavigationStore((s) => s.navigate);
   const media = useMediaDevices();
   const backup = useBackupStore();
   const [copied, setCopied] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioInput, setBioInput] = useState("");
 
   const copyPubkey = () => {
     if (identity) {
@@ -333,6 +335,65 @@ export default function Settings() {
             <div>
               <label className="text-xs text-liberte-muted">ID court</label>
               <p className="text-sm font-mono mt-1">{identity.shortId}</p>
+            </div>
+
+            {/* Bio */}
+            <div>
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-liberte-muted">Bio</label>
+                {!editingBio && (
+                  <button
+                    onClick={() => {
+                      setBioInput(identity.bio || "");
+                      setEditingBio(true);
+                    }}
+                    className="p-1 hover:bg-liberte-panel rounded transition-colors"
+                  >
+                    <Pencil className="w-3 h-3 text-liberte-muted" />
+                  </button>
+                )}
+              </div>
+              {editingBio ? (
+                <div className="mt-1 space-y-2">
+                  <textarea
+                    value={bioInput}
+                    onChange={(e) => setBioInput(e.target.value.slice(0, 190))}
+                    placeholder="Parlez de vous..."
+                    maxLength={190}
+                    rows={3}
+                    autoFocus
+                    className="w-full bg-liberte-bg border border-liberte-border rounded px-2 py-1.5
+                               text-sm text-liberte-text placeholder-liberte-muted outline-none
+                               focus:border-liberte-accent transition-colors resize-none"
+                  />
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-liberte-muted">{bioInput.length}/190</span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setEditingBio(false)}
+                        className="px-2 py-1 text-xs text-liberte-muted hover:text-liberte-text"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await setBio(bioInput.trim());
+                          setEditingBio(false);
+                        }}
+                        className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-opacity-90"
+                      >
+                        Sauvegarder
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm mt-1">
+                  {identity.bio || (
+                    <span className="text-liberte-muted italic">Aucune bio définie</span>
+                  )}
+                </p>
+              )}
             </div>
 
             {/* Profile export / import */}

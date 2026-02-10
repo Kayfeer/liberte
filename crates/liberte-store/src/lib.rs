@@ -5,6 +5,7 @@ pub mod database;
 pub mod messages;
 pub mod migrations;
 pub mod models;
+pub mod reactions;
 pub mod servers;
 
 mod error;

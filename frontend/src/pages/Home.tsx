@@ -9,6 +9,7 @@ import { EVENTS } from "../lib/constants";
 import { useMessageStore } from "../stores/messageStore";
 import { useNetworkStore } from "../stores/networkStore";
 import { useNavigationStore } from "../stores/navigationStore";
+import { useIdentityStore } from "../stores/identityStore";
 import { useBackupStore } from "../stores/backupStore";
 import Sidebar from "../components/layout/Sidebar";
 import Header from "../components/layout/Header";
@@ -21,6 +22,7 @@ export default function Home() {
   const { refreshPeers } = useNetworkStore();
   const currentPage = useNavigationStore((s) => s.currentPage);
   const { autoBackupEnabled, intervalMinutes, runAutoBackup } = useBackupStore();
+  const identity = useIdentityStore((s) => s.identity);
   const backupTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifPermRef = useRef<boolean>(false);
 
@@ -43,7 +45,7 @@ export default function Home() {
     // Listen for real-time events from Tauri backend
     const unlisten: (() => void)[] = [];
 
-    listen<{ channelId: string; senderShort?: string }>(
+    listen<{ channelId: string; sender?: string; senderDisplayName?: string }>(
       EVENTS.NEW_MESSAGE,
       (event) => {
         const channelId = event.payload.channelId;
@@ -51,15 +53,18 @@ export default function Home() {
           loadMessages(channelId);
         }
 
-        // Send OS notification when window is not focused
-        if (notifPermRef.current && document.hidden) {
+        // Send OS notification — respect DND status
+        const isDnd = identity?.status === "dnd";
+        if (notifPermRef.current && document.hidden && !isDnd) {
           const ch = channels.find((c) => c.id === channelId);
           const channelName = ch?.name ?? "Liberté";
+          const senderName =
+            event.payload.senderDisplayName ||
+            event.payload.sender?.slice(0, 8) ||
+            "Quelqu'un";
           sendNotification({
-            title: `Nouveau message — #${channelName}`,
-            body: event.payload.senderShort
-              ? `De ${event.payload.senderShort}`
-              : "Vous avez reçu un nouveau message",
+            title: `${senderName} — #${channelName}`,
+            body: "Nouveau message chiffré",
           });
         }
       }
@@ -73,10 +78,17 @@ export default function Home() {
       refreshPeers();
     }).then((u) => unlisten.push(u));
 
+    // Reaction event — reload messages for the affected channel
+    listen<{ channelId: string }>(EVENTS.MESSAGE_REACTION, (event) => {
+      if (event.payload.channelId) {
+        loadMessages(event.payload.channelId);
+      }
+    }).then((u) => unlisten.push(u));
+
     return () => {
       unlisten.forEach((u) => u());
     };
-  }, [loadChannels, loadMessages, refreshPeers, channels]);
+  }, [loadChannels, loadMessages, refreshPeers, channels, identity?.status]);
 
   // Auto-backup timer
   useEffect(() => {
