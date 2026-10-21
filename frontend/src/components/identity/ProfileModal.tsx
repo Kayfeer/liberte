@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, Copy, Check, Pencil } from "lucide-react";
 import type { UserStatus } from "../../lib/types";
 import { useIdentityStore } from "../../stores/identityStore";
+import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export default function ProfileModal({
   displayName,
 }: Props) {
   const { identity, setBio, setStatus, setDisplayName } = useIdentityStore();
+  const remoteProfile = useProfileStore((state) => userId ? state.profiles[userId] : undefined);
   const [copied, setCopied] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState("");
@@ -44,11 +46,11 @@ export default function ProfileModal({
   const profilePubkey = userId || identity?.publicKey || "";
   const profileName = isOwnProfile
     ? identity?.displayName
-    : displayName;
-  const profileBio = isOwnProfile ? identity?.bio : undefined;
-  const profileStatus: UserStatus = isOwnProfile
+    : remoteProfile?.displayName || displayName;
+  const profileBio = isOwnProfile ? identity?.bio : remoteProfile?.bio;
+  const profileStatus: UserStatus | null = isOwnProfile
     ? identity?.status || "online"
-    : "online";
+    : remoteProfile?.status || null;
   const shortId = profilePubkey.length > 16
     ? `${profilePubkey.slice(0, 8)}…${profilePubkey.slice(-8)}`
     : profilePubkey;
@@ -108,8 +110,8 @@ export default function ProfileModal({
             </div>
             {/* Status dot */}
             <div
-              className={`absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-liberte-surface ${STATUS_COLORS[profileStatus]}`}
-              title={STATUS_LABELS[profileStatus]}
+              className={`absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-liberte-surface ${STATUS_COLORS[profileStatus || "invisible"]}`}
+              title={(profileStatus ? STATUS_LABELS[profileStatus] : "Statut non observé")}
             />
           </div>
         </div>
@@ -158,8 +160,8 @@ export default function ProfileModal({
               </div>
             )}
             <p className="text-xs text-liberte-muted flex items-center gap-1 mt-0.5">
-              <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[profileStatus]}`} />
-              {STATUS_LABELS[profileStatus]}
+              <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[profileStatus || "invisible"]}`} />
+              {(profileStatus ? STATUS_LABELS[profileStatus] : "Statut non observé")}
             </p>
           </div>
 

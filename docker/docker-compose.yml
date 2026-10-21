@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     ports:
       - "4001:4001/udp"   # libp2p QUIC
-      - "8080:8080"       # HTTP API
+      - "${HTTP_BIND:-127.0.0.1}:8080:8080" # Use an HTTPS proxy for remote access
     volumes:
       - liberte-data:/data
     environment:
@@ -21,7 +21,14 @@ services:
       - PREMIUM_REQUIRED=${PREMIUM_REQUIRED:-false}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - REGISTRATION_OPEN=${REGISTRATION_OPEN:-true}
-      - MAX_PEERS=${MAX_PEERS:-0}
+      - MAX_PEERS=${MAX_PEERS:-128}
+      - PUBLIC_RELAY_ADDR=${PUBLIC_RELAY_ADDR:-}
+      - MAX_BLOB_SIZE=${MAX_BLOB_SIZE:-52428800}
+      - MAX_USER_BYTES=${MAX_USER_BYTES:-262144000}
+      - MAX_TOTAL_BYTES=${MAX_TOTAL_BYTES:-1073741824}
+      - MAX_OBJECTS=${MAX_OBJECTS:-10000}
+      - MAX_REPLAY_ENTRIES=${MAX_REPLAY_ENTRIES:-10000}
+      - MAX_HTTP_CONCURRENCY=${MAX_HTTP_CONCURRENCY:-8}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s
@@ -42,3 +49,4 @@ services:
 volumes:
   liberte-data:
     driver: local
+

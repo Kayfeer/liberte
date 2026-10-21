@@ -2,156 +2,207 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-client:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      require-committed-lock: true
+
+  preflight:
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tag, versions and committed dependency graph
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/ci.py versions --tag "$RELEASE_TAG"
+          git ls-files --error-unmatch Cargo.lock
+
+  client:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: windows-latest
+          - runner: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x86_64
-          - platform: ubuntu-22.04
+          - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x86_64
-
     name: Client (${{ matrix.label }})
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: client-${{ matrix.target }}
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libappindicator3-dev librsvg2-dev \
-            patchelf libasound2-dev \
-            perl
-
-      - uses: dtolnay/rust-toolchain@stable
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev pkg-config perl
+      - uses: actions/setup-node@v4
         with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install frontend dependencies
-        run: cd frontend && npm ci
-
-      - name: Build frontend
-        run: cd frontend && npm run build
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Configure signed updates only with a complete key pair
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: python scripts/ci.py prepare-updater
+      - name: Build installers without publishing
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Liberté ${{ github.ref_name }}"
-          releaseBody: "Voir CHANGELOG.md pour les détails."
-          args: --target ${{ matrix.target }}
-          updaterJsonPreferNsis: true
+          projectPath: crates/liberte-client
+          tauriScript: npm --prefix ../../frontend run tauri --
+          args: --target ${{ matrix.target }} --config tauri-ci.conf.json -- --locked
+          uploadUpdaterJson: false
+      - name: Validate expected installers and signatures
+        run: python scripts/ci.py collect-client --target ${{ matrix.target }} --label ${{ matrix.label }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-client-${{ matrix.label }}
+          path: release-assets/
+          if-no-files-found: error
 
-  build-server:
+  server:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
+          - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x86_64
-            artifact: liberte-server
-          - platform: ubuntu-22.04
+            binary: liberte-server
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             label: linux-aarch64
-            artifact: liberte-server
-            cross: true
-          - platform: windows-latest
+            binary: liberte-server
+          - runner: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x86_64
-            artifact: liberte-server.exe
-
+            binary: liberte-server.exe
     name: Server (${{ matrix.label }})
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
         with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
           targets: ${{ matrix.target }}
-
       - uses: Swatinem/rust-cache@v2
         with:
           key: server-${{ matrix.target }}
-
-      # Cross-compilation for aarch64 Linux
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build server (native)
-        if: ${{ !matrix.cross }}
-        run: cargo build --release --bin liberte-server --target ${{ matrix.target }}
-
-      - name: Build server (cross)
-        if: matrix.cross
-        run: cross build --release --bin liberte-server --target ${{ matrix.target }}
-
-      - name: Package server binary (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../liberte-server-${{ matrix.label }}.tar.gz ${{ matrix.artifact }}
-          cd ../../..
-          sha256sum liberte-server-${{ matrix.label }}.tar.gz > liberte-server-${{ matrix.label }}.tar.gz.sha256
-
-      - name: Package server binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.artifact }}" -DestinationPath "liberte-server-${{ matrix.label }}.zip"
-          (Get-FileHash "liberte-server-${{ matrix.label }}.zip" -Algorithm SHA256).Hash.ToLower() + "  liberte-server-${{ matrix.label }}.zip" | Out-File -Encoding ascii "liberte-server-${{ matrix.label }}.zip.sha256"
-
-      - name: Upload server binaries
-        uses: softprops/action-gh-release@v2
+      - run: cargo build --release --locked --bin liberte-server --target ${{ matrix.target }}
+      - name: Exercise the exact release binary
+        run: python scripts/ci.py smoke --binary target/${{ matrix.target }}/release/${{ matrix.binary }}
+      - run: python scripts/ci.py package-server --target ${{ matrix.target }} --label ${{ matrix.label }}
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
-            liberte-server-${{ matrix.label }}.*
+          name: release-server-${{ matrix.label }}
+          path: release-assets/
+          if-no-files-found: error
 
-  build-server-docker:
-    name: Server Docker Image
-    runs-on: ubuntu-latest
+  docker:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            label: linux-amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            label: linux-arm64
+    name: Docker (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Set up QEMU (for multi-arch)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build Docker image
+      - uses: docker/setup-buildx-action@v3
+      - name: Build, export and reload one architecture
+        shell: bash
+        env:
+          IMAGE: liberte-server:${{ github.ref_name }}-${{ matrix.label }}
+          PLATFORM: ${{ matrix.platform }}
+          LABEL: ${{ matrix.label }}
         run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            -f docker/Dockerfile \
-            -t liberte-server:${{ github.ref_name }} \
-            --output type=docker,dest=- . | gzip > liberte-server-docker-${{ github.ref_name }}.tar.gz
+          set -euo pipefail
+          mkdir -p release-assets
+          docker buildx build --platform "$PLATFORM" --load --file docker/Dockerfile --tag "$IMAGE" .
+          docker save --output image.tar "$IMAGE"
+          test -s image.tar
+          docker image rm "$IMAGE"
+          docker load --input image.tar
+          docker image inspect "$IMAGE" > /dev/null
+          python3 scripts/ci.py smoke --image "$IMAGE"
+          gzip --stdout image.tar > "release-assets/liberte-server-docker-$LABEL.tar.gz"
+          gzip --test "release-assets/liberte-server-docker-$LABEL.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-docker-${{ matrix.label }}
+          path: release-assets/
+          if-no-files-found: error
 
-      - name: Upload server image
+  publish:
+    name: Verify complete release and publish
+    needs: [verify, preflight, client, server, docker]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Install signature verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+      - name: Verify signatures, manifest and checksums
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/ci.py finalize-release --repository "$REPOSITORY" --tag "$RELEASE_TAG"
+      - name: Publish only after every build and smoke check succeeds
         uses: softprops/action-gh-release@v2
         with:
-          files: liberte-server-docker-${{ github.ref_name }}.tar.gz
+          fail_on_unmatched_files: true
+          body_path: release-notes.md
+          files: release-assets/*
+

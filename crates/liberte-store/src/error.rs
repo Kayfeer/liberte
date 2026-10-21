@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StoreError {
+    #[error("Invalid or conflicting backup data: {0}")]
+    InvalidBackup(String),
     #[error("Database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
@@ -28,3 +30,4 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+

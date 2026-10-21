@@ -38,9 +38,22 @@ export const listPeers = () =>
 export const getConnectionMode = () =>
   invoke<ConnectionMode>("get_connection_mode");
 
+export interface NetworkStatus {
+  peers: string[];
+  connectionMode: ConnectionMode;
+  listenAddresses: string[];
+  externalAddresses: string[];
+  localPeerId: string | null;
+  error: string | null;
+}
+
+export const getNetworkStatus = () => invoke<NetworkStatus>("get_network_status");
+
 // Messaging commands
 export const sendMessage = (channelId: string, content: string, channelKeyHex: string) =>
   invoke<void>("send_message", { channelId, content, channelKeyHex });
+
+export const sendTyping = (channelId: string) => invoke<void>("send_typing", { channelId });
 
 export const getMessages = (channelId: string, channelKeyHex: string, limit: number, offset: number) =>
   invoke<Message[]>("get_messages", { channelId, channelKeyHex, limit, offset });
@@ -80,6 +93,23 @@ export const getCallState = () =>
 // File commands
 export const sendFile = (channelId: string, filePath: string) =>
   invoke<void>("send_file", { channelId, filePath });
+
+export interface FileTransferDto {
+  fileId: string;
+  channelId: string;
+  fileName: string;
+  fileSize: number;
+  status: "offered" | "receiving" | "received" | "sending" | "completed" | "failed";
+  progress: number;
+  senderId: string;
+  error?: string | null;
+}
+
+export const listChannelFiles = (channelId: string) =>
+  invoke<FileTransferDto[]>("list_channel_files", { channelId });
+export const acceptFile = (fileId: string) => invoke<void>("accept_file", { fileId });
+export const saveReceivedFile = (fileId: string, filePath: string) =>
+  invoke<void>("save_received_file", { fileId, filePath });
 
 export const uploadPremiumBlob = (filePath: string, channelKeyHex: string) =>
   invoke<string>("upload_premium_blob", { filePath, channelKeyHex });
@@ -138,17 +168,17 @@ export interface ImportStats {
   keysImported: number;
 }
 
-export const exportBackup = () =>
-  invoke<string>("export_backup");
+export const exportBackup = (password: string) =>
+  invoke<string>("export_backup", { password });
 
-export const saveBackupToFile = (filePath: string) =>
-  invoke<string>("save_backup_to_file", { filePath });
+export const saveBackupToFile = (filePath: string, password: string) =>
+  invoke<string>("save_backup_to_file", { filePath, password });
 
 export const autoBackup = () =>
   invoke<string>("auto_backup");
 
-export const importBackup = (json: string) =>
-  invoke<ImportStats>("import_backup", { json });
+export const importBackup = (json: string, password?: string, allowLegacy = false) =>
+  invoke<ImportStats>("import_backup", { json, password, allowLegacy });
 
 export const listBackups = () =>
   invoke<BackupFileInfo[]>("list_backups");
@@ -159,11 +189,14 @@ export interface ProfileImportResult {
   channelsImported: number;
 }
 
-export const exportProfile = () =>
-  invoke<string>("export_profile");
+export const exportProfile = (password: string) =>
+  invoke<string>("export_profile", { password });
 
-export const importProfile = (json: string) =>
-  invoke<ProfileImportResult>("import_profile", { json });
+export const saveProfileToFile = (filePath: string, password: string) =>
+  invoke<string>("save_profile_to_file", { filePath, password });
+
+export const importProfile = (json: string, password?: string, allowLegacy = false) =>
+  invoke<ProfileImportResult>("import_profile", { json, password, allowLegacy });
 
 // Reaction commands
 export const addReaction = (channelId: string, messageId: string, emoji: string) =>

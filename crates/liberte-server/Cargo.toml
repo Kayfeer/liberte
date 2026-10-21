@@ -10,7 +10,7 @@ liberte-net    = { workspace = true }
 libp2p = { workspace = true }
 tokio = { workspace = true }
 axum = { version = "0.7", features = ["multipart"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["util", "limit"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,7 +24,9 @@ ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 subtle = "2"
+tempfile = "3"
+blake3 = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
-tempfile = "3"
+

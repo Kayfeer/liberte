@@ -1,16 +1,16 @@
-import { useEffect, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+import { useEffect, useRef, useState } from "react";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { EVENTS } from "../lib/constants";
+import { createEventSubscriptions } from "../lib/eventSubscriptions";
+import type { FileTransferDto } from "../lib/tauri";
 import { useMessageStore } from "../stores/messageStore";
 import { useNetworkStore } from "../stores/networkStore";
 import { useNavigationStore } from "../stores/navigationStore";
 import { useIdentityStore } from "../stores/identityStore";
 import { useBackupStore } from "../stores/backupStore";
+import { useMediaStore } from "../stores/mediaStore";
+import { useFileStore } from "../stores/fileStore";
+import { useProfileStore, type PeerProfile } from "../stores/profileStore";
 import Sidebar from "../components/layout/Sidebar";
 import Header from "../components/layout/Header";
 import MainPanel from "../components/layout/MainPanel";
@@ -18,112 +18,82 @@ import UpdateBanner from "../components/common/UpdateBanner";
 import Settings from "./Settings";
 
 export default function Home() {
-  const { loadChannels, loadMessages, channels } = useMessageStore();
-  const { refreshPeers } = useNetworkStore();
-  const currentPage = useNavigationStore((s) => s.currentPage);
-  const { autoBackupEnabled, intervalMinutes, runAutoBackup } = useBackupStore();
-  const identity = useIdentityStore((s) => s.identity);
-  const backupTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const notifPermRef = useRef<boolean>(false);
+  const currentPage = useNavigationStore((state) => state.currentPage);
+  const channelError = useMessageStore((state) => state.error);
+  const networkError = useNetworkStore((state) => state.error);
+  const identityError = useIdentityStore((state) => state.error);
+  const autoBackupEnabled = useBackupStore((state) => state.autoBackupEnabled);
+  const intervalMinutes = useBackupStore((state) => state.intervalMinutes);
+  const [eventError, setEventError] = useState<string | null>(null);
+  const notifPermRef = useRef(false);
 
-  // Request notification permission once
   useEffect(() => {
-    (async () => {
-      let granted = await isPermissionGranted();
-      if (!granted) {
-        const result = await requestPermission();
-        granted = result === "granted";
+    let disposed = false;
+    void (async () => {
+      try {
+        const granted = await isPermissionGranted() || await requestPermission() === "granted";
+        if (!disposed) notifPermRef.current = granted;
+      } catch {
+        // Notifications are optional; messaging remains available without permission.
       }
-      notifPermRef.current = granted;
     })();
+    return () => { disposed = true; };
   }, []);
 
   useEffect(() => {
-    loadChannels();
-    refreshPeers();
-
-    // Listen for real-time events from Tauri backend
-    const unlisten: (() => void)[] = [];
-
-    listen<{ channelId: string; sender?: string; senderDisplayName?: string }>(
-      EVENTS.NEW_MESSAGE,
-      (event) => {
-        const channelId = event.payload.channelId;
-        if (channelId) {
-          loadMessages(channelId);
-        }
-
-        // Send OS notification — respect DND status
-        const isDnd = identity?.status === "dnd";
-        if (notifPermRef.current && document.hidden && !isDnd) {
-          const ch = channels.find((c) => c.id === channelId);
-          const channelName = ch?.name ?? "Liberté";
-          const senderName =
-            event.payload.senderDisplayName ||
-            event.payload.sender?.slice(0, 8) ||
-            "Quelqu'un";
-          sendNotification({
-            title: `${senderName} — #${channelName}`,
-            body: "Nouveau message chiffré",
-          });
-        }
+    let disposed = false;
+    const subscriptions = createEventSubscriptions((error) => setEventError(String(error)));
+    subscriptions.add<{ channelId: string; sender?: string; senderDisplayName?: string }>(EVENTS.NEW_MESSAGE, (event) => {
+      const { channelId, sender, senderDisplayName } = event.payload;
+      if (channelId) void useMessageStore.getState().loadMessages(channelId);
+      const identity = useIdentityStore.getState().identity;
+      if (notifPermRef.current && document.hidden && identity?.status !== "dnd" && sender !== identity?.publicKey) {
+        const channel = useMessageStore.getState().channels.find((item) => item.id === channelId);
+        sendNotification({
+          title: `${senderDisplayName || sender?.slice(0, 8) || "Quelqu'un"} : #${channel?.name || "Liberté"}`,
+          body: "Nouveau message chiffré",
+        });
       }
-    ).then((u) => unlisten.push(u));
+    });
+    const refreshNetwork = () => { void useNetworkStore.getState().refreshNetwork(); };
+    subscriptions.add(EVENTS.PEER_CONNECTED, refreshNetwork);
+    subscriptions.add(EVENTS.PEER_DISCONNECTED, refreshNetwork);
+    subscriptions.add(EVENTS.CONNECTION_MODE_CHANGED, refreshNetwork);
+    subscriptions.add<{ channelId: string }>(EVENTS.MESSAGE_REACTION, (event) => {
+      if (event.payload.channelId) void useMessageStore.getState().loadMessages(event.payload.channelId);
+    });
+    subscriptions.add<FileTransferDto>("file-transfer-updated", (event) => useFileStore.getState().upsert(event.payload));
+    subscriptions.add<PeerProfile>("profile-updated", (event) => useProfileStore.getState().upsert(event.payload));
+    subscriptions.add<{ userId: string; status: string }>(EVENTS.STATUS_CHANGED, (event) => useProfileStore.getState().setStatus(event.payload.userId, event.payload.status));
 
-    listen<{ peerId: string }>(EVENTS.PEER_CONNECTED, () => {
-      refreshPeers();
-    }).then((u) => unlisten.push(u));
-
-    listen<{ peerId: string }>(EVENTS.PEER_DISCONNECTED, () => {
-      refreshPeers();
-    }).then((u) => unlisten.push(u));
-
-    // Reaction event — reload messages for the affected channel
-    listen<{ channelId: string }>(EVENTS.MESSAGE_REACTION, (event) => {
-      if (event.payload.channelId) {
-        loadMessages(event.payload.channelId);
-      }
-    }).then((u) => unlisten.push(u));
-
+    void useMessageStore.getState().loadChannels();
+    refreshNetwork();
+    void useMediaStore.getState().setupListeners().catch((error) => { if (!disposed) setEventError(String(error)); });
+    const poll = setInterval(refreshNetwork, 5000);
     return () => {
-      unlisten.forEach((u) => u());
+      disposed = true;
+      subscriptions.dispose();
+      clearInterval(poll);
+      useMediaStore.getState().cleanup();
     };
-  }, [loadChannels, loadMessages, refreshPeers, channels, identity?.status]);
+  }, []);
 
-  // Auto-backup timer
   useEffect(() => {
-    if (backupTimerRef.current) {
-      clearInterval(backupTimerRef.current);
-      backupTimerRef.current = null;
-    }
+    if (!autoBackupEnabled || intervalMinutes <= 0) return;
+    const timer = setInterval(() => {
+      void useBackupStore.getState().runAutoBackup();
+    }, intervalMinutes * 60000);
+    return () => clearInterval(timer);
+  }, [autoBackupEnabled, intervalMinutes]);
 
-    if (autoBackupEnabled && intervalMinutes > 0) {
-      backupTimerRef.current = setInterval(
-        () => { runAutoBackup(); },
-        intervalMinutes * 60 * 1000,
-      );
-    }
-
-    return () => {
-      if (backupTimerRef.current) {
-        clearInterval(backupTimerRef.current);
-      }
-    };
-  }, [autoBackupEnabled, intervalMinutes, runAutoBackup]);
-
+  const error = eventError || channelError || networkError || identityError;
   return (
     <div className="flex h-screen bg-liberte-bg overflow-hidden">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0">
         <UpdateBanner />
-        {currentPage === "settings" ? (
-          <Settings />
-        ) : (
-          <>
-            <Header />
-            <MainPanel />
-          </>
-        )}
+        {error && <div role="alert" className="bg-red-900/20 text-red-300 px-4 py-2 text-sm">{error}</div>}
+        {currentPage === "settings" ? <Settings /> : <><Header /><MainPanel /></>}
       </div>
     </div>
   );

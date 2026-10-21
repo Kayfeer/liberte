@@ -60,6 +60,9 @@ impl RateLimiter {
 
     pub async fn check(&self, ip: IpAddr) -> bool {
         let mut buckets = self.buckets.lock().await;
+        if buckets.len() >= 10_000 && !buckets.contains_key(&ip) {
+            return false;
+        }
         let bucket = buckets
             .entry(ip)
             .or_insert_with(|| TokenBucket::new(self.capacity));
@@ -98,28 +101,10 @@ pub async fn rate_limit_middleware(
     Ok(next.run(req).await)
 }
 
-/// Try ConnectInfo first, then X-Forwarded-For, then X-Real-IP.
+/// Only trust the transport peer. Forwarding headers are caller-controlled.
 fn extract_client_ip<B>(req: &Request<B>) -> Option<IpAddr> {
     if let Some(connect_info) = req.extensions().get::<ConnectInfo<std::net::SocketAddr>>() {
         return Some(connect_info.0.ip());
-    }
-
-    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
-        if let Ok(value) = forwarded.to_str() {
-            if let Some(first) = value.split(',').next() {
-                if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
-    }
-
-    if let Some(real_ip) = req.headers().get("x-real-ip") {
-        if let Ok(value) = real_ip.to_str() {
-            if let Ok(ip) = value.trim().parse::<IpAddr>() {
-                return Some(ip);
-            }
-        }
     }
 
     None
@@ -166,3 +151,4 @@ mod tests {
         assert!(buckets.is_empty());
     }
 }
+

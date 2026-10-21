@@ -1,256 +1,240 @@
+use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tokio::fs;
-use tracing::{debug, info};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::ServerError;
 
-/// Verify that a resolved path stays within the expected base directory.
-/// Prevents path traversal attacks.
-fn ensure_within(base: &Path, target: &Path) -> Result<PathBuf, ServerError> {
-    // Canonicalize base — must succeed (directory created at init).
-    let canonical_base = base.canonicalize().map_err(|e| {
-        ServerError::Internal(format!(
-            "Base path '{}' cannot be resolved: {e}",
-            base.display()
-        ))
-    })?;
-
-    // Extract the relative portion after the base prefix.
-    let relative = target
-        .strip_prefix(base)
-        .or_else(|_| target.strip_prefix(&canonical_base))
-        .map_err(|_| ServerError::BadRequest("Path traversal detected".to_string()))?;
-
-    // Rebuild using only Normal components (rejects `..`, `/`, etc.)
-    let mut resolved = canonical_base.clone();
-    for component in relative.components() {
-        match component {
-            std::path::Component::Normal(c) => resolved.push(c),
-            std::path::Component::ParentDir => {
-                return Err(ServerError::BadRequest(
-                    "Path traversal detected".to_string(),
-                ));
-            }
-            _ => {} // CurDir — skip
-        }
-    }
-    if !resolved.starts_with(&canonical_base) {
-        return Err(ServerError::BadRequest(
-            "Path traversal detected".to_string(),
-        ));
-    }
-    Ok(resolved)
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+/// Object directories are named after their authenticated owner. Legacy unowned
+/// objects are not served until an administrator explicitly migrates ownership.
+#[derive(Clone)]
 pub struct BlobStore {
     base_path: PathBuf,
     max_size: usize,
+    max_user_bytes: u64,
+    max_total_bytes: u64,
+    max_objects: usize,
+    writes: Arc<Mutex<()>>,
 }
 
 impl BlobStore {
-    pub async fn new(base_path: PathBuf, max_size: usize) -> Result<Self, ServerError> {
-        fs::create_dir_all(&base_path).await.map_err(|e| {
-            ServerError::BlobStorage(format!(
-                "Failed to create blob directory '{}': {}",
-                base_path.display(),
-                e
-            ))
-        })?;
-
-        info!(path = %base_path.display(), "Blob store initialized");
-
+    pub async fn new(
+        base_path: PathBuf,
+        max_size: usize,
+        max_user_bytes: u64,
+        max_total_bytes: u64,
+        max_objects: usize,
+    ) -> Result<Self, ServerError> {
+        fs::create_dir_all(&base_path).await.map_err(storage_error)?;
+        let base_path = fs::canonicalize(base_path).await.map_err(storage_error)?;
+        let users = base_path.join("users");
+        fs::create_dir_all(&users).await.map_err(storage_error)?;
+        reject_symlink(&users).await?;
         Ok(Self {
-            base_path,
-            max_size,
+            base_path, max_size, max_user_bytes, max_total_bytes, max_objects,
+            writes: Arc::new(Mutex::new(())),
         })
     }
 
-    #[allow(dead_code)]
-    pub fn base_path(&self) -> &std::path::Path {
-        &self.base_path
+    fn owner_dir(&self, owner: &[u8; 32]) -> PathBuf {
+        self.base_path.join("users").join(hex::encode(owner))
     }
 
-    pub async fn store_blob(&self, data: &[u8]) -> Result<Uuid, ServerError> {
-        if data.is_empty() {
-            return Err(ServerError::BlobStorage("Empty blob".to_string()));
+    async fn object_path(&self, owner: &[u8; 32], name: &str) -> Result<PathBuf, ServerError> {
+        if name.contains(['/', '\\']) || name.contains("..") {
+            return Err(ServerError::BadRequest("Invalid object name".into()));
         }
-        if data.len() > self.max_size {
-            return Err(ServerError::BlobTooLarge {
-                size: data.len(),
-                max: self.max_size,
-            });
+        reject_symlink(&self.base_path.join("users")).await?;
+        let dir = self.owner_dir(owner);
+        if fs::try_exists(&dir).await.map_err(storage_error)? {
+            reject_symlink(&dir).await?;
         }
+        let path = dir.join(name);
+        if fs::try_exists(&path).await.map_err(storage_error)? {
+            reject_symlink(&path).await?;
+        }
+        Ok(path)
+    }
 
+    pub async fn store_blob(&self, owner: &[u8; 32], data: &[u8]) -> Result<Uuid, ServerError> {
         let id = Uuid::new_v4();
-        let path = self.safe_blob_path(&id)?;
-
-        fs::write(&path, data)
-            .await
-            .map_err(|e| ServerError::BlobStorage(format!("Failed to write blob {}: {}", id, e)))?;
-
-        debug!(id = %id, size = data.len(), "Stored blob");
+        self.write_object(owner, &format!("{id}.enc"), data).await?;
         Ok(id)
     }
 
-    pub async fn get_blob(&self, id: Uuid) -> Result<Vec<u8>, ServerError> {
-        let path = self.safe_blob_path(&id)?;
-
-        if !path.exists() {
-            return Err(ServerError::BlobNotFound(id));
-        }
-
-        let data = fs::read(&path)
-            .await
-            .map_err(|e| ServerError::BlobStorage(format!("Failed to read blob {}: {}", id, e)))?;
-
-        debug!(id = %id, size = data.len(), "Retrieved blob");
-        Ok(data)
+    pub async fn get_blob(&self, owner: &[u8; 32], id: Uuid) -> Result<Vec<u8>, ServerError> {
+        let path = self.object_path(owner, &format!("{id}.enc")).await?;
+        fs::read(path).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ServerError::BlobNotFound(id),
+            _ => storage_error(e),
+        })
     }
 
-    pub async fn delete_blob(&self, id: Uuid) -> Result<(), ServerError> {
-        let path = self.safe_blob_path(&id)?;
-
-        if !path.exists() {
-            return Err(ServerError::BlobNotFound(id));
-        }
-
-        fs::remove_file(&path).await.map_err(|e| {
-            ServerError::BlobStorage(format!("Failed to delete blob {}: {}", id, e))
+    pub async fn delete_blob(&self, owner: &[u8; 32], id: Uuid) -> Result<(), ServerError> {
+        let _write = self.writes.lock().await;
+        let path = self.object_path(owner, &format!("{id}.enc")).await?;
+        fs::remove_file(path).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ServerError::BlobNotFound(id),
+            _ => storage_error(e),
         })?;
-
-        debug!(id = %id, "Deleted blob");
+        // Prevent a churn of short-lived identities leaving unbounded empty directories.
+        let _ = fs::remove_dir(self.owner_dir(owner)).await;
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub async fn list_blobs(&self) -> Result<Vec<Uuid>, ServerError> {
-        let mut ids = Vec::new();
-        let mut entries = fs::read_dir(&self.base_path)
-            .await
-            .map_err(|e| ServerError::BlobStorage(format!("Failed to list blobs: {}", e)))?;
+    pub async fn store_backup(&self, owner: &[u8; 32], data: &[u8]) -> Result<(), ServerError> {
+        self.write_object(owner, "backup.enc", data).await
+    }
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            ServerError::BlobStorage(format!("Failed to read directory entry: {}", e))
-        })? {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Ok(id) = Uuid::parse_str(name) {
-                    ids.push(id);
+    pub async fn get_backup(&self, owner: &[u8; 32]) -> Result<String, ServerError> {
+        let path = self.object_path(owner, "backup.enc").await?;
+        fs::read_to_string(path).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ServerError::NotFound("No backup found".into()),
+            _ => storage_error(e),
+        })
+    }
+
+    async fn write_object(&self, owner: &[u8; 32], name: &str, data: &[u8]) -> Result<(), ServerError> {
+        if data.is_empty() {
+            return Err(ServerError::BadRequest("Empty object".into()));
+        }
+        if data.len() > self.max_size {
+            return Err(ServerError::BlobTooLarge { size: data.len(), max: self.max_size });
+        }
+        let _write = self.writes.lock().await;
+        let path = self.object_path(owner, name).await?;
+        let previous = match fs::metadata(&path).await {
+            Ok(m) => m.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(storage_error(e)),
+        };
+        let (total, count, by_owner) = self.usage().await?;
+        let user_bytes = by_owner.get(&hex::encode(owner)).copied().unwrap_or_default();
+        let extra = data.len() as u64;
+        if total.saturating_sub(previous).saturating_add(extra) > self.max_total_bytes
+            || user_bytes.saturating_sub(previous).saturating_add(extra) > self.max_user_bytes
+            || (previous == 0 && count >= self.max_objects)
+        {
+            return Err(ServerError::QuotaExceeded);
+        }
+        fs::create_dir_all(self.owner_dir(owner)).await.map_err(storage_error)?;
+        reject_symlink(&self.owner_dir(owner)).await?;
+        atomic_write(path, data.to_vec()).await
+    }
+
+    async fn usage(&self) -> Result<(u64, usize, HashMap<String, u64>), ServerError> {
+        let mut total = 0u64;
+        let mut count = 0usize;
+        let mut by_owner = HashMap::new();
+        let mut dirs = fs::read_dir(self.base_path.join("users")).await.map_err(storage_error)?;
+        while let Some(dir) = dirs.next_entry().await.map_err(storage_error)? {
+            let kind = dir.file_type().await.map_err(storage_error)?;
+            if kind.is_symlink() || !kind.is_dir() {
+                return Err(ServerError::BlobStorage("Invalid storage directory".into()));
+            }
+            let owner = dir.file_name().to_string_lossy().into_owned();
+            let mut files = fs::read_dir(dir.path()).await.map_err(storage_error)?;
+            let mut user_size = 0u64;
+            while let Some(file) = files.next_entry().await.map_err(storage_error)? {
+                if file.file_type().await.map_err(storage_error)?.is_symlink() {
+                    return Err(ServerError::BlobStorage("Symlinks are not allowed".into()));
+                }
+                let metadata = file.metadata().await.map_err(storage_error)?;
+                if metadata.is_file() {
+                    count += 1;
+                    user_size = user_size.saturating_add(metadata.len());
                 }
             }
+            total = total.saturating_add(user_size);
+            by_owner.insert(owner, user_size);
         }
-
-        Ok(ids)
+        Ok((total, count, by_owner))
     }
+}
 
-    /// Safe blob path that validates against traversal.
-    fn safe_blob_path(&self, id: &Uuid) -> Result<PathBuf, ServerError> {
-        let filename = id.to_string();
-        // Allowlist: UUID strings contain only hex digits and hyphens.
-        // This explicit check satisfies static-analysis path-traversal audits.
-        if !filename.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-            return Err(ServerError::BadRequest(
-                "Invalid blob ID format".to_string(),
-            ));
-        }
-        let path = self.base_path.join(&filename);
-        ensure_within(&self.base_path, &path)
+async fn reject_symlink(path: &Path) -> Result<(), ServerError> {
+    if fs::symlink_metadata(path).await.map_err(storage_error)?.file_type().is_symlink() {
+        return Err(ServerError::BlobStorage("Symlinks are not allowed".into()));
     }
+    Ok(())
+}
 
-    /// Build a safe path for a sub-directory file (e.g. backups).
-    pub fn safe_subpath(&self, subdir: &str, filename: &str) -> Result<PathBuf, ServerError> {
-        // Reject any path separator or traversal characters in inputs
-        if subdir.contains('/')
-            || subdir.contains('\\')
-            || subdir.contains("..")
-            || filename.contains('/')
-            || filename.contains('\\')
-            || filename.contains("..")
-        {
-            return Err(ServerError::BadRequest(
-                "Path traversal detected".to_string(),
-            ));
-        }
-        let target = self.base_path.join(subdir).join(filename);
-        ensure_within(&self.base_path, &target)
-    }
+/// Atomic replacement on Windows and Unix; a failed write preserves the old file.
+pub async fn atomic_write(path: PathBuf, bytes: Vec<u8>) -> Result<(), ServerError> {
+    tokio::task::spawn_blocking(move || {
+        let parent = path.parent().ok_or_else(|| ServerError::Internal("No parent directory".into()))?;
+        let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(storage_error)?;
+        temp.write_all(&bytes).map_err(storage_error)?;
+        temp.as_file().sync_all().map_err(storage_error)?;
+        temp.persist(path).map_err(|e| storage_error(e.error))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| ServerError::Internal(e.to_string()))?
+}
 
-    /// Create a sub-directory safely (validates against traversal).
-    pub async fn ensure_subdir(&self, subdir: &str) -> Result<PathBuf, ServerError> {
-        if subdir.contains('/') || subdir.contains('\\') || subdir.contains("..") {
-            return Err(ServerError::BadRequest(
-                "Path traversal detected".to_string(),
-            ));
-        }
-        let dir_path = self.base_path.join(subdir);
-        let safe_path = ensure_within(&self.base_path, &dir_path)?;
-        fs::create_dir_all(&safe_path).await.map_err(|e| {
-            ServerError::Internal(format!(
-                "Failed to create directory '{}': {e}",
-                safe_path.display()
-            ))
-        })?;
-        Ok(safe_path)
-    }
+fn storage_error(error: std::io::Error) -> ServerError {
+    ServerError::BlobStorage(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
-    async fn test_store() -> (BlobStore, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::new(dir.path().to_path_buf(), 1024 * 1024)
-            .await
-            .unwrap();
-        (store, dir)
+    async fn store(path: &Path, quota: u64) -> BlobStore {
+        BlobStore::new(path.to_owned(), 1024, quota, 4096, 10).await.unwrap()
     }
 
     #[tokio::test]
-    async fn test_store_and_get() {
-        let (store, _dir) = test_store().await;
-        let data = b"encrypted-blob-data";
-
-        let id = store.store_blob(data).await.unwrap();
-        let retrieved = store.get_blob(id).await.unwrap();
-        assert_eq!(retrieved, data);
+    async fn owner_isolation_survives_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let store1 = store(temp.path(), 2048).await;
+        let id = store1.store_blob(&[1; 32], b"ciphertext").await.unwrap();
+        drop(store1);
+        let reopened = store(temp.path(), 2048).await;
+        assert_eq!(reopened.get_blob(&[1; 32], id).await.unwrap(), b"ciphertext");
+        assert!(reopened.get_blob(&[2; 32], id).await.is_err());
+        assert!(reopened.delete_blob(&[2; 32], id).await.is_err());
+        assert!(reopened.get_blob(&[1; 32], id).await.is_ok());
     }
 
     #[tokio::test]
-    async fn test_delete() {
-        let (store, _dir) = test_store().await;
-        let id = store.store_blob(b"delete-me").await.unwrap();
-
-        store.delete_blob(id).await.unwrap();
-        assert!(store.get_blob(id).await.is_err());
+    async fn quota_failure_keeps_previous_backup() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(temp.path(), 5).await;
+        store.store_backup(&[1; 32], b"first").await.unwrap();
+        assert!(store.store_backup(&[1; 32], b"too long").await.is_err());
+        assert_eq!(store.get_backup(&[1; 32]).await.unwrap(), "first");
+        store.store_backup(&[1; 32], b"next").await.unwrap();
+        assert_eq!(store.get_backup(&[1; 32]).await.unwrap(), "next");
     }
 
     #[tokio::test]
-    async fn test_list() {
-        let (store, _dir) = test_store().await;
-
-        let id1 = store.store_blob(b"blob-1").await.unwrap();
-        let id2 = store.store_blob(b"blob-2").await.unwrap();
-
-        let ids = store.list_blobs().await.unwrap();
-        assert!(ids.contains(&id1));
-        assert!(ids.contains(&id2));
+    async fn concurrent_writers_cannot_exceed_global_quota() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(temp.path().to_owned(), 1024, 8, 8, 10).await.unwrap();
+        let (first, second) = tokio::join!(
+            store.store_blob(&[1; 32], b"first"),
+            store.store_blob(&[2; 32], b"other"),
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let (bytes, count, _) = store.usage().await.unwrap();
+        assert_eq!(bytes, 5);
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]
-    async fn test_not_found() {
-        let (store, _dir) = test_store().await;
-        let missing = Uuid::new_v4();
-        assert!(store.get_blob(missing).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_empty_blob_rejected() {
-        let (store, _dir) = test_store().await;
-        assert!(store.store_blob(b"").await.is_err());
+    async fn object_limit_is_restored_after_deletion() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(temp.path().to_owned(), 1024, 100, 100, 1).await.unwrap();
+        let id = store.store_blob(&[1; 32], b"first").await.unwrap();
+        assert!(matches!(store.store_blob(&[2; 32], b"other").await, Err(ServerError::QuotaExceeded)));
+        store.delete_blob(&[1; 32], id).await.unwrap();
+        assert!(!store.owner_dir(&[1; 32]).exists());
+        assert!(store.store_blob(&[2; 32], b"other").await.is_ok());
     }
 }

@@ -5,6 +5,13 @@ use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum ServerError {
+    #[error("Authentication required: {0}")]
+    Unauthorized(String),
+
+    #[error("Storage quota exceeded")]
+    QuotaExceeded,
+    #[error("Service temporarily unavailable: {0}")]
+    ServiceUnavailable(String),
     #[error("Blob not found: {0}")]
     BlobNotFound(Uuid),
 
@@ -35,6 +42,9 @@ pub enum ServerError {
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
+            ServerError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
+            ServerError::QuotaExceeded => (StatusCode::INSUFFICIENT_STORAGE, self.to_string()),
+            ServerError::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             ServerError::BlobNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             ServerError::BlobTooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             ServerError::BlobStorage(_) => (
@@ -58,3 +68,4 @@ impl IntoResponse for ServerError {
         (status, axum::Json(body)).into_response()
     }
 }
+

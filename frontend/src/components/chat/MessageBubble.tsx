@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Message } from "../../lib/types";
 import ReactionBar from "./ReactionBar";
 import ProfileModal from "../identity/ProfileModal";
+import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
   message: Message;
@@ -10,7 +11,8 @@ interface Props {
 
 export default function MessageBubble({ message, onReactionChange }: Props) {
   const shortId = message.senderId.slice(0, 8);
-  const displayLabel = message.senderDisplayName || shortId;
+  const profile = useProfileStore((state) => state.profiles[message.senderId]);
+  const displayLabel = profile?.displayName || message.senderDisplayName || shortId;
   const avatarLetters = message.senderDisplayName
     ? message.senderDisplayName.slice(0, 2).toUpperCase()
     : shortId.slice(0, 2).toUpperCase();

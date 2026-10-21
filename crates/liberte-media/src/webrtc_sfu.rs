@@ -26,8 +26,7 @@ pub enum SfuState {
     Failed,
 }
 
-/// Client-side SFU connection.
-/// The SFU never decrypts media -- all frames are E2EE via insertable streams.
+/// Experimental SFU frame codec. A network transport is not implemented yet.
 #[allow(dead_code)]
 pub struct SfuClient {
     local_user: UserId,
@@ -61,12 +60,10 @@ impl SfuClient {
         );
         self.state = SfuState::Connecting;
 
-        // TODO: Establish WebRTC connection to SFU via webrtc-rs
-        // The SFU acts as a peer that receives all media and selectively forwards it
-
-        self.state = SfuState::Connected;
-        info!("Connected to SFU");
-        Ok(())
+        self.state = SfuState::Failed;
+        Err(SfuClientError::ConnectionError(
+            "SFU media transport is not implemented; use the WebRTC mesh call".into(),
+        ))
     }
 
     /// Encrypt an audio frame before sending to the SFU (SFU can't read it).
@@ -112,3 +109,4 @@ impl SfuClient {
         &self.room_id
     }
 }
+

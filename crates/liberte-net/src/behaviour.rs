@@ -1,5 +1,5 @@
 use libp2p::{
-    dcutr, gossipsub, identify,
+    dcutr, gossipsub, identify, mdns,
     kad::{self, store::MemoryStore},
     relay,
     swarm::NetworkBehaviour,
@@ -13,6 +13,7 @@ pub struct LiberteBehaviour {
     pub identify: identify::Behaviour,
     pub relay_client: relay::client::Behaviour,
     pub dcutr: dcutr::Behaviour,
+    pub mdns: libp2p::swarm::behaviour::toggle::Toggle<mdns::tokio::Behaviour>,
 }
 
 #[derive(Debug)]
@@ -22,6 +23,11 @@ pub enum LiberteEvent {
     Identify(identify::Event),
     RelayClient(relay::client::Event),
     Dcutr(dcutr::Event),
+    Mdns(mdns::Event),
+}
+
+impl From<mdns::Event> for LiberteEvent {
+    fn from(event: mdns::Event) -> Self { Self::Mdns(event) }
 }
 
 impl From<gossipsub::Event> for LiberteEvent {
@@ -53,3 +59,4 @@ impl From<dcutr::Event> for LiberteEvent {
         LiberteEvent::Dcutr(event)
     }
 }
+

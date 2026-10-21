@@ -1,8 +1,15 @@
 use libp2p::identity::Keypair;
-use tracing::info;
+use tracing::{info, warn};
 
 pub fn build_swarm(
     keypair: Keypair,
+) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
+    build_swarm_with_discovery(keypair, true)
+}
+
+pub fn build_swarm_with_discovery(
+    keypair: Keypair,
+    enable_mdns: bool,
 ) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -19,7 +26,7 @@ pub fn build_swarm(
         .with_quic()
         .with_relay_client(noise::Config::new, libp2p::yamux::Config::default)?
         .with_behaviour(
-            |key,
+            move |key,
              relay_client|
              -> std::result::Result<
                 super::behaviour::LiberteBehaviour,
@@ -65,6 +72,12 @@ pub fn build_swarm(
                 let identify = identify::Behaviour::new(identify_config);
 
                 let dcutr = dcutr::Behaviour::new(local_peer_id);
+                let mdns = if enable_mdns {
+                    match libp2p::mdns::tokio::Behaviour::new(libp2p::mdns::Config::default(), local_peer_id) {
+                        Ok(discovery) => Some(discovery),
+                        Err(error) => { warn!(%error, "LAN discovery unavailable; explicit connections remain available"); None }
+                    }
+                } else { None };
 
                 Ok(super::behaviour::LiberteBehaviour {
                     gossipsub,
@@ -72,6 +85,7 @@ pub fn build_swarm(
                     identify,
                     relay_client,
                     dcutr,
+                    mdns: mdns.into(),
                 })
             },
         )?
@@ -85,3 +99,4 @@ pub fn build_swarm(
 
     Ok(swarm)
 }
+

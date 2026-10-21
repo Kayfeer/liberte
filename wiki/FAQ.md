@@ -1,37 +1,30 @@
-# FAQ
+# Questions fréquentes
 
-## Général
+## Est-ce une version prête à remplacer Discord ?
 
-### Qu'est-ce que Liberté ?
-Liberté est une application de messagerie **chiffrée de bout en bout**, **décentralisée** et **pair-à-pair**. Pas de compte, pas de serveur central, pas de collecte de données.
+La branche 2.4.0 vise à corriger les frontières réseau, stockage et distribution. L'état de la CI, les essais entre appareils et les limitations documentées doivent être examinés avant un déploiement. Aucun nombre d'utilisateurs simultanés n'est garanti.
 
-### Dois-je créer un compte ?
-Non. Votre identité est une **clé cryptographique Ed25519** générée localement sur votre appareil. Pas d'email, pas de numéro de téléphone.
+## Faut-il un serveur ?
 
-### Mes messages sont-ils chiffrés ?
-Oui, tous les messages sont chiffrés avec **XChaCha20-Poly1305** avant d'être stockés et transmis. Seuls les membres du canal possédant la clé peuvent les lire.
+Les échanges directs sont possibles lorsque les pairs peuvent se découvrir et se joindre. Certains réseaux nécessitent un relais P2P et les appels peuvent nécessiter TURN. Un serveur HTTP de sauvegarde ne résout pas ces deux problèmes.
 
-## Technique
+## Les invitations sont-elles confidentielles ?
 
-### Comment fonctionne la connexion entre pairs ?
-Liberté utilise **libp2p** avec le transport **QUIC**. La découverte se fait via mDNS (réseau local) et DHT (Kademlia). Un serveur relay optionnel permet de traverser les NAT.
+Elles contiennent un secret d'accès. Leur signature protège l'intégrité et l'identité du signataire, pas leur confidentialité. Les transmettre en privé, respecter leur expiration et ne pas les publier.
 
-### Que se passe-t-il si je perds mon appareil ?
-Votre clé privée est stockée uniquement sur votre appareil. Si vous perdez l'appareil sans avoir exporté votre profil, votre identité est perdue. **Utilisez la fonction de sauvegarde/export de profil régulièrement.**
+## Puis-je réutiliser les invitations 2.3 ?
 
-### Puis-je utiliser Liberté sur plusieurs appareils ?
-Pas encore nativement, mais vous pouvez **exporter votre profil** depuis un appareil et **l'importer** sur un autre.
+Non pour la nouvelle version de protocole. Mettre à jour les participants et générer de nouvelles invitations. Voir [Migration](Migration-2.4.md).
 
-### Comment inviter quelqu'un dans un canal ?
-Générez un **code d'invitation** depuis le canal. Partagez-le au destinataire qui pourra le coller dans "Rejoindre un canal".
+## Les appels passent-ils par un SFU ?
 
-## Sécurité
+Le client utilise WebRTC entre pairs. La présence de types ou composants SFU dans le dépôt n'est pas une preuve d'un service SFU utilisable.
 
-### Liberté est-il audité ?
-Le code est open source et audité en interne à chaque release. Des audits externes sont prévus pour les versions futures.
+## Pourquoi les mises à jour automatiques peuvent-elles être absentes ?
 
-### Mes métadonnées sont-elles protégées ?
-Les adresses IP sont visibles par les pairs directs (dans le modèle P2P). Un serveur relay peut atténuer ce problème en masquant les IP.
+Elles nécessitent des bundles signés, la clé publique intégrée et un manifeste complet. Sans configuration de signature, la release produit des installateurs manuels et n'annonce pas de mise à jour automatique.
 
-### Le serveur relay peut-il lire mes messages ?
-Non. Les messages sont chiffrés de bout en bout. Le serveur relay ne voit que du trafic chiffré.
+## Le chiffrement protège-t-il un appareil compromis ?
+
+Non. Les clés et le profil local doivent être protégés par les mécanismes du système d'exploitation. Les IP et d'autres métadonnées restent visibles aux participants et aux services réseau utilisés.
+

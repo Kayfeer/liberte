@@ -12,8 +12,7 @@ impl UserId {
 
     pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
         let bytes = hex::decode(s)?;
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
+        let arr = bytes.try_into().map_err(|_| hex::FromHexError::InvalidStringLength)?;
         Ok(Self(arr))
     }
 
@@ -85,3 +84,4 @@ impl FrameType {
         }
     }
 }
+

@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use bincode::Options;
 
 use crate::identity::Identity;
 
@@ -9,12 +10,15 @@ const INVITE_DURATION_SECS: i64 = 300; // 5 minutes
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvitePayload {
+    pub version: u8,
     pub channel_id: Uuid,
     pub channel_name: String,
     pub inviter_pubkey: [u8; 32],
     pub channel_key: [u8; 32],
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    /// Signed connection hints. The invitation itself is a bearer secret, not ciphertext.
+    pub addresses: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,14 +35,20 @@ impl InviteToken {
         channel_name: String,
         channel_key: [u8; 32],
     ) -> Self {
+        Self::create_with_addresses(identity, channel_id, channel_name, channel_key, Vec::new())
+    }
+
+    pub fn create_with_addresses(identity: &Identity, channel_id: Uuid, channel_name: String, channel_key: [u8;32], addresses: Vec<String>) -> Self {
         let now = Utc::now();
         let payload = InvitePayload {
+            version: 2,
             channel_id,
             channel_name,
             inviter_pubkey: identity.public_key_bytes(),
             channel_key,
             created_at: now,
             expires_at: now + Duration::seconds(INVITE_DURATION_SECS),
+            addresses,
         };
 
         let payload_bytes = bincode::serialize(&payload).expect("payload serialization");
@@ -58,12 +68,22 @@ impl InviteToken {
 
     /// Decode a base64url string back into an InviteToken.
     pub fn decode(code: &str) -> Result<Self, InviteError> {
+        if code.len() > 16_384 { return Err(InviteError::InvalidFormat); }
         let bytes = base64_url_decode(code)?;
-        bincode::deserialize(&bytes).map_err(|_| InviteError::InvalidFormat)
+        bincode::DefaultOptions::new().with_fixint_encoding().with_limit(12_288).reject_trailing_bytes()
+            .deserialize(&bytes).map_err(|_| InviteError::InvalidFormat)
     }
 
     /// Verify the token's signature and expiry.
     pub fn verify(&self) -> Result<(), InviteError> {
+        if self.payload.version != 2 || self.payload.channel_name.trim().is_empty()
+            || self.payload.channel_name.len() > 128 || self.payload.addresses.len() > 8
+            || self.payload.addresses.iter().any(|s| s.len() > 1024)
+            || self.payload.created_at > Utc::now() + Duration::seconds(30)
+            || self.payload.expires_at < self.payload.created_at
+            || self.payload.expires_at - self.payload.created_at > Duration::seconds(INVITE_DURATION_SECS) {
+            return Err(InviteError::InvalidFormat);
+        }
         // Check expiry
         if Utc::now() > self.payload.expires_at {
             return Err(InviteError::Expired);
@@ -80,7 +100,7 @@ impl InviteToken {
             .map_err(|_| InviteError::InvalidSignature)?;
 
         verifying_key
-            .verify(&payload_bytes, &signature)
+            .verify_strict(&payload_bytes, &signature)
             .map_err(|_| InviteError::InvalidSignature)
     }
 }
@@ -152,3 +172,4 @@ mod tests {
         assert!(bad_token.verify().is_err());
     }
 }
+

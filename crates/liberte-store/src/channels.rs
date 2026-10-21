@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use uuid::Uuid;
 
 use crate::database::Database;
@@ -53,10 +53,22 @@ impl Database {
     }
 
     pub fn store_channel_key(&self, channel_id: Uuid, key_hex: &str) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO channel_keys (channel_id, key_hex) VALUES (?1, ?2)",
+        let key_hex = hex::encode(crate::backup::decode_key(key_hex)?);
+        let transaction = self.conn().unchecked_transaction()?;
+        let existing: Option<String> = transaction.query_row(
+            "SELECT key_hex FROM channel_keys WHERE channel_id = ?1",
+            params![channel_id.to_string()], |row| row.get(0),
+        ).optional()?;
+        if let Some(existing) = existing {
+            if crate::backup::decode_key(&existing)? != crate::backup::decode_key(&key_hex)? {
+                return Err(StoreError::InvalidBackup("Refusing to replace an existing channel encryption key".into()));
+            }
+        }
+        transaction.execute(
+            "INSERT INTO channel_keys (channel_id, key_hex) VALUES (?1, ?2) ON CONFLICT(channel_id) DO NOTHING",
             params![channel_id.to_string(), key_hex],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -73,9 +85,8 @@ impl Database {
         let mut map = std::collections::HashMap::new();
         for row in rows {
             let (id_str, key) = row.map_err(StoreError::Sqlite)?;
-            if let Ok(id) = Uuid::parse_str(&id_str) {
-                map.insert(id, key);
-            }
+            let id = Uuid::parse_str(&id_str)?;
+            map.insert(id, hex::encode(crate::backup::decode_key(&key)?));
         }
         Ok(map)
     }
@@ -130,3 +141,4 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
         created_at,
     })
 }
+

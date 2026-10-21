@@ -10,6 +10,10 @@ const CURRENT_VERSION: u32 = 3;
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if current > CURRENT_VERSION {
+        return Err(StoreError::Migration("Database was created by a newer version of Liberté".into()));
+    }
+    let transaction = conn.unchecked_transaction()?;
 
     tracing::info!(
         current_version = current,
@@ -35,5 +39,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "user_version", 3)?;
     }
 
+    transaction.commit()?;
     Ok(())
 }
+

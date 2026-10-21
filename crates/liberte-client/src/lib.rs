@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod events;
+pub mod file_transfer;
+pub mod server_client;
 pub mod state;
 pub mod swarm_bridge;
 
@@ -54,7 +56,9 @@ pub fn run() {
             commands::network::connect_peer,
             commands::network::list_peers,
             commands::network::get_connection_mode,
+            commands::network::get_network_status,
             commands::messaging::send_message,
+            commands::messaging::send_typing,
             commands::messaging::get_messages,
             commands::messaging::list_channels,
             commands::messaging::search_messages,
@@ -67,8 +71,13 @@ pub fn run() {
             commands::media::toggle_video,
             commands::media::set_call_mode,
             commands::media::get_call_state,
+            commands::media::send_call_signal,
+            commands::media::announce_call,
             commands::files::send_file,
             commands::files::upload_premium_blob,
+            commands::files::list_channel_files,
+            commands::files::accept_file,
+            commands::files::save_received_file,
             commands::premium::check_premium,
             commands::premium::activate_premium,
             commands::settings::get_settings,
@@ -83,9 +92,12 @@ pub fn run() {
             commands::backup::auto_backup,
             commands::backup::import_backup,
             commands::backup::list_backups,
+            commands::backup::upload_remote_backup,
+            commands::backup::restore_remote_backup,
             commands::profile::export_profile,
             commands::profile::import_profile,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run Tauri application");
 }
+

@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 use crate::behaviour::LiberteEvent;
 use crate::discovery::load_bootstrap_peers;
 use crate::peers::PeerTracker;
-use crate::transport::build_swarm;
+use crate::transport::build_swarm_with_discovery;
 
 use liberte_shared::constants::DEFAULT_QUIC_PORT;
 
@@ -18,9 +18,24 @@ use liberte_shared::constants::DEFAULT_QUIC_PORT;
 pub enum SwarmCommand {
     Dial(Multiaddr),
     PublishMessage { topic: String, data: Vec<u8> },
+    PublishConfirmed { topic: String, data: Vec<u8>, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
+    DialConfirmed { address: Multiaddr, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
+    ListenRelay(Multiaddr),
     SubscribeTopic(String),
+    SubscribeConfirmed { topic: String, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
     GetPeers(tokio::sync::oneshot::Sender<Vec<PeerId>>),
+    GetSnapshot(tokio::sync::oneshot::Sender<NetworkSnapshot>),
     Shutdown,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSnapshot {
+    pub peers: Vec<String>,
+    pub connection_mode: String,
+    pub listen_addresses: Vec<String>,
+    pub external_addresses: Vec<String>,
+    pub local_peer_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +62,18 @@ pub struct SwarmConfig {
     pub bootstrap_peers_path: Option<PathBuf>,
     pub listen_port: u16,
     pub extra_dials: Vec<Multiaddr>,
+    pub enable_mdns: bool,
+    pub loopback_only: bool,
 }
 
 impl Default for SwarmConfig {
     fn default() -> Self {
         Self {
-            bootstrap_peers_path: None,
+            bootstrap_peers_path: std::env::var_os("LIBERTE_BOOTSTRAP_PEERS").map(PathBuf::from),
             listen_port: DEFAULT_QUIC_PORT,
             extra_dials: Vec::new(),
+            enable_mdns: true,
+            loopback_only: false,
         }
     }
 }
@@ -67,10 +86,10 @@ pub async fn spawn_swarm(
     mpsc::Receiver<SwarmNotification>,
     PeerId,
 )> {
-    let mut swarm = build_swarm(keypair)?;
+    let mut swarm = build_swarm_with_discovery(keypair, config.enable_mdns)?;
     let local_peer_id = *swarm.local_peer_id();
 
-    let listen_addr_v4: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", config.listen_port)
+    let listen_addr_v4: Multiaddr = format!("/ip4/{}/udp/{}/quic-v1", if config.loopback_only { "127.0.0.1" } else { "0.0.0.0" }, config.listen_port)
         .parse()
         .expect("valid multiaddr");
     let listen_addr_v6: Multiaddr = format!("/ip6/::/udp/{}/quic-v1", config.listen_port)
@@ -78,7 +97,9 @@ pub async fn spawn_swarm(
         .expect("valid multiaddr");
 
     swarm.listen_on(listen_addr_v4)?;
-    swarm.listen_on(listen_addr_v6)?;
+    if !config.loopback_only {
+        if let Err(e) = swarm.listen_on(listen_addr_v6) { warn!(error = %e, "IPv6 unavailable; IPv4 remains active"); }
+    }
 
     info!(peer_id = %local_peer_id, port = config.listen_port, "Swarm listening");
 
@@ -116,15 +137,47 @@ pub async fn spawn_swarm(
 
     tokio::spawn(async move {
         let mut peer_tracker = PeerTracker::new();
+        let mut pending_dials: Vec<(Multiaddr, tokio::sync::oneshot::Sender<Result<(), String>>, std::time::Instant)> = Vec::new();
+        let mut maintenance = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut relay_reservations = std::collections::HashSet::new();
 
         loop {
             tokio::select! {
+                _ = maintenance.tick() => {
+                    let mut index = 0;
+                    while index < pending_dials.len() {
+                        if pending_dials[index].2.elapsed() >= std::time::Duration::from_secs(12) {
+                            let (_, reply, _) = pending_dials.swap_remove(index);
+                            let _ = reply.send(Err("Connection timed out".into()));
+                        } else { index += 1; }
+                    }
+                }
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(SwarmCommand::Dial(addr)) => {
                             if let Err(e) = swarm.dial(addr.clone()) {
                                 error!(addr = %addr, error = %e, "Dial failed");
                             }
+                        }
+                        Some(SwarmCommand::DialConfirmed { address, reply }) => {
+                            if extract_peer_id(&address).is_some_and(|p| peer_tracker.is_connected(&p)) {
+                                let _ = reply.send(Ok(()));
+                            } else if pending_dials.len() >= 32 {
+                                let _ = reply.send(Err("Too many pending connections".into()));
+                            } else {
+                                match swarm.dial(address.clone()) {
+                                    Ok(()) => pending_dials.push((address, reply, std::time::Instant::now())),
+                                    Err(e) => { let _ = reply.send(Err(e.to_string())); }
+                                }
+                            }
+                        }
+                        Some(SwarmCommand::ListenRelay(address)) => {
+                            if let Err(e) = swarm.listen_on(address) { warn!(error=%e, "Relay reservation failed"); }
+                        }
+                        Some(SwarmCommand::PublishConfirmed { topic, data, reply }) => {
+                            let result = swarm.behaviour_mut().gossipsub.publish(gossipsub::IdentTopic::new(topic), data)
+                                .map(|_| ()).map_err(|e| e.to_string());
+                            let _ = reply.send(result);
                         }
                         Some(SwarmCommand::PublishMessage { topic, data }) => {
                             let gossipsub_topic = gossipsub::IdentTopic::new(&topic);
@@ -146,6 +199,25 @@ pub async fn spawn_swarm(
                                 error!(topic = %topic, error = %e, "Subscribe failed");
                             }
                         }
+                        Some(SwarmCommand::SubscribeConfirmed { topic, reply }) => {
+                            let result = swarm.behaviour_mut().gossipsub.subscribe(&gossipsub::IdentTopic::new(topic))
+                                .map(|_| ()).map_err(|e| e.to_string());
+                            let _ = reply.send(result);
+                        }
+                        Some(SwarmCommand::GetSnapshot(reply)) => {
+                            let append_peer = |address: &Multiaddr| {
+                                if matches!(address.iter().last(), Some(Protocol::P2p(peer)) if peer == local_peer_id) { address.to_string() }
+                                else { address.clone().with(Protocol::P2p(local_peer_id)).to_string() }
+                            };
+                            let snapshot = NetworkSnapshot {
+                                peers: peer_tracker.connected_peers().iter().map(ToString::to_string).collect(),
+                                connection_mode: if peer_tracker.direct_count() > 0 { "direct" } else if peer_tracker.relayed_count() > 0 { "relayed" } else { "disconnected" }.into(),
+                                listen_addresses: swarm.listeners().map(append_peer).collect(),
+                                external_addresses: swarm.external_addresses().map(append_peer).collect(),
+                                local_peer_id: local_peer_id.to_string(),
+                            };
+                            let _ = reply.send(snapshot);
+                        }
                         Some(SwarmCommand::GetPeers(reply)) => {
                             let peers = peer_tracker.connected_peers();
                             let _ = reply.send(peers);
@@ -163,6 +235,16 @@ pub async fn spawn_swarm(
 
                 event = swarm.select_next_some() => {
                     match event {
+                        SwarmEvent::Behaviour(LiberteEvent::Mdns(libp2p::mdns::Event::Discovered(peers))) => {
+                            for (peer, address) in peers {
+                                swarm.behaviour_mut().kademlia.add_address(&peer, address.clone());
+                                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer);
+                                if peer != local_peer_id && !swarm.is_connected(&peer) { let _ = swarm.dial(address.with(Protocol::P2p(peer))); }
+                            }
+                        }
+                        SwarmEvent::Behaviour(LiberteEvent::Mdns(libp2p::mdns::Event::Expired(peers))) => {
+                            for (peer, _) in peers { swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer); }
+                        }
                         SwarmEvent::Behaviour(LiberteEvent::Gossipsub(
                             gossipsub::Event::Message {
                                 propagation_source: _,
@@ -206,6 +288,21 @@ pub async fn spawn_swarm(
                                     .kademlia
                                     .add_address(&peer_id, addr.clone());
                             }
+                            let supports_relay = info.protocols.iter().any(|p| {
+                                let protocol = p.to_string();
+                                protocol.starts_with("/libp2p/circuit/relay/") && protocol.ends_with("/hop")
+                            });
+                            if supports_relay && relay_reservations.insert(peer_id) {
+                                if let Some(connection) = peer_tracker.get(&peer_id) {
+                                    let mut circuit = connection.address.clone();
+                                    if !matches!(circuit.iter().last(), Some(Protocol::P2p(_))) { circuit.push(Protocol::P2p(peer_id)); }
+                                    circuit.push(Protocol::P2pCircuit);
+                                    if let Err(e) = swarm.listen_on(circuit) {
+                                        relay_reservations.remove(&peer_id);
+                                        warn!(error=%e, "Could not reserve relay circuit");
+                                    }
+                                }
+                            }
                         }
 
                         SwarmEvent::Behaviour(LiberteEvent::RelayClient(
@@ -241,6 +338,17 @@ pub async fn spawn_swarm(
                             let addr = endpoint.get_remote_address().clone();
                             let is_relayed = addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
                             peer_tracker.on_connected(peer_id, addr.clone(), is_relayed);
+                            let mut index = 0;
+                            while index < pending_dials.len() {
+                                let requested = &pending_dials[index].0;
+                                let matches = extract_peer_id(requested).map_or_else(
+                                    || requested == &addr || addr.to_string().starts_with(&requested.to_string()),
+                                    |expected| expected == peer_id);
+                                if matches {
+                                    let (_, reply, _) = pending_dials.swap_remove(index);
+                                    let _ = reply.send(Ok(()));
+                                } else { index += 1; }
+                            }
 
                             info!(
                                 peer = %peer_id,
@@ -263,6 +371,7 @@ pub async fn spawn_swarm(
                         } => {
                             if num_established == 0 {
                                 peer_tracker.on_disconnected(&peer_id);
+                                relay_reservations.remove(&peer_id);
                                 info!(peer = %peer_id, "Peer disconnected");
                                 let _ = notif_tx
                                     .send(SwarmNotification::PeerDisconnected { peer_id })
@@ -307,3 +416,4 @@ fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
         }
     })
 }
+

@@ -15,6 +15,8 @@ export default function Header() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Message[]>([]);
   const [searching, setSearching] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [callPending, setCallPending] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeChannel = channels.find((c) => c.id === activeChannelId);
@@ -43,6 +45,17 @@ export default function Header() {
     setShowSearch(false);
     setSearchQuery("");
     setSearchResults([]);
+  };
+
+  const toggleCall = async () => {
+    if (!activeChannelId || callPending) return;
+    setCallPending(true);
+    setCallError(null);
+    try {
+      if (inCall) await endCall();
+      else await startCall(activeChannelId);
+    } catch (error) { setCallError(String(error)); }
+    finally { setCallPending(false); }
   };
 
   return (
@@ -83,9 +96,9 @@ export default function Header() {
 
           {activeChannelId && (
             <button
-              onClick={() =>
-                inCall ? endCall() : startCall(activeChannelId)
-              }
+              onClick={() => void toggleCall()}
+              disabled={callPending}
+              aria-label={inCall ? "Quitter l'appel" : "Rejoindre l'appel"}
               className={`p-2 rounded-lg transition-colors ${
                 inCall
                   ? "bg-red-600 hover:bg-red-700 text-white"
@@ -101,6 +114,8 @@ export default function Header() {
           )}
         </div>
       </div>
+
+      {callError && <p role="alert" className="text-red-300 text-sm px-4 py-2">{callError}</p>}
 
       {/* Search panel */}
       {showSearch && (

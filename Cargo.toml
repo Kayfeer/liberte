@@ -10,11 +10,11 @@ members = [
 ]
 
 [workspace.package]
-version = "2.3.0"
+version = "2.4.0"
 edition = "2021"
 license = "AGPL-3.0"
 authors = ["Kayfeer"]
-rust-version = "1.75"
+rust-version = "1.99"
 
 [workspace.dependencies]
 liberte-shared = { path = "crates/liberte-shared" }
@@ -35,7 +35,7 @@ rand = "0.8"
 blake3 = "1"
 libp2p = { version = "0.54", features = [
     "tokio", "quic", "noise", "yamux",
-    "gossipsub", "kad", "identify",
+    "gossipsub", "kad", "identify", "mdns",
     "relay", "dcutr", "macros", "serde",
 ] }
 hickory-resolver = { version = "0.24", features = ["dns-over-https-rustls", "tokio-runtime"] }
@@ -48,3 +48,4 @@ hex = "0.4"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 bytes = "1"
+

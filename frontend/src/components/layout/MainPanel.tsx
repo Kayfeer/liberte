@@ -4,6 +4,7 @@ import MessageList from "../chat/MessageList";
 import MessageInput from "../chat/MessageInput";
 import TypingIndicator from "../chat/TypingIndicator";
 import VoicePanel from "../voice/VoicePanel";
+import FileTransfers from "../chat/FileTransfers";
 
 export default function MainPanel() {
   const { activeChannelId } = useMessageStore();
@@ -28,6 +29,7 @@ export default function MainPanel() {
     <div className="flex-1 flex flex-col min-h-0">
       {inCall && <VoicePanel />}
       <MessageList channelId={activeChannelId} />
+      <FileTransfers channelId={activeChannelId} />
       <TypingIndicator channelId={activeChannelId} />
       <MessageInput channelId={activeChannelId} />
     </div>

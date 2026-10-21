@@ -71,7 +71,7 @@ impl Database {
     }
 }
 
-fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let id_str: String = row.get(0)?;
     let channel_id_str: String = row.get(1)?;
     let sender_hex: String = row.get(2)?;
@@ -88,10 +88,10 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let sender_bytes = hex::decode(&sender_hex).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
     })?;
-    let mut sender_pubkey = [0u8; 32];
-    if sender_bytes.len() == 32 {
-        sender_pubkey.copy_from_slice(&sender_bytes);
-    }
+    let sender_pubkey: [u8; 32] = sender_bytes.try_into().map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Sender key must be 32 bytes")))
+    })?;
 
     let timestamp: DateTime<Utc> = DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&Utc))
@@ -107,3 +107,4 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         timestamp,
     })
 }
+

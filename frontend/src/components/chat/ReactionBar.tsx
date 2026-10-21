@@ -19,6 +19,7 @@ export default function ReactionBar({
   onReactionChange,
 }: Props) {
   const [showPicker, setShowPicker] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const identity = useIdentityStore((s) => s.identity);
   const myPubkey = identity?.publicKey || "";
@@ -34,6 +35,7 @@ export default function ReactionBar({
   }, []);
 
   const handleToggleReaction = async (emoji: string) => {
+    setError(null);
     const group = reactions.find((r) => r.emoji === emoji);
     const hasReacted = group?.users.includes(myPubkey);
 
@@ -45,13 +47,14 @@ export default function ReactionBar({
       }
       onReactionChange?.();
     } catch (e) {
-      console.error("Failed to toggle reaction:", e);
+      setError(String(e));
     }
     setShowPicker(false);
   };
 
   return (
     <div className="flex items-center gap-1 flex-wrap mt-1">
+      {error && <p role="alert" className="text-xs text-red-300 w-full">{error}</p>}
       {reactions.map((r) => {
         const hasReacted = r.users.includes(myPubkey);
         return (
@@ -100,3 +103,4 @@ export default function ReactionBar({
     </div>
   );
 }
+

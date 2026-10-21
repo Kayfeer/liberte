@@ -1,4 +1,4 @@
-pub const PROTOCOL_VERSION: &str = "/liberte/1.0.0";
+pub const PROTOCOL_VERSION: &str = "/liberte/2.0.0";
 pub const APP_NAME: &str = "Liberté";
 
 pub const NONCE_SIZE: usize = 24;
@@ -21,3 +21,4 @@ pub const KDF_CONTEXT_CHANNEL_KEY: &str = "liberte-channel-key-v1";
 pub const KDF_CONTEXT_DB_KEY: &str = "liberte-db-key-v1";
 
 pub const PREMIUM_PRICE_EUR: f64 = 0.99;
+
