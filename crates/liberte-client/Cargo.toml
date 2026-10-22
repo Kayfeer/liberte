@@ -30,6 +30,7 @@ blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 chrono = { workspace = true }
 directories = "5"
+tempfile = "3"
 uuid = { workspace = true }
 libp2p = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
@@ -37,3 +38,8 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 [lib]
 name = "liberte_client_lib"
 path = "src/lib.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
+

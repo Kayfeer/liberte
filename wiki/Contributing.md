@@ -1,39 +1,29 @@
-# Contributing
+# Contribuer
 
-## Comment contribuer
+Travailler sur une branche et ouvrir une pull request. Les corrections de sécurité doivent inclure un scénario négatif qui échoue avant la correction.
 
-1. **Fork** le dépôt
-2. Créez une branche : `git checkout -b feature/ma-feature`
-3. Commitez : `git commit -m "feat: description"`
-4. Poussez : `git push origin feature/ma-feature`
-5. Ouvrez une **Pull Request**
+## Contrôles
 
-## Conventions
+```bash
+python -m unittest discover -s scripts -p ci_test.py -v
+python scripts/ci.py versions
+npm --prefix frontend ci
+npm --prefix frontend test
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
 
-### Commits
-Suivre [Conventional Commits](https://www.conventionalcommits.org/) :
+Exécuter les smoke tests serveur et Docker pour les modifications concernées. Ne pas masquer un échec par `continue-on-error`, une assertion supprimée, un test ignoré ou une désactivation de l'authentification.
 
-- `feat:` — nouvelle fonctionnalité
-- `fix:` — correction de bug
-- `docs:` — documentation
-- `refactor:` — refactorisation sans changement fonctionnel
-- `security:` — correctif de sécurité
-- `chore:` — maintenance (deps, CI, etc.)
+## Dépendances et versions
 
-### Code Rust
-- `cargo fmt` avant chaque commit
-- `cargo clippy --all-targets` doit passer sans warnings
-- Tests : `cargo test`
+Versionner `Cargo.lock` et `frontend/package-lock.json`. Après modification des manifestes, régénérer les lockfiles avec les outils correspondants et examiner le diff. Un lockfile modifié à la main n'est pas une résolution validée.
 
-### Code TypeScript
-- `npx tsc --noEmit` doit passer sans erreurs
-- Strict mode activé (`noUnusedLocals`, `noUnusedParameters`)
+Les versions Cargo, Tauri et frontend doivent être identiques. Un changement incompatible de protocole nécessite une documentation de migration et un nouveau tag, jamais le déplacement d'un tag existant.
 
-## Structure du projet
+Les workflows de release ne doivent pas recevoir de secrets depuis un code de pull request non fiable. Les builds de PR utilisent uniquement des permissions de lecture.
 
-Voir [Architecture](Architecture) pour la vue d'ensemble des crates et du frontend.
-
-## Issues
-
-- Utilisez les labels appropriés (`bug`, `enhancement`, `security`)
-- Pour les vulnérabilités de sécurité, voir [Security](Security)

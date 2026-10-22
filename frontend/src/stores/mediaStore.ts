@@ -1,128 +1,216 @@
 import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import type { PeerInfo } from "@/lib/types";
+import { MediaSession, type CallSession, type CallSignalEvent } from "@/lib/mediaSession";
+import { SfuSession } from "@/lib/sfuSession";
+import { useIdentityStore } from "./identityStore";
 import * as tauri from "@/lib/tauri";
 
 interface MediaState {
   inCall: boolean;
   channelId: string | null;
   participants: PeerInfo[];
+  localStream: MediaStream | null;
+  remoteStreams: Record<string, MediaStream>;
   isMuted: boolean;
   isVideoEnabled: boolean;
+  busy: boolean;
+  error: string | null;
   mode: "mesh" | "sfu";
   unlisteners: UnlistenFn[];
-
   startCall: (channelId: string) => Promise<void>;
   endCall: () => Promise<void>;
   toggleMute: () => Promise<void>;
   toggleVideo: () => Promise<void>;
   setParticipants: (participants: PeerInfo[]) => void;
   setMode: (mode: "mesh" | "sfu") => Promise<void>;
+  retryConnections: () => void;
+  setError: (error: string | null) => void;
   setupListeners: () => Promise<void>;
   cleanup: () => void;
 }
 
-export const useMediaStore = create<MediaState>((set, get) => ({
-  inCall: false,
-  channelId: null,
-  participants: [],
-  isMuted: false,
-  isVideoEnabled: false,
-  mode: "mesh",
-  unlisteners: [],
+let session: CallSession | null = null;
+let ending: Promise<void> | null = null;
+let generation = 0;
+let listenerGeneration = 0;
+let setupPromise: Promise<void> | null = null;
+const idle = { inCall: false, channelId: null, participants: [], localStream: null, remoteStreams: {}, isMuted: false, isVideoEnabled: false };
+const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-  startCall: async (channelId: string) => {
-    await tauri.startCall(channelId);
-    set({ inCall: true, channelId, isMuted: false, participants: [] });
+export const useMediaStore = create<MediaState>((set, get) => ({
+  ...idle, busy: false, error: null, mode: "mesh", unlisteners: [],
+
+  startCall: async (channelId) => {
+    if (get().busy || get().inCall) return;
+    const identity = useIdentityStore.getState().identity;
+    if (!identity) throw new Error("Identité indisponible.");
+    const callGeneration = ++generation;
+    const mode = get().mode;
+    set({ busy: true, error: null });
+    let backendStarted = false;
+    const current: CallSession = new (mode === "sfu" ? SfuSession : MediaSession)({
+      userId: identity.publicKey,
+      channelId,
+      sendSignal: (target, signalType) => invoke("send_call_signal", { channelId, target, signalType }),
+      announce: () => invoke("announce_call"),
+      onLocalStream: (localStream) => { if (session === current) set({ localStream }); },
+      onRemoteStream: (userId, stream) => {
+        if (session !== current) return;
+        set((state) => {
+          const remoteStreams = { ...state.remoteStreams };
+          if (stream) remoteStreams[userId] = stream; else delete remoteStreams[userId];
+          return { remoteStreams };
+        });
+      },
+      onPeer: (userId, patch) => {
+        if (session !== current) return;
+        set((state) => {
+          const existing = state.participants.find((peer) => peer.userId === userId);
+          const participants = state.participants.filter((peer) => peer.userId !== userId);
+          if (patch) participants.push({ userId, displayName: userId.slice(0, 8), isMuted: false, isVideoEnabled: false, state: "connecting", ...existing, ...patch });
+          return { participants };
+        });
+      },
+      onError: (error) => { if (session === current) set({ error }); },
+      onClosed: (error) => {
+        if (session !== current) return;
+        void get().endCall().catch(() => {}).finally(() => set({ error }));
+      },
+      onCameraEnded: () => {
+        if (session !== current || !get().isVideoEnabled) return;
+        set({ isVideoEnabled: false });
+        void tauri.toggleVideo(false).catch((error) => set({ error: errorText(error) }));
+      },
+    });
+    session = current;
+    try {
+      await get().setupListeners();
+      await tauri.setCallMode(mode);
+      if (generation !== callGeneration) return;
+      set({ channelId, participants: [], remoteStreams: {} });
+      await current.start();
+      if (generation !== callGeneration) return;
+      // Set the channel before publication so an immediate answer is accepted.
+      await tauri.startCall(channelId);
+      backendStarted = true;
+      if (generation !== callGeneration) return;
+      set({ inCall: true, isMuted: false, isVideoEnabled: false, mode });
+      current.announce();
+    } catch (error) {
+      await current.stop();
+      if (backendStarted) await tauri.endCall().catch(() => {});
+      if (session === current) session = null;
+      if (generation === callGeneration) {
+        set({ ...idle, error: errorText(error) });
+        throw error;
+      }
+    } finally {
+      if (generation === callGeneration) set({ busy: false });
+    }
   },
 
-  endCall: async () => {
-    await tauri.endCall();
-    set({ inCall: false, channelId: null, participants: [], isMuted: false });
+  endCall: () => {
+    if (ending) return ending;
+    ++generation;
+    const current = session;
+    session = null;
+    set({ ...idle, busy: true, error: null });
+    const pending = (async () => {
+      try {
+        await current?.stop();
+        await tauri.endCall();
+      } catch (error) { set({ error: errorText(error) }); throw error; }
+      finally { ending = null; set({ busy: false }); }
+    })();
+    ending = pending;
+    return pending;
   },
 
   toggleMute: async () => {
-    const muted = await tauri.toggleMute();
-    set({ isMuted: muted });
+    if (!session || get().busy) return;
+    set({ busy: true, error: null });
+    const current = session;
+    const desired = !get().isMuted;
+    // Silence immediately, even before the IPC roundtrip completes.
+    if (!get().isMuted) current.setMuted(true);
+    try {
+      const isMuted = await tauri.toggleMute(desired);
+      if (session === current) { current.setMuted(isMuted); set({ isMuted }); }
+    } catch (error) {
+      if (session === current) { current.setMuted(true); set({ isMuted: true, error: errorText(error) }); }
+      throw error;
+    } finally { set({ busy: false }); }
   },
 
   toggleVideo: async () => {
-    const enabled = await tauri.toggleVideo();
-    set({ isVideoEnabled: enabled });
+    if (!session || get().busy) return;
+    const current = session;
+    const enabled = !get().isVideoEnabled;
+    set({ busy: true, error: null });
+    try {
+      await current.setVideoEnabled(enabled);
+      if (session !== current) return;
+      const isVideoEnabled = await tauri.toggleVideo(enabled);
+      if (session === current) set({ isVideoEnabled });
+    } catch (error) {
+      if (session === current) {
+        await current.setVideoEnabled(false).catch(() => {});
+        set({ isVideoEnabled: false, error: errorText(error) });
+      }
+      throw error;
+    } finally { set({ busy: false }); }
   },
 
   setParticipants: (participants) => set({ participants }),
-
   setMode: async (mode) => {
-    await tauri.setCallMode(mode);
-    set({ mode });
+    if (get().inCall || get().busy) throw new Error("Quittez l'appel avant de changer de transport.");
+    try { await tauri.setCallMode(mode); set({ mode, error: null }); }
+    catch (error) { set({ error: errorText(error) }); throw error; }
   },
+  retryConnections: () => { set({ error: null }); session?.retryConnections(); },
+  setError: (error) => set({ error }),
 
-  setupListeners: async () => {
+  setupListeners: () => {
+    if (setupPromise) return setupPromise;
+    if (get().unlisteners.length) return Promise.resolve();
+    const setupGeneration = listenerGeneration;
     const unlisteners: UnlistenFn[] = [];
-
-    unlisteners.push(
-      await listen<{ channelId: string; userId: string }>(
-        "voice-peer-joined",
-        (event) => {
-          const { channelId, userId } = event.payload;
-          const state = get();
-          if (state.channelId !== channelId) return;
-          // Add peer if not already present
-          if (!state.participants.find((p) => p.userId === userId)) {
-            set({
-              participants: [
-                ...state.participants,
-                {
-                  userId,
-                  displayName: userId.slice(0, 8),
-                  isMuted: false,
-                  isVideoEnabled: false,
-                  state: "connected",
-                },
-              ],
-            });
+    const promise = (async () => {
+      try {
+        unlisteners.push(await listen<CallSignalEvent>("call-signal", ({ payload }) => {
+          void session?.receive?.(payload).catch((error) => set({ error: errorText(error) }));
+        }));
+        unlisteners.push(await listen<{ channelId: string; userId: string }>("voice-peer-joined", ({ payload }) => {
+          if (get().channelId === payload.channelId) {
+            try { session?.ensurePeer?.(payload.userId); }
+            catch (error) { set({ error: errorText(error) }); }
           }
-        }
-      )
-    );
-
-    unlisteners.push(
-      await listen<{ channelId: string; userId: string }>(
-        "voice-peer-left",
-        (event) => {
-          const { channelId, userId } = event.payload;
-          const state = get();
-          if (state.channelId !== channelId) return;
-          set({
-            participants: state.participants.filter((p) => p.userId !== userId),
-          });
-        }
-      )
-    );
-
-    unlisteners.push(
-      await listen<{ channelId: string; userId: string; muted: boolean }>(
-        "voice-peer-muted",
-        (event) => {
-          const { channelId, userId, muted } = event.payload;
-          const state = get();
-          if (state.channelId !== channelId) return;
-          set({
-            participants: state.participants.map((p) =>
-              p.userId === userId ? { ...p, isMuted: muted } : p
-            ),
-          });
-        }
-      )
-    );
-
-    set({ unlisteners });
+        }));
+        unlisteners.push(await listen<{ channelId: string; userId: string }>("voice-peer-left", ({ payload }) => {
+          if (get().channelId === payload.channelId) session?.removePeer?.(payload.userId);
+        }));
+        unlisteners.push(await listen<{ channelId: string; userId: string; muted: boolean }>("voice-peer-muted", ({ payload }) => {
+          if (get().channelId === payload.channelId) set((state) => ({ participants: state.participants.map((peer) => peer.userId === payload.userId ? { ...peer, isMuted: payload.muted } : peer) }));
+        }));
+        // A WebView reload may outlive its JS tracks but leave backend presence
+        // active. Reconcile it before accepting the next call.
+        if (!session && setupGeneration === listenerGeneration) await tauri.endCall();
+        if (setupGeneration !== listenerGeneration) unlisteners.forEach((unlisten) => unlisten());
+        else set({ unlisteners });
+      } catch (error) { unlisteners.forEach((unlisten) => unlisten()); throw error; }
+    })();
+    setupPromise = promise;
+    void promise.finally(() => { if (setupPromise === promise) setupPromise = null; }).catch(() => {});
+    return promise;
   },
 
   cleanup: () => {
-    const { unlisteners } = get();
-    unlisteners.forEach((fn) => fn());
+    ++listenerGeneration;
+    setupPromise = null;
+    get().unlisteners.forEach((unlisten) => unlisten());
     set({ unlisteners: [] });
+    if (session) void get().endCall().catch(() => {});
   },
 }));

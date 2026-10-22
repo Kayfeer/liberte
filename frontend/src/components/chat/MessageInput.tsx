@@ -2,8 +2,9 @@ import { useState, useRef } from "react";
 import { Send, Paperclip } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useMessageStore } from "../../stores/messageStore";
-import { sendFile } from "../../lib/tauri";
-import { MAX_MESSAGE_LENGTH } from "../../lib/constants";
+import { sendFile, sendTyping } from "../../lib/tauri";
+import { MAX_MESSAGE_LENGTH, TYPING_THROTTLE } from "../../lib/constants";
+import { useFileStore } from "../../stores/fileStore";
 
 interface Props {
   channelId: string;
@@ -12,7 +13,9 @@ interface Props {
 export default function MessageInput({ channelId }: Props) {
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const typingSentAt = useRef(0);
   const { sendMessage } = useMessageStore();
 
   const handleSend = async () => {
@@ -20,12 +23,13 @@ export default function MessageInput({ channelId }: Props) {
     if (!trimmed || sending) return;
 
     setSending(true);
+    setError(null);
     try {
       await sendMessage(channelId, trimmed);
       setContent("");
       inputRef.current?.focus();
     } catch (e) {
-      console.error("Failed to send message:", e);
+      setError(String(e));
     } finally {
       setSending(false);
     }
@@ -39,6 +43,7 @@ export default function MessageInput({ channelId }: Props) {
   };
 
   const handleFileAttach = async () => {
+    setError(null);
     try {
       const selected = await open({
         multiple: false,
@@ -46,14 +51,16 @@ export default function MessageInput({ channelId }: Props) {
       });
       if (selected) {
         await sendFile(channelId, selected);
+        await useFileStore.getState().load(channelId);
       }
     } catch (e) {
-      console.error("Failed to attach file:", e);
+      setError(String(e));
     }
   };
 
   return (
     <div className="px-4 pb-4">
+      {error && <p role="alert" className="text-sm text-red-300 mb-2">{error}</p>}
       <div className="flex items-end gap-2 bg-liberte-surface rounded-lg border border-liberte-border p-2">
         <button
           onClick={handleFileAttach}
@@ -65,11 +72,18 @@ export default function MessageInput({ channelId }: Props) {
         <textarea
           ref={inputRef}
           value={content}
-          onChange={(e) => setContent(e.target.value.slice(0, MAX_MESSAGE_LENGTH))}
+          onChange={(e) => {
+            const value = e.target.value.slice(0, MAX_MESSAGE_LENGTH);
+            setContent(value);
+            if (value.trim() && Date.now() - typingSentAt.current >= TYPING_THROTTLE) {
+              typingSentAt.current = Date.now();
+              void sendTyping(channelId).catch(() => { /* Presence is best effort. */ });
+            }
+          }}
           onKeyDown={handleKeyDown}
           placeholder="Envoyer un message chiffré..."
           rows={1}
-          className="flex-1 bg-transparent resize-none outline-none text-sm
+          className="flex-1 bg-transparent resize-none outline-hidden text-sm
                      text-liberte-text placeholder-liberte-muted py-2
                      max-h-32 overflow-y-auto"
         />

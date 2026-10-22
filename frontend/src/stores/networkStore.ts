@@ -5,41 +5,46 @@ import * as tauri from "@/lib/tauri";
 interface NetworkState {
   peers: string[];
   connectionMode: ConnectionMode;
+  listenAddresses: string[];
+  externalAddresses: string[];
+  localPeerId: string | null;
+  error: string | null;
   loading: boolean;
   connectPeer: (multiaddr: string) => Promise<void>;
   refreshPeers: () => Promise<void>;
   refreshConnectionMode: () => Promise<void>;
-  setPeers: (peers: string[]) => void;
-  setConnectionMode: (mode: ConnectionMode) => void;
+  refreshNetwork: () => Promise<void>;
 }
 
-export const useNetworkStore = create<NetworkState>((set) => ({
-  peers: [],
-  connectionMode: "disconnected",
-  loading: false,
-
-  connectPeer: async (multiaddr: string) => {
-    set({ loading: true });
+let refreshRequest: Promise<void> | null = null;
+export const useNetworkStore = create<NetworkState>((set, get) => ({
+  peers: [], connectionMode: "disconnected", listenAddresses: [], externalAddresses: [], localPeerId: null,
+  error: null, loading: false,
+  connectPeer: async (multiaddr) => {
+    set({ loading: true, error: null });
     try {
-      await tauri.connectPeer(multiaddr);
-      const peers = await tauri.listPeers();
-      set({ peers, loading: false });
-    } catch (e) {
+      await tauri.connectPeer(multiaddr.trim());
+      await get().refreshNetwork();
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    } finally {
       set({ loading: false });
-      throw e;
     }
   },
-
-  refreshPeers: async () => {
-    const peers = await tauri.listPeers();
-    set({ peers });
+  refreshPeers: () => get().refreshNetwork(),
+  refreshConnectionMode: () => get().refreshNetwork(),
+  refreshNetwork: () => {
+    if (refreshRequest) return refreshRequest;
+    refreshRequest = (async () => {
+      try {
+        set(await tauri.getNetworkStatus());
+      } catch (error) {
+        set({ error: String(error), connectionMode: "disconnected" });
+      } finally {
+        refreshRequest = null;
+      }
+    })();
+    return refreshRequest;
   },
-
-  refreshConnectionMode: async () => {
-    const mode = await tauri.getConnectionMode();
-    set({ connectionMode: mode });
-  },
-
-  setPeers: (peers) => set({ peers }),
-  setConnectionMode: (mode) => set({ connectionMode: mode }),
 }));

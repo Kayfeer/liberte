@@ -8,84 +8,116 @@ interface MessageState {
   activeChannelId: string | null;
   messages: Record<string, Message[]>;
   channelKeys: Record<string, string>;
-  loading: boolean;
-
+  loadingByChannel: Record<string, boolean>;
+  loadingMore: Record<string, boolean>;
+  hasMore: Record<string, boolean>;
+  errors: Record<string, string | null>;
+  error: string | null;
   loadChannels: () => Promise<void>;
   setActiveChannel: (channelId: string) => void;
   loadMessages: (channelId: string) => Promise<void>;
+  loadMoreMessages: (channelId: string) => Promise<void>;
   sendMessage: (channelId: string, content: string) => Promise<void>;
   addMessage: (message: Message) => void;
   createChannel: (name: string) => Promise<void>;
   setChannelKey: (channelId: string, keyHex: string) => void;
 }
 
+function mergeMessages(existing: Message[], incoming: Message[]) {
+  const byId = new Map(existing.map((message) => [message.id, message]));
+  for (const message of incoming) byId.set(message.id, message);
+  return [...byId.values()].sort((a, b) =>
+    a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id));
+}
+
+let channelsRequest: Promise<void> | null = null;
+const refreshVersions = new Map<string, number>();
+
 export const useMessageStore = create<MessageState>((set, get) => ({
-  channels: [],
-  activeChannelId: null,
-  messages: {},
-  channelKeys: {},
-  loading: false,
+  channels: [], activeChannelId: null, messages: {}, channelKeys: {},
+  loadingByChannel: {}, loadingMore: {}, hasMore: {}, errors: {}, error: null,
 
-  loadChannels: async () => {
-    const channels = await tauri.listChannels();
-    const channelKeys = await tauri.getAllChannelKeys();
-    set((state) => ({
-      channels,
-      channelKeys: { ...state.channelKeys, ...channelKeys },
-    }));
+  loadChannels: () => {
+    if (channelsRequest) return channelsRequest;
+    channelsRequest = (async () => {
+      try {
+        const [channels, channelKeys] = await Promise.all([
+          tauri.listChannels(), tauri.getAllChannelKeys(),
+        ]);
+        set({ channels, channelKeys, error: null });
+      } catch (error) {
+        set({ error: `Impossible de charger les canaux : ${String(error)}` });
+      } finally {
+        channelsRequest = null;
+      }
+    })();
+    return channelsRequest;
   },
 
-  setActiveChannel: (channelId: string) => {
+  setActiveChannel: (channelId) => {
     set({ activeChannelId: channelId });
-    get().loadMessages(channelId);
+    void get().loadMessages(channelId);
   },
 
-  loadMessages: async (channelId: string) => {
-    set({ loading: true });
+  loadMessages: async (channelId) => {
+    const version = (refreshVersions.get(channelId) ?? 0) + 1;
+    refreshVersions.set(channelId, version);
+    set((state) => ({
+      loadingByChannel: { ...state.loadingByChannel, [channelId]: true },
+      errors: { ...state.errors, [channelId]: null },
+    }));
     try {
-      const keyHex = get().channelKeys[channelId] || "";
-      const msgs = await tauri.getMessages(channelId, keyHex, MESSAGE_PAGE_SIZE, 0);
+      const messages = await tauri.getMessages(channelId, get().channelKeys[channelId] || "", MESSAGE_PAGE_SIZE, 0);
+      if (refreshVersions.get(channelId) !== version) return;
       set((state) => ({
-        messages: { ...state.messages, [channelId]: msgs },
-        loading: false,
+        messages: { ...state.messages, [channelId]: mergeMessages(state.messages[channelId] || [], messages) },
+        hasMore: { ...state.hasMore, [channelId]: state.hasMore[channelId] ?? messages.length === MESSAGE_PAGE_SIZE },
+        loadingByChannel: { ...state.loadingByChannel, [channelId]: false },
       }));
-    } catch {
-      set({ loading: false });
+    } catch (error) {
+      if (refreshVersions.get(channelId) !== version) return;
+      set((state) => ({
+        loadingByChannel: { ...state.loadingByChannel, [channelId]: false },
+        errors: { ...state.errors, [channelId]: String(error) },
+      }));
     }
   },
 
-  sendMessage: async (channelId: string, content: string) => {
-    const keyHex = get().channelKeys[channelId] || "";
-    await tauri.sendMessage(channelId, content, keyHex);
+  loadMoreMessages: async (channelId) => {
+    if (get().loadingMore[channelId] || get().hasMore[channelId] === false) return;
+    const offset = get().messages[channelId]?.length || 0;
+    set((state) => ({ loadingMore: { ...state.loadingMore, [channelId]: true } }));
+    try {
+      const messages = await tauri.getMessages(channelId, get().channelKeys[channelId] || "", MESSAGE_PAGE_SIZE, offset);
+      set((state) => ({
+        messages: { ...state.messages, [channelId]: mergeMessages(state.messages[channelId] || [], messages) },
+        hasMore: { ...state.hasMore, [channelId]: messages.length === MESSAGE_PAGE_SIZE },
+        errors: { ...state.errors, [channelId]: null },
+      }));
+    } catch (error) {
+      set((state) => ({ errors: { ...state.errors, [channelId]: String(error) } }));
+    } finally {
+      set((state) => ({ loadingMore: { ...state.loadingMore, [channelId]: false } }));
+    }
   },
 
-  addMessage: (message: Message) => {
-    set((state) => {
-      const existing = state.messages[message.channelId] || [];
-      return {
-        messages: {
-          ...state.messages,
-          [message.channelId]: [...existing, message],
-        },
-      };
-    });
+  sendMessage: async (channelId, content) => {
+    await tauri.sendMessage(channelId, content, get().channelKeys[channelId] || "");
+    await get().loadMessages(channelId);
   },
 
-  createChannel: async (name: string) => {
+  addMessage: (message) => set((state) => ({
+    messages: { ...state.messages, [message.channelId]: mergeMessages(state.messages[message.channelId] || [], [message]) },
+  })),
+
+  createChannel: async (name) => {
     const result = await tauri.createChannel(name);
     set((state) => ({
-      channels: [
-        { id: result.id, name: result.name, createdAt: new Date().toISOString() },
-        ...state.channels,
-      ],
+      channels: [{ id: result.id, name: result.name, createdAt: new Date().toISOString() }, ...state.channels],
       channelKeys: { ...state.channelKeys, [result.id]: result.channelKeyHex },
       activeChannelId: result.id,
     }));
   },
 
-  setChannelKey: (channelId: string, keyHex: string) => {
-    set((state) => ({
-      channelKeys: { ...state.channelKeys, [channelId]: keyHex },
-    }));
-  },
+  setChannelKey: (channelId, keyHex) => set((state) => ({ channelKeys: { ...state.channelKeys, [channelId]: keyHex } })),
 }));

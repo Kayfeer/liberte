@@ -37,7 +37,7 @@ export default function UpdateBanner() {
     setStatus("downloading");
     try {
       const update = await check();
-      if (!update) return;
+      if (!update) { setStatus("idle"); return; }
 
       let totalBytes = 0;
       let downloadedBytes = 0;
@@ -72,7 +72,7 @@ export default function UpdateBanner() {
     <div className="bg-liberte-accent/10 border-b border-liberte-accent/30 px-4 py-2 flex items-center gap-3 text-sm">
       {status === "available" && (
         <>
-          <Download className="w-4 h-4 text-liberte-accent flex-shrink-0" />
+          <Download className="w-4 h-4 text-liberte-accent shrink-0" />
           <span className="flex-1">
             Mise à jour <strong>v{version}</strong> disponible
           </span>
@@ -93,7 +93,7 @@ export default function UpdateBanner() {
 
       {status === "downloading" && (
         <>
-          <RefreshCw className="w-4 h-4 text-liberte-accent animate-spin flex-shrink-0" />
+          <RefreshCw className="w-4 h-4 text-liberte-accent animate-spin shrink-0" />
           <span className="flex-1">
             Téléchargement de la mise à jour... {progress}%
           </span>
@@ -108,7 +108,7 @@ export default function UpdateBanner() {
 
       {status === "ready" && (
         <>
-          <Download className="w-4 h-4 text-green-400 flex-shrink-0" />
+          <Download className="w-4 h-4 text-green-400 shrink-0" />
           <span className="flex-1">
             Mise à jour prête — redémarrage nécessaire
           </span>
@@ -137,3 +137,4 @@ export default function UpdateBanner() {
     </div>
   );
 }
+

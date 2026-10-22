@@ -18,6 +18,7 @@ export default function TypingIndicator({ channelId }: Props) {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    setTypingUsers([]);
     const unlisten = listen<TypingEvent>(EVENTS.TYPING_INDICATOR, (event) => {
       const { userId, displayName, channelId: evtChannel } = event.payload;
       if (evtChannel !== channelId) return;
@@ -69,3 +70,4 @@ export default function TypingIndicator({ channelId }: Props) {
     </div>
   );
 }
+

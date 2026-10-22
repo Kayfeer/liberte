@@ -7,7 +7,7 @@ use tracing::info;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     pub display_name: Option<String>,
     pub notifications_enabled: bool,
@@ -70,6 +70,16 @@ pub fn update_settings(
     state: State<'_, Arc<Mutex<AppState>>>,
     settings: AppSettings,
 ) -> Result<(), String> {
+    if !settings.server_url.trim().is_empty() {
+        crate::server_client::endpoint(&settings.server_url, "/info")?;
+    }
+    if settings
+        .display_name
+        .as_ref()
+        .is_some_and(|name| name.len() > 128)
+    {
+        return Err("Nom trop long (128 octets maximum)".into());
+    }
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
 
     let db = guard
@@ -100,25 +110,38 @@ pub fn update_settings(
     drop(guard);
     if let Ok(mut guard) = state.lock() {
         guard.server_url = settings.server_url.clone();
+        crate::commands::premium::restore_status(&mut guard);
     }
 
     Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
     pub name: String,
     pub version: String,
+    #[serde(alias = "premium_required")]
     pub premium_required: bool,
+    #[serde(alias = "registration_open")]
     pub registration_open: bool,
+    #[serde(alias = "max_peers")]
     pub max_peers: usize,
+    #[serde(default, alias = "payment_server_pubkey")]
+    pub payment_server_pubkey: Option<String>,
 }
 
 #[tauri::command]
 pub async fn get_server_info(server_url: String) -> Result<ServerInfo, String> {
-    let url = format!("{}/info", server_url.trim_end_matches('/'));
+    let url = crate::server_client::endpoint(&server_url, "/info")?;
 
-    let resp = reqwest::get(&url)
+    let resp = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("Impossible de contacter le serveur: {e}"))?;
 
@@ -126,10 +149,5 @@ pub async fn get_server_info(server_url: String) -> Result<ServerInfo, String> {
         return Err(format!("Le serveur a répondu {}", resp.status()));
     }
 
-    let info: ServerInfo = resp
-        .json()
-        .await
-        .map_err(|e| format!("Réponse invalide du serveur: {e}"))?;
-
-    Ok(info)
+    crate::server_client::read_json_limited(resp, 65536).await
 }

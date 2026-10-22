@@ -1,77 +1,38 @@
-# Security Policy
+# Politique de sécurité
 
-## Supported Versions
+## Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| < 0.2   | :x:                |
+La branche 2.4.0 contient les corrections en cours de validation. Les versions historiques 2.3 et antérieures utilisent l'ancien protocole et ne doivent pas être considérées comme équivalentes. Une compilation réussie ne valide pas à elle seule les propriétés de sécurité.
 
-## Reporting a Vulnerability
+## Signaler un problème
 
-If you discover a security vulnerability in **Liberté**, please report it
-responsibly. **Do not open a public GitHub issue.**
+Envoyer les détails à **genesistrakd@gmail.com**, sans publier de secret ni de preuve contenant des données privées dans une issue publique. Indiquer la version, les préconditions, les étapes reproductibles et l'impact. Aucun délai de correction garanti n'est annoncé dans ce dépôt.
 
-### How to report
+## Garanties recherchées et contrôles
 
-1. **Email**: Send details to **genesistrakd@gmail.com** (or contact the
-   maintainer [@Kayfeer](https://github.com/Kayfeer) directly via GitHub
-   private message).
-2. Include:
-   - A description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if any)
+- Chaque enveloppe réseau est chiffrée avec une clé de canal et authentifiée par la signature Ed25519 de son auteur.
+- L'identifiant, le canal et la date font partie des données authentifiées. Les messages hors fenêtre temporelle et les rejeux sont refusés.
+- Les invitations sont signées et temporaires. Elles contiennent la clé d'accès du canal : ce sont des secrets au porteur, pas des liens publics.
+- Les opérations de stockage HTTP exigent la preuve de possession d'une clé, avec protection contre le rejeu. Le chiffrement du contenu reste effectué côté client.
+- L'administration utilise un jeton distinct. Une valeur vide désactive l'API d'administration.
+- Une mise à jour automatique utilise un manifeste HTTPS référençant les paquets signés ; leurs signatures sont vérifiées avec la clé publique configurée. Le manifeste JSON n'a pas de signature séparée.
 
-### What to expect
+Les détails exécutables sont dans le code et les tests. Les fonctions déclarées mais non branchées ne constituent pas une garantie.
 
-- **Acknowledgement** within **48 hours**
-- A fix or mitigation within **7 days** for critical issues
-- Credit in the release notes (unless you prefer to remain anonymous)
+## Limites du modèle
 
-## Security Architecture
+- Une personne ayant accès au profil local de l'utilisateur peut accéder aux secrets locaux. Le stockage SQLite n'est pas un coffre matériel ni un chiffrement intégral du disque.
+- Les clés de canal sont durables. Pas de double ratchet, de confidentialité persistante des anciens messages après compromission de la clé, ni de révocation rétroactive des invitations déjà utilisées.
+- Les membres d'un canal peuvent copier le contenu et le retransmettre. La suppression locale ne retire pas les copies distantes.
+- Les pairs directs connaissent leurs adresses IP. Le chiffrement ne rend pas les participants anonymes.
+- La protection contre le rejeu est bornée. Le registre HTTP est persisté localement ; le registre des enveloppes P2P est en mémoire. Ils ne constituent pas un journal distribué.
+- Les connexions réseau, DNS, WebRTC, sauvegardes et téléchargements de mises à jour utilisent leurs propres chemins. Ne pas supposer que tout le trafic réseau est routé par un résolveur unique.
+- En mode SFU, le client configure le chiffrement de bout en bout du SDK LiveKit avec une clé de canal. Le serveur conserve la visibilité sur les participants, les connexions et les métadonnées. La clé est partagée entre membres, sans révocation rétroactive ; vérifier la compatibilité des WebViews et le refus de publication sans E2EE avant usage sensible.
+- Les limites de débit, de stockage et de nombre de pairs doivent être adaptées à l'hébergement. Un service public requiert supervision, mises à jour, sauvegardes et gestion des abus.
 
-Liberté is designed with a **zero-trust, privacy-first** approach:
+## Déploiement
 
-| Layer            | Technology                         |
-| ---------------- | ---------------------------------- |
-| End-to-end encryption | XChaCha20-Poly1305 (symmetric key per channel) |
-| Key exchange     | Noise Protocol (XX pattern)        |
-| Identity         | Ed25519 keypair (generated locally) |
-| Transport        | QUIC + TLS 1.3 via libp2p          |
-| Database         | SQLite WAL (local only)            |
-| Key derivation   | BLAKE3 (DB key from Ed25519 secret)|
+Conserver l'API HTTP en écoute locale derrière un proxy HTTPS. Ne pas exposer le jeton administrateur à un client non fiable. Utiliser un compte TURN dédié avec un mot de passe aléatoire, des quotas et une rotation. Pour LiveKit, employer une URL WSS avec certificat valide et conserver la clé API secrète côté serveur. Ne jamais copier la clé privée de signature des releases dans une configuration client.
 
-### Design Principles
+La CI doit être verte sur le commit effectivement distribué, avec `Cargo.lock` versionné. Les tests automatisés ne remplacent ni les essais sur plusieurs machines, ni la revue indépendante des frontières cryptographiques.
 
-- **No accounts, no servers required** — identity is a local Ed25519 keypair
-- **No telemetry** — zero data sent to any central server
-- **Secret key never leaves the device** unless explicitly exported by the user
-- **Channel keys** are per-channel symmetric keys shared via encrypted invite codes
-- **Messages are encrypted before storage** — the database stores only ciphertext
-- **Peer-to-peer by default** — optional relay servers for NAT traversal only
-
-## Threat Model
-
-### In scope
-- Message confidentiality (E2EE)
-- Identity authenticity (Ed25519 signatures)
-- Forward secrecy at transport level (QUIC/Noise)
-- Local data protection (encrypted messages in DB)
-
-### Out of scope (known limitations)
-- **Metadata leakage**: IP addresses are visible to direct peers
-- **No perfect forward secrecy** at the message level (channel keys are long-lived)
-- **Local device compromise**: If an attacker has access to the device, the unencrypted secret key in the local database is exposed
-- **No message deletion guarantee**: Messages stored locally by recipients cannot be remotely deleted
-
-## Dependencies
-
-Security-critical dependencies are regularly audited:
-
-- `chacha20poly1305` — RustCrypto (audited)
-- `ed25519-dalek` — well-established Rust implementation
-- `blake3` — official BLAKE3 team implementation
-- `snow` — Noise Protocol implementation
-- `libp2p` — networking stack (widely used in IPFS, Filecoin, etc.)
-- `rusqlite` — SQLite bindings

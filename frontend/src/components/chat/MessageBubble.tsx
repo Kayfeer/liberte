@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Message } from "../../lib/types";
 import ReactionBar from "./ReactionBar";
 import ProfileModal from "../identity/ProfileModal";
+import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
   message: Message;
@@ -10,7 +11,8 @@ interface Props {
 
 export default function MessageBubble({ message, onReactionChange }: Props) {
   const shortId = message.senderId.slice(0, 8);
-  const displayLabel = message.senderDisplayName || shortId;
+  const profile = useProfileStore((state) => state.profiles[message.senderId]);
+  const displayLabel = profile?.displayName || message.senderDisplayName || shortId;
   const avatarLetters = message.senderDisplayName
     ? message.senderDisplayName.slice(0, 2).toUpperCase()
     : shortId.slice(0, 2).toUpperCase();
@@ -26,7 +28,7 @@ export default function MessageBubble({ message, onReactionChange }: Props) {
         {/* Avatar — clickable for profile */}
         <button
           onClick={() => setShowProfile(true)}
-          className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
+          className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
           style={{
             backgroundColor: `hsl(${hashCode(message.senderId) % 360}, 60%, 40%)`,
           }}

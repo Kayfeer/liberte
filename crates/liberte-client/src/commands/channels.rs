@@ -25,6 +25,10 @@ pub async fn create_channel(
     state: State<'_, Arc<Mutex<AppState>>>,
     name: String,
 ) -> Result<CreateChannelResult, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() || name.len() > 128 {
+        return Err("Channel name must contain 1 to 128 bytes".into());
+    }
     let channel_id = Uuid::new_v4();
     let channel_key = generate_symmetric_key();
     let channel_key_hex = hex::encode(channel_key);
@@ -71,7 +75,7 @@ pub async fn create_channel(
 }
 
 #[tauri::command]
-pub fn generate_invite(
+pub async fn generate_invite(
     state: State<'_, Arc<Mutex<AppState>>>,
     channel_id: String,
     channel_name: String,
@@ -88,13 +92,41 @@ pub fn generate_invite(
     let mut channel_key = [0u8; 32];
     channel_key.copy_from_slice(&key_bytes);
 
-    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    let identity = guard
-        .identity
-        .as_ref()
-        .ok_or_else(|| "No identity loaded".to_string())?;
-
-    let token = InviteToken::create(identity, channel_uuid, channel_name, channel_key);
+    let (identity, tx) = {
+        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+        let db = guard.database.as_ref().ok_or("Database not opened")?;
+        let stored = db
+            .get_channel_key(channel_uuid)
+            .map_err(|e| e.to_string())?;
+        if stored != channel_key_hex {
+            return Err("Channel key does not match this profile".into());
+        }
+        (
+            guard.identity.clone().ok_or("No identity loaded")?,
+            guard.swarm_cmd_tx.clone(),
+        )
+    };
+    if channel_name.trim().is_empty() || channel_name.len() > 128 {
+        return Err("Invalid channel name".into());
+    }
+    let mut addresses = Vec::new();
+    if let Some(tx) = tx {
+        if let Ok(snapshot) = liberte_net::network_snapshot(&tx).await {
+            addresses.extend(snapshot.external_addresses);
+            addresses.extend(snapshot.listen_addresses);
+            let mut seen = std::collections::HashSet::new();
+            addresses.retain(|address| seen.insert(address.clone()));
+            addresses.sort_by_key(|address| !address.contains("/p2p-circuit"));
+            addresses.truncate(8);
+        }
+    }
+    let token = InviteToken::create_with_addresses(
+        &identity,
+        channel_uuid,
+        channel_name,
+        channel_key,
+        addresses,
+    );
     let code = token.encode();
 
     info!(channel_id = %channel_id, "Invite generated");
@@ -134,6 +166,11 @@ pub async fn accept_invite(
             .ok_or_else(|| "Database not opened".to_string())?;
 
         // Use INSERT OR IGNORE in case channel already exists
+        if let Ok(existing) = db.get_channel_key(channel_id) {
+            if existing != channel_key_hex {
+                return Err("This invitation conflicts with the existing channel key".into());
+            }
+        }
         let _ = db.create_channel(&channel);
 
         db.store_channel_key(channel_id, &channel_key_hex)
@@ -148,9 +185,26 @@ pub async fn accept_invite(
         let _ = tx
             .send(liberte_net::SwarmCommand::SubscribeTopic(topic))
             .await;
+        for raw in &token.payload.addresses {
+            if let Ok(address) = raw.parse::<libp2p::Multiaddr>() {
+                // Generated invitations contain literal IP addresses; no system-DNS fallback.
+                if !address.iter().any(|p| {
+                    matches!(
+                        p,
+                        libp2p::multiaddr::Protocol::Dns(_)
+                            | libp2p::multiaddr::Protocol::Dns4(_)
+                            | libp2p::multiaddr::Protocol::Dns6(_)
+                            | libp2p::multiaddr::Protocol::Dnsaddr(_)
+                    )
+                }) {
+                    let _ = tx.send(liberte_net::SwarmCommand::Dial(address)).await;
+                }
+            }
+        }
     }
 
     info!(channel_id = %channel_id, name = %channel_name, "Joined channel via invite");
+    crate::commands::identity::spawn_profile_broadcast(state.inner().clone());
 
     Ok(CreateChannelResult {
         id: channel_id.to_string(),

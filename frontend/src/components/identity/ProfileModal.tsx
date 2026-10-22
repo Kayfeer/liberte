@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, Copy, Check, Pencil } from "lucide-react";
 import type { UserStatus } from "../../lib/types";
 import { useIdentityStore } from "../../stores/identityStore";
+import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export default function ProfileModal({
   displayName,
 }: Props) {
   const { identity, setBio, setStatus, setDisplayName } = useIdentityStore();
+  const remoteProfile = useProfileStore((state) => userId ? state.profiles[userId] : undefined);
   const [copied, setCopied] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState("");
@@ -44,11 +46,11 @@ export default function ProfileModal({
   const profilePubkey = userId || identity?.publicKey || "";
   const profileName = isOwnProfile
     ? identity?.displayName
-    : displayName;
-  const profileBio = isOwnProfile ? identity?.bio : undefined;
-  const profileStatus: UserStatus = isOwnProfile
+    : remoteProfile?.displayName || displayName;
+  const profileBio = isOwnProfile ? identity?.bio : remoteProfile?.bio;
+  const profileStatus: UserStatus | null = isOwnProfile
     ? identity?.status || "online"
-    : "online";
+    : remoteProfile?.status || null;
   const shortId = profilePubkey.length > 16
     ? `${profilePubkey.slice(0, 8)}…${profilePubkey.slice(-8)}`
     : profilePubkey;
@@ -78,7 +80,7 @@ export default function ProfileModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs">
       <div className="bg-liberte-surface border border-liberte-border rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
         {/* Banner */}
         <div
@@ -108,8 +110,8 @@ export default function ProfileModal({
             </div>
             {/* Status dot */}
             <div
-              className={`absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-liberte-surface ${STATUS_COLORS[profileStatus]}`}
-              title={STATUS_LABELS[profileStatus]}
+              className={`absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-liberte-surface ${STATUS_COLORS[profileStatus || "invisible"]}`}
+              title={(profileStatus ? STATUS_LABELS[profileStatus] : "Statut non observé")}
             />
           </div>
         </div>
@@ -128,7 +130,7 @@ export default function ProfileModal({
                   placeholder="Pseudo"
                   maxLength={32}
                   autoFocus
-                  className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-none focus:border-liberte-accent"
+                  className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-hidden focus:border-liberte-accent"
                 />
                 <button onClick={handleSaveName} className="p-1 hover:bg-liberte-panel rounded">
                   <Check className="w-4 h-4 text-liberte-success" />
@@ -158,8 +160,8 @@ export default function ProfileModal({
               </div>
             )}
             <p className="text-xs text-liberte-muted flex items-center gap-1 mt-0.5">
-              <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[profileStatus]}`} />
-              {STATUS_LABELS[profileStatus]}
+              <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[profileStatus || "invisible"]}`} />
+              {(profileStatus ? STATUS_LABELS[profileStatus] : "Statut non observé")}
             </p>
           </div>
 
@@ -215,7 +217,7 @@ export default function ProfileModal({
                   maxLength={190}
                   rows={3}
                   autoFocus
-                  className="w-full bg-liberte-surface border border-liberte-border rounded px-2 py-1.5 text-sm resize-none outline-none focus:border-liberte-accent"
+                  className="w-full bg-liberte-surface border border-liberte-border rounded px-2 py-1.5 text-sm resize-none outline-hidden focus:border-liberte-accent"
                 />
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-liberte-muted">
@@ -230,7 +232,7 @@ export default function ProfileModal({
                     </button>
                     <button
                       onClick={handleSaveBio}
-                      className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-opacity-90"
+                      className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                     >
                       Sauvegarder
                     </button>

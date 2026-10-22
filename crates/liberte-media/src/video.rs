@@ -43,6 +43,8 @@ pub struct VideoFrame {
     pub timestamp_ms: u64,
 }
 
+/// Legacy native capture configuration. The desktop client captures camera
+/// tracks through the WebView and sends them over WebRTC.
 pub struct VideoEngine {
     config: VideoConfig,
     is_capturing: bool,
@@ -65,8 +67,9 @@ impl VideoEngine {
             fps = self.config.fps,
             "Starting video engine"
         );
-        self.is_capturing = true;
-        Ok(())
+        Err(VideoError::CaptureError(
+            "Native video capture is unavailable; use the desktop WebRTC media session".into(),
+        ))
     }
 
     pub fn stop(&mut self) {

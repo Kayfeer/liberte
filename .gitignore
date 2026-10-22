@@ -1,7 +1,7 @@
 # Rust
 /target
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock is deliberately versioned for reproducible application builds.
 
 # Node / Frontend
 frontend/node_modules/
@@ -19,6 +19,14 @@ Thumbs.db
 
 # Environment
 .env
+docker/turnserver.conf
+docker/certs/
+release-assets/
+release-notes.md
+crates/liberte-client/tauri-ci.conf.json
+.ci-test-tmp/
+.ci-output/
+**/__pycache__/
 *.pem
 *.key
 
@@ -32,3 +40,4 @@ dist/
 # Sensitive documents
 Liberté.txt
 Liberte-launched.mp4
+

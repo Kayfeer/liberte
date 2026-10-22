@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Shield, Key, ArrowRight, User } from "lucide-react";
 import { useIdentityStore } from "../stores/identityStore";
+import { ArchiveImport } from "../components/settings/ArchiveControls";
 
 export default function Welcome() {
   const { createIdentity, loading, error } = useIdentityStore();
@@ -65,7 +66,7 @@ export default function Welcome() {
               placeholder="Ex: Kayfeer"
               maxLength={32}
               className="w-full bg-liberte-surface border border-liberte-border rounded-lg px-3 py-2
-                         text-sm text-liberte-text placeholder-liberte-muted outline-none
+                         text-sm text-liberte-text placeholder-liberte-muted outline-hidden
                          focus:border-liberte-accent transition-colors"
             />
             <p className="text-xs text-liberte-muted">
@@ -93,6 +94,8 @@ export default function Welcome() {
               </>
             )}
           </button>
+
+          <div className="border-t border-liberte-border pt-4"><ArchiveImport kind="profile" /></div>
 
           <p className="text-xs text-liberte-muted text-center">
             Votre clé privée ne quitte jamais cet appareil.

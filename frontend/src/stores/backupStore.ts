@@ -12,8 +12,8 @@ interface BackupState {
   error: string | null;
 
   runAutoBackup: () => Promise<void>;
-  saveToFile: (filePath: string) => Promise<void>;
-  importFromFile: (json: string) => Promise<tauri.ImportStats>;
+  saveToFile: (filePath: string, password: string) => Promise<void>;
+  importFromFile: (json: string, password?: string, allowLegacy?: boolean) => Promise<tauri.ImportStats>;
   loadBackupList: () => Promise<void>;
   setAutoBackup: (enabled: boolean) => void;
   setInterval: (minutes: number) => void;
@@ -61,20 +61,20 @@ export const useBackupStore = create<BackupState>((set, get) => {
       }
     },
 
-    saveToFile: async (filePath: string) => {
+    saveToFile: async (filePath: string, password: string) => {
       set({ isBackingUp: true, error: null });
       try {
-        await tauri.saveBackupToFile(filePath);
+        await tauri.saveBackupToFile(filePath, password);
         set({ isBackingUp: false, lastBackupTime: new Date().toISOString() });
       } catch (e) {
         set({ error: String(e), isBackingUp: false });
       }
     },
 
-    importFromFile: async (json: string) => {
+    importFromFile: async (json: string, password?: string, allowLegacy = false) => {
       set({ isRestoring: true, error: null });
       try {
-        const stats = await tauri.importBackup(json);
+        const stats = await tauri.importBackup(json, password, allowLegacy);
         set({ isRestoring: false });
         return stats;
       } catch (e) {

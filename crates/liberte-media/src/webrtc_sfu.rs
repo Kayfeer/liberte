@@ -26,8 +26,8 @@ pub enum SfuState {
     Failed,
 }
 
-/// Client-side SFU connection.
-/// The SFU never decrypts media -- all frames are E2EE via insertable streams.
+/// Legacy native SFU frame codec. The desktop SFU transport is implemented by
+/// the browser LiveKit E2EE session; this type must not claim a fake connection.
 #[allow(dead_code)]
 pub struct SfuClient {
     local_user: UserId,
@@ -61,12 +61,10 @@ impl SfuClient {
         );
         self.state = SfuState::Connecting;
 
-        // TODO: Establish WebRTC connection to SFU via webrtc-rs
-        // The SFU acts as a peer that receives all media and selectively forwards it
-
-        self.state = SfuState::Connected;
-        info!("Connected to SFU");
-        Ok(())
+        self.state = SfuState::Failed;
+        Err(SfuClientError::ConnectionError(
+            "Native SFU transport is unavailable; use the desktop LiveKit media session".into(),
+        ))
     }
 
     /// Encrypt an audio frame before sending to the SFU (SFU can't read it).

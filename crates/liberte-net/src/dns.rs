@@ -48,6 +48,38 @@ pub fn build_doh_resolver() -> TokioAsyncResolver {
     TokioAsyncResolver::tokio(resolver_config, opts)
 }
 
+/// Resolve explicit DNS components through DoH; never fall back to the system resolver.
+pub async fn resolve_multiaddr(address: libp2p::Multiaddr) -> anyhow::Result<libp2p::Multiaddr> {
+    use libp2p::multiaddr::Protocol;
+    let mut resolved = libp2p::Multiaddr::empty();
+    for component in address.iter() {
+        match component {
+            Protocol::Dns(ref name) | Protocol::Dns4(ref name) | Protocol::Dns6(ref name) => {
+                let lookup = build_doh_resolver().lookup_ip(name.as_ref()).await?;
+                let ip = lookup
+                    .iter()
+                    .find(|ip| match &component {
+                        Protocol::Dns4(_) => ip.is_ipv4(),
+                        Protocol::Dns6(_) => ip.is_ipv6(),
+                        _ => true,
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("No matching IP address"))?;
+                resolved.push(match ip {
+                    IpAddr::V4(ip) => Protocol::Ip4(ip),
+                    IpAddr::V6(ip) => Protocol::Ip6(ip),
+                });
+            }
+            Protocol::Dnsaddr(_) => {
+                return Err(anyhow::anyhow!(
+                    "DNSADDR is not supported; use /dns, /dns4 or /dns6"
+                ))
+            }
+            other => resolved.push(other),
+        }
+    }
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

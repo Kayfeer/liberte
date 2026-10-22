@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tauri::AppHandle;
@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use liberte_net::{SwarmCommand, SwarmNotification};
 use liberte_shared::crypto;
-use liberte_shared::protocol::WireMessage;
+use liberte_shared::protocol::{WireMessage, ReplayGuard};
 use liberte_shared::types::ChannelId;
 use liberte_store::Message;
 
@@ -21,16 +21,9 @@ pub async fn start_swarm_and_bridge(
     state: Arc<Mutex<AppState>>,
     identity_secret: [u8; 32],
 ) -> Result<(), String> {
-    // Derive a libp2p Ed25519 keypair from the identity secret via BLAKE3 KDF.
-    // libp2p's ed25519_from_bytes expects 64 bytes: 32-byte secret seed + 32-byte public key.
-    // We derive a 32-byte seed, then use ed25519-dalek to expand it into the full keypair.
+    // This constructor accepts a 32-byte secret seed, not the expanded 64-byte keypair.
     let seed = blake3::derive_key("liberte-libp2p-keypair-v1", &identity_secret);
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-    let public_key = signing_key.verifying_key();
-    let mut keypair_bytes = [0u8; 64];
-    keypair_bytes[..32].copy_from_slice(&seed);
-    keypair_bytes[32..].copy_from_slice(public_key.as_bytes());
-    let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(keypair_bytes)
+    let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
         .map_err(|e| format!("Failed to create libp2p keypair: {e}"))?;
 
     let config = liberte_net::swarm::SwarmConfig::default();
@@ -45,16 +38,18 @@ pub async fn start_swarm_and_bridge(
     {
         let mut guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
         guard.swarm_cmd_tx = Some(cmd_tx.clone());
+        guard.network_error = None;
     }
 
-    // Subscribe to all existing channels
-    subscribe_all_channels(&state, &cmd_tx).await;
-
-    // Spawn notification processing loop
+    // Start draining notifications before queueing subscriptions. Otherwise a
+    // full notification queue can prevent the swarm from accepting commands.
     let state_clone = state.clone();
     tokio::spawn(async move {
         notification_loop(app, state_clone, notif_rx).await;
     });
+
+    // Subscribe to all existing channels
+    subscribe_all_channels(&state, &cmd_tx).await;
 
     Ok(())
 }
@@ -99,13 +94,20 @@ async fn notification_loop(
     mut notif_rx: mpsc::Receiver<SwarmNotification>,
 ) {
     // Track which channels each peer is associated with (for presence)
-    let mut _channel_peers: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut replays = ReplayGuard::default();
+    let mut last_profile_announcement: Option<std::time::Instant> = None;
 
     info!("Swarm notification bridge started");
 
     while let Some(notification) = notif_rx.recv().await {
         match notification {
             SwarmNotification::PeerConnected { peer_id, address } => {
+                if let Ok(mut guard) = state.lock() {
+                    guard.network_error = None;
+                    guard.connection_mode = if address.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit)) {
+                        liberte_shared::types::ConnectionMode::Relayed
+                    } else { liberte_shared::types::ConnectionMode::Direct };
+                }
                 info!(peer = %peer_id, addr = %address, "Peer connected (bridge)");
                 emit_event(
                     &app,
@@ -116,7 +118,34 @@ async fn notification_loop(
                 );
             }
 
+            SwarmNotification::PeerSubscribed { peer_id, topic } => {
+                // A transport connection can predate joining a channel. Announce when the
+                // remote subscription exists so a late joiner also receives our profile.
+                let shared_channel = topic.strip_prefix("channel:")
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                    .is_some_and(|id| state.lock().ok().and_then(|guard| {
+                        guard.database.as_ref().map(|db| db.get_channel_key(id).is_ok())
+                    }).unwrap_or(false));
+                if shared_channel && last_profile_announcement.is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1)) {
+                    debug!(peer = %peer_id, %topic, "Announcing profile to channel subscriber");
+                    last_profile_announcement = Some(std::time::Instant::now());
+                    crate::commands::identity::spawn_profile_broadcast(state.clone());
+                }
+            }
+
             SwarmNotification::PeerDisconnected { peer_id } => {
+                let tx = state.lock().ok().and_then(|g| g.swarm_cmd_tx.clone());
+                if let Some(tx) = tx {
+                    if let Ok(snapshot) = liberte_net::network_snapshot(&tx).await {
+                        if let Ok(mut guard) = state.lock() {
+                            guard.connection_mode = match snapshot.connection_mode.as_str() {
+                                "direct" => liberte_shared::types::ConnectionMode::Direct,
+                                "relayed" => liberte_shared::types::ConnectionMode::Relayed,
+                                _ => liberte_shared::types::ConnectionMode::Disconnected,
+                            };
+                        }
+                    }
+                }
                 info!(peer = %peer_id, "Peer disconnected (bridge)");
                 emit_event(
                     &app,
@@ -138,7 +167,7 @@ async fn notification_loop(
                     len = data.len(),
                     "Message received on bridge"
                 );
-                handle_incoming_message(&app, &state, &topic, &data);
+                handle_incoming_message(&app, &state, &topic, &data, &mut replays);
             }
 
             SwarmNotification::RelayReservation {
@@ -163,6 +192,7 @@ fn handle_incoming_message(
     state: &Arc<Mutex<AppState>>,
     topic: &str,
     data: &[u8],
+    replays: &mut ReplayGuard,
 ) {
     // The topic format is "channel:<uuid>"
     let channel_uuid_str = match topic.strip_prefix("channel:") {
@@ -214,30 +244,17 @@ fn handle_incoming_message(
         (key_bytes, own_pk)
     };
 
-    // The data on gossipsub is a raw WireMessage (not encrypted at transport level,
-    // but the content inside ChatMessage is encrypted with the channel key).
-    let wire_msg = match WireMessage::from_bytes(data) {
-        Ok(m) => m,
-        Err(e) => {
-            // The message might be encrypted at the channel level — try decrypting first
-            match crypto::decrypt(&channel_key, data) {
-                Ok(plaintext) => match WireMessage::from_bytes(&plaintext) {
-                    Ok(m) => m,
-                    Err(e2) => {
-                        debug!(error = %e, error2 = %e2, "Failed to deserialize wire message");
-                        return;
-                    }
-                },
-                Err(_) => {
-                    debug!(error = %e, "Failed to deserialize wire message");
-                    return;
-                }
-            }
-        }
+    let verified = match WireMessage::open_authenticated(data, ChannelId(channel_uuid), &channel_key) {
+        Ok(message) => message,
+        Err(e) => { debug!(error = %e, "Rejected unauthenticated network message"); return; }
     };
+    if !replays.accept(&verified) || own_pubkey == Some(verified.author.0) { return; }
+    let author = verified.author;
+    let wire_msg = verified.message;
 
     match wire_msg {
         WireMessage::ChatMessage(chat) => {
+            if crypto::decrypt(&channel_key, &chat.encrypted_content).is_err() { return; }
             // Skip our own messages (already stored locally)
             if let Some(own_pk) = own_pubkey {
                 if chat.sender.0 == own_pk {
@@ -263,6 +280,7 @@ fn handle_incoming_message(
                     if let Err(e) = db.insert_message(&msg) {
                         // Duplicate message IDs are expected (ignore)
                         debug!(error = %e, "Failed to store incoming message (may be duplicate)");
+                        return;
                     }
                 }
             }
@@ -322,6 +340,7 @@ fn handle_incoming_message(
                     Err(_) => return,
                 };
                 if let Some(ref db) = guard.database {
+                    if !db.get_message_by_id(reaction.message_id).is_ok_and(|message| message.channel_id == channel_uuid) { return; }
                     match reaction.action {
                         liberte_shared::protocol::ReactionAction::Add => {
                             let _ = db.add_reaction(
@@ -365,6 +384,7 @@ fn handle_incoming_message(
         }
 
         WireMessage::VoiceFrame(frame) => {
+            if state.lock().ok().and_then(|g| g.call_channel_id.clone()).as_deref() != Some(channel_uuid_str) { return; }
             // Skip our own voice frames
             if let Some(own_pk) = own_pubkey {
                 if frame.sender.0 == own_pk {
@@ -450,8 +470,41 @@ fn handle_incoming_message(
             }
         }
 
+        WireMessage::ProfileUpdate(profile) => {
+            let user_id = author.to_hex();
+            if let Ok(guard) = state.lock() {
+                if let Some(db) = guard.database.as_ref() {
+                    let result = db.conn().execute(
+                        "INSERT INTO users (pubkey, display_name, avatar_hash, bio, status, created_at) VALUES (?1, ?2, NULL, ?3, ?4, ?5) ON CONFLICT(pubkey) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, status = excluded.status",
+                        rusqlite::params![user_id, profile.display_name, profile.bio, profile.status, profile.timestamp.to_rfc3339()],
+                    );
+                    if let Err(error) = result { warn!(%error, "Could not store peer profile"); }
+                }
+            }
+            #[derive(serde::Serialize, Clone)]
+            #[serde(rename_all = "camelCase")]
+            struct ProfilePayload { user_id: String, display_name: Option<String>, bio: Option<String>, status: String }
+            emit_event(app, "profile-updated", ProfilePayload { user_id, display_name: profile.display_name, bio: profile.bio, status: profile.status });
+        }
+        WireMessage::Signal(signal) => {
+            let active = state.lock().ok().and_then(|g| if g.call_mode == "mesh" { g.call_channel_id.clone() } else { None });
+            if own_pubkey != Some(signal.target.0) || active.as_deref() != Some(channel_uuid_str) { return; }
+            #[derive(serde::Serialize, Clone)]
+            #[serde(rename_all = "camelCase")]
+            struct SignalPayload {
+                channel_id: String, sender: String, target: String,
+                signal_type: liberte_shared::protocol::SignalType,
+            }
+            emit_event(app, "call-signal", SignalPayload {
+                channel_id: channel_uuid.to_string(), sender: author.to_hex(), target: signal.target.to_hex(), signal_type: signal.signal_type,
+            });
+        }
+        message @ (WireMessage::FileOffer(_) | WireMessage::FileAccept(_) | WireMessage::FileChunk(_) | WireMessage::FileComplete(_)) => {
+            crate::file_transfer::handle_incoming(app, state, ChannelId(channel_uuid), author, message);
+        }
         other => {
             debug!(msg = ?other, "Unhandled wire message type on bridge");
         }
     }
 }
+

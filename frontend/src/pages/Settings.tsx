@@ -6,24 +6,20 @@ import {
   Shield,
   Copy,
   Check,
-  Server,
   ArrowLeft,
   Mic,
   Volume2,
   Video,
-  Sparkles,
-  Construction,
   AudioLines,
   RefreshCw,
-  HardDriveDownload,
-  FolderOpen,
-  Cloud,
-  Download,
   Palette,
   Pencil,
 } from "lucide-react";
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useBackupStore } from "../stores/backupStore";
+import { useState, useRef, useEffect } from "react";
+import NetworkSettings from "../components/settings/NetworkSettings";
+import { ArchiveExport, BackupSettings } from "../components/settings/ArchiveControls";
+import PremiumSettings from "../components/settings/PremiumSettings";
+import IceSettings from "../components/settings/IceSettings";
 
 /* ─── Reusable sub-components ─── */
 
@@ -68,10 +64,12 @@ function VolumeSlider({
   label,
   value,
   onChange,
+  max = 200,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
+  max?: number;
 }) {
   return (
     <div className="space-y-1.5">
@@ -82,7 +80,7 @@ function VolumeSlider({
       <input
         type="range"
         min={0}
-        max={200}
+        max={max}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full h-1.5 bg-liberte-border rounded-full appearance-none cursor-pointer
@@ -120,7 +118,7 @@ function Toggle({
           }`}
         >
           <div
-            className={`w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${
+            className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${
               checked ? "translate-x-4" : "translate-x-0"
             }`}
           />
@@ -149,64 +147,35 @@ function Toggle({
 
 function CameraPreview({ deviceId }: { deviceId: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const startPreview = useCallback(async () => {
-    // Stop any existing stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-
-    if (!deviceId) return;
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: deviceId }, width: 640, height: 360 },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch {
-      // Camera unavailable — silently ignore
-    }
-  }, [deviceId]);
-
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    startPreview();
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    setError(null);
+    if (deviceId) {
+      void navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId }, width: 640, height: 360 }, audio: false,
+      }).then((captured) => {
+        if (cancelled) { captured.getTracks().forEach((track) => track.stop()); return; }
+        stream = captured;
+        if (videoRef.current) videoRef.current.srcObject = captured;
+      }).catch((cause) => { if (!cancelled) setError(String(cause)); });
+    }
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [startPreview]);
-
-  return (
-    <div className="relative rounded-lg overflow-hidden bg-liberte-bg border border-liberte-border aspect-video">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="w-full h-full object-cover mirror"
-      />
-      {!deviceId && (
-        <div className="absolute inset-0 flex items-center justify-center text-liberte-muted text-sm">
-          Aucune caméra sélectionnée
-        </div>
-      )}
-    </div>
-  );
+  }, [deviceId]);
+  return <div className="space-y-2">
+    <video ref={videoRef} autoPlay playsInline muted className="w-full rounded-lg bg-liberte-bg aspect-video object-cover" />
+    {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+  </div>;
 }
 
 export default function Settings() {
   const { identity, setDisplayName, setBio } = useIdentityStore();
   const navigate = useNavigationStore((s) => s.navigate);
   const media = useMediaDevices();
-  const backup = useBackupStore();
   const [copied, setCopied] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -239,23 +208,8 @@ export default function Settings() {
         <h2 className="text-xl font-bold">Paramètres</h2>
       </div>
 
-      {/* ── Server / Self-hosted ── */}
-      <div className="panel p-4 space-y-4 opacity-60">
-        <h3 className="font-medium flex items-center gap-2">
-          <Server className="w-4 h-4 text-liberte-accent" />
-          Serveur relais
-          <span className="text-xs bg-liberte-panel text-liberte-muted px-2 py-0.5 rounded-full">
-            Bientôt disponible
-          </span>
-        </h3>
-        <p className="text-sm text-liberte-muted">
-          La connexion à un serveur relais auto-hébergé sera disponible dans une
-          prochaine mise à jour. En attendant, Liberté fonctionne en mode
-          pair-à-pair pur.
-        </p>
-      </div>
+      <NetworkSettings />
 
-      {/* ── Thème ── */}
       <ThemeSection />
 
       {/* ── Identity ── */}
@@ -281,7 +235,7 @@ export default function Settings() {
                     maxLength={32}
                     autoFocus
                     className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1
-                               text-sm text-liberte-text placeholder-liberte-muted outline-none
+                               text-sm text-liberte-text placeholder-liberte-muted outline-hidden
                                focus:border-liberte-accent transition-colors"
                   />
                   <button
@@ -363,7 +317,7 @@ export default function Settings() {
                     rows={3}
                     autoFocus
                     className="w-full bg-liberte-bg border border-liberte-border rounded px-2 py-1.5
-                               text-sm text-liberte-text placeholder-liberte-muted outline-none
+                               text-sm text-liberte-text placeholder-liberte-muted outline-hidden
                                focus:border-liberte-accent transition-colors resize-none"
                   />
                   <div className="flex items-center justify-between">
@@ -380,7 +334,7 @@ export default function Settings() {
                           await setBio(bioInput.trim());
                           setEditingBio(false);
                         }}
-                        className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-opacity-90"
+                        className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                       >
                         Sauvegarder
                       </button>
@@ -396,69 +350,7 @@ export default function Settings() {
               )}
             </div>
 
-            {/* Profile export / import */}
-            <div className="flex flex-wrap gap-2 pt-2 border-t border-liberte-border">
-              <button
-                onClick={async () => {
-                  const { save } = await import("@tauri-apps/plugin-dialog");
-                  try {
-                    const json = await import("../lib/tauri").then((t) =>
-                      t.exportProfile()
-                    );
-                    const path = await save({
-                      defaultPath: `liberte_profile_${new Date().toISOString().slice(0, 10)}.json`,
-                      filters: [{ name: "JSON", extensions: ["json"] }],
-                    });
-                    if (path) {
-                      const { writeTextFile } = await import(
-                        "@tauri-apps/plugin-fs"
-                      );
-                      await writeTextFile(path, json);
-                      alert("Profil exporté avec succès !");
-                    }
-                  } catch (e) {
-                    alert(`Erreur d'export : ${e}`);
-                  }
-                }}
-                className="btn-secondary text-xs flex items-center gap-1.5"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Exporter le profil
-              </button>
-
-              <button
-                onClick={async () => {
-                  const { open: openFile } = await import(
-                    "@tauri-apps/plugin-dialog"
-                  );
-                  const path = await openFile({
-                    multiple: false,
-                    filters: [{ name: "JSON", extensions: ["json"] }],
-                    title: "Importer un profil",
-                  });
-                  if (path) {
-                    const { readTextFile } = await import(
-                      "@tauri-apps/plugin-fs"
-                    );
-                    const json = await readTextFile(path);
-                    try {
-                      const result = await import("../lib/tauri").then((t) =>
-                        t.importProfile(json)
-                      );
-                      alert(
-                        `Profil importé ! Clé publique : ${result.publicKey.slice(0, 16)}…\n${result.channelsImported} canaux importés.\n\nRedémarrez l'application pour appliquer.`
-                      );
-                    } catch (e) {
-                      alert(`Erreur d'import : ${e}`);
-                    }
-                  }
-                }}
-                className="btn-secondary text-xs flex items-center gap-1.5"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                Importer un profil
-              </button>
-            </div>
+            <div className="pt-3 border-t border-liberte-border"><ArchiveExport kind="profile" /></div>
           </div>
         )}
       </div>
@@ -511,7 +403,8 @@ export default function Settings() {
 
         <VolumeSlider
           label="Volume de sortie"
-          value={media.outputVolume}
+          value={Math.min(100, media.outputVolume)}
+          max={100}
           onChange={(v) => media.update({ outputVolume: v })}
         />
 
@@ -548,7 +441,7 @@ export default function Settings() {
 
           <Toggle
             label="Isolation vocale"
-            description="Isole votre voix et supprime tous les sons environnants — idéal en environnement bruyant"
+            description="Active le traitement d'isolation vocale du navigateur — idéal en environnement bruyant"
             checked={media.voiceIsolation}
             onChange={(v) => media.update({ voiceIsolation: v })}
             badge="Expérimental"
@@ -583,155 +476,9 @@ export default function Settings() {
         )}
       </div>
 
-      {/* ── Sauvegarde ── */}
-      <div className="panel p-4 space-y-5">
-        <h3 className="font-medium flex items-center gap-2">
-          <HardDriveDownload className="w-4 h-4 text-liberte-accent" />
-          Sauvegarde
-        </h3>
-
-        <Toggle
-          label="Sauvegarde automatique"
-          description={`Exporte automatiquement vos données toutes les ${backup.intervalMinutes} minutes`}
-          checked={backup.autoBackupEnabled}
-          onChange={(v) => backup.setAutoBackup(v)}
-        />
-
-        {backup.autoBackupEnabled && (
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-xs text-liberte-muted">Fréquence</label>
-              <span className="text-xs font-mono text-liberte-muted">
-                {backup.intervalMinutes} min
-              </span>
-            </div>
-            <input
-              type="range"
-              min={5}
-              max={120}
-              step={5}
-              value={backup.intervalMinutes}
-              onChange={(e) => backup.setInterval(Number(e.target.value))}
-              className="w-full h-1.5 bg-liberte-border rounded-full appearance-none cursor-pointer accent-liberte-accent"
-            />
-          </div>
-        )}
-
-        {backup.lastBackupTime && (
-          <p className="text-xs text-liberte-muted">
-            Dernière sauvegarde :{" "}
-            {new Date(backup.lastBackupTime).toLocaleString()}
-          </p>
-        )}
-
-        {backup.error && (
-          <p className="text-xs text-red-400 bg-red-400/10 p-2 rounded">
-            ⚠ {backup.error}
-          </p>
-        )}
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => backup.runAutoBackup()}
-            disabled={backup.isBackingUp}
-            className="btn-secondary text-xs flex items-center gap-1.5"
-          >
-            <Download className="w-3.5 h-3.5" />
-            {backup.isBackingUp ? "Sauvegarde..." : "Sauvegarder maintenant"}
-          </button>
-
-          <button
-            onClick={async () => {
-              const { save } = await import("@tauri-apps/plugin-dialog");
-              const path = await save({
-                defaultPath: `liberte_backup_${new Date().toISOString().slice(0, 10)}.json`,
-                filters: [{ name: "JSON", extensions: ["json"] }],
-              });
-              if (path) await backup.saveToFile(path);
-            }}
-            disabled={backup.isBackingUp}
-            className="btn-secondary text-xs flex items-center gap-1.5"
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-            Exporter vers un fichier
-          </button>
-
-          <button
-            onClick={async () => {
-              const { open: openFile } = await import(
-                "@tauri-apps/plugin-dialog"
-              );
-              const path = await openFile({
-                multiple: false,
-                filters: [{ name: "JSON", extensions: ["json"] }],
-                title: "Importer une sauvegarde",
-              });
-              if (path) {
-                const { readTextFile } = await import(
-                  "@tauri-apps/plugin-fs"
-                );
-                const json = await readTextFile(path);
-                const stats = await backup.importFromFile(json);
-                alert(
-                  `Importé : ${stats.channelsImported} channels, ${stats.messagesImported} messages, ${stats.keysImported} clés`
-                );
-              }
-            }}
-            disabled={backup.isRestoring}
-            className="btn-secondary text-xs flex items-center gap-1.5"
-          >
-            <Cloud className="w-3.5 h-3.5" />
-            {backup.isRestoring ? "Importation..." : "Importer"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Premium (en cours de confection) ── */}
-      <div className="panel p-4 space-y-4 relative overflow-hidden">
-        {/* Decorative gradient band */}
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-liberte-accent via-yellow-500 to-liberte-accent" />
-
-        <h3 className="font-medium flex items-center gap-2 pt-1">
-          <Sparkles className="w-4 h-4 text-yellow-500" />
-          Premium
-          <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full flex items-center gap-1">
-            <Construction className="w-3 h-3" />
-            En cours de confection
-          </span>
-        </h3>
-
-        <p className="text-sm text-liberte-muted">
-          L'abonnement Premium est en cours de développement. Il offrira :
-        </p>
-
-        <ul className="text-sm text-liberte-muted space-y-1.5 list-none">
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/60" />
-            Relais SFU pour les appels de groupe à faible latence
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/60" />
-            Stockage persistant chiffré de bout en bout
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/60" />
-            Transfert de fichiers volumineux via le serveur
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/60" />
-            Badge Premium sur votre profil
-          </li>
-        </ul>
-
-        <div className="flex items-center gap-3 pt-1">
-          <button
-            disabled
-            className="btn-primary opacity-50 cursor-not-allowed"
-          >
-            Bientôt disponible — 0,99 €/mois
-          </button>
-        </div>
-      </div>
+      <BackupSettings />
+      <IceSettings servers={media.iceServers} onSave={(iceServers) => media.update({ iceServers })} />
+      <PremiumSettings />
     </div>
   );
 }
@@ -771,16 +518,16 @@ function ThemeSection() {
                 {opt.preview.map((c, i) => (
                   <div
                     key={i}
-                    className="w-4 h-4 rounded-sm"
+                    className="w-4 h-4 rounded-xs"
                     style={{ backgroundColor: c }}
                   />
                 ))}
               </div>
             ) : (
               <div className="flex gap-0.5">
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-purple-500 to-pink-500" />
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-blue-500 to-green-500" />
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-yellow-500 to-red-500" />
+                <div className="w-4 h-4 rounded-xs bg-gradient-to-br from-purple-500 to-pink-500" />
+                <div className="w-4 h-4 rounded-xs bg-gradient-to-br from-blue-500 to-green-500" />
+                <div className="w-4 h-4 rounded-xs bg-gradient-to-br from-yellow-500 to-red-500" />
               </div>
             )}
             <span className="text-xs">{opt.label}</span>

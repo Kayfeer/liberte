@@ -1,131 +1,242 @@
-use std::sync::{Arc, Mutex};
-
+use crate::{
+    file_transfer::{self, FileTransferDto, TransferRecord},
+    state::AppState,
+};
 use chrono::Utc;
-use serde::Serialize;
-use tauri::State;
-use tracing::info;
+use liberte_shared::{
+    constants::MAX_FILE_SIZE,
+    protocol::{FileAcceptance, FileOffer, WireMessage},
+    types::ChannelId,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    io::{Read, Write},
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+use tauri::{AppHandle, State};
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-use liberte_net::SwarmCommand;
-use liberte_shared::protocol::{FileOffer, WireMessage};
-use liberte_shared::types::{ChannelId, UserId};
-use liberte_store::Blob;
-
-use crate::state::AppState;
+static STAGING_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileSendResult {
     pub file_id: String,
     pub file_name: String,
     pub file_size: u64,
 }
 
+fn stage_file(path: &Path) -> Result<(NamedTempFile, u64, [u8; 32]), String> {
+    let mut source = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let metadata = source.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_FILE_SIZE as u64 {
+        return Err("Fichier invalide ou supérieur à 50 Mio".into());
+    }
+    let mut staged = NamedTempFile::new().map_err(|e| e.to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0; file_transfer::CHUNK_SIZE];
+    let mut size = 0_u64;
+    loop {
+        let n = source.read(&mut buffer).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        size += n as u64;
+        if size > MAX_FILE_SIZE as u64 {
+            return Err("Fichier supérieur à 50 Mio".into());
+        }
+        hasher.update(&buffer[..n]);
+        staged.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+    }
+    staged.flush().map_err(|e| e.to_string())?;
+    Ok((staged, size, *hasher.finalize().as_bytes()))
+}
+
 #[tauri::command]
 pub async fn send_file(
+    app: AppHandle,
     state: State<'_, Arc<Mutex<AppState>>>,
     channel_id: String,
     file_path: String,
 ) -> Result<FileSendResult, String> {
-    let channel_uuid =
-        Uuid::parse_str(&channel_id).map_err(|e| format!("Invalid channel_id: {e}"))?;
-
-    let path = std::path::Path::new(&file_path);
-    let file_name = path
+    let _permit = STAGING_LIMIT.acquire().await.map_err(|e| e.to_string())?;
+    let channel = Uuid::parse_str(&channel_id).map_err(|e| e.to_string())?;
+    let path = Path::new(&file_path);
+    let name = path
         .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let file_data = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
-
-    let file_size = file_data.len() as u64;
-
-    if file_data.len() > liberte_shared::constants::MAX_FILE_SIZE {
-        return Err(format!(
-            "File too large: {} bytes (max {})",
-            file_data.len(),
-            liberte_shared::constants::MAX_FILE_SIZE
-        ));
+        .and_then(|v| v.to_str())
+        .ok_or("Nom de fichier invalide")?
+        .to_owned();
+    if name.len() > 255 || name.chars().any(char::is_control) {
+        return Err("Nom de fichier invalide".into());
     }
-
-    let hash = blake3::hash(&file_data);
-    let hash_bytes: [u8; 32] = *hash.as_bytes();
-
-    let file_id = Uuid::new_v4();
-    let timestamp = Utc::now();
-
-    let (sender_pubkey, cmd_tx) = {
-        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-        let identity = guard
-            .identity
-            .as_ref()
-            .ok_or_else(|| "No identity loaded".to_string())?;
-        let tx = guard
-            .swarm_cmd_tx
-            .clone()
-            .ok_or_else(|| "Swarm not started".to_string())?;
-        (identity.public_key_bytes(), tx)
-    };
-
-    let offer = WireMessage::FileOffer(FileOffer {
-        sender: UserId(sender_pubkey),
-        channel_id: ChannelId(channel_uuid),
-        file_id,
-        file_name: file_name.clone(),
-        file_size,
-        file_hash: hash_bytes,
-        timestamp,
-    });
-
-    // Encrypt the file offer before publishing (metadata is sensitive)
-    let topic = ChannelId(channel_uuid).to_topic();
-    let wire_bytes = offer
-        .to_bytes()
-        .map_err(|e| format!("Serialization failed: {e}"))?;
-
-    // NOTE: File offer is published as plaintext wire message on the
-    // channel topic. In a future iteration, this should be encrypted
-    // with the channel key (requires passing channel_key_hex to send_file).
-    cmd_tx
-        .send(SwarmCommand::PublishMessage {
-            topic,
-            data: wire_bytes,
-        })
-        .await
-        .map_err(|e| format!("Failed to publish file offer: {e}"))?;
-
-    let blob = Blob {
-        id: file_id,
-        file_name: file_name.clone(),
-        file_size: file_size as i64,
-        blake3_hash: hex::encode(hash_bytes),
-        is_uploaded: false,
-        local_path: file_path.clone(),
-        created_at: timestamp,
-    };
-
     {
-        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-        if let Some(ref db) = guard.database {
-            db.insert_blob(&blob)
-                .map_err(|e| format!("Failed to store blob: {e}"))?;
-        }
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        file_transfer::context(&guard, channel)?;
     }
-
-    info!(
-        file_id = %file_id,
-        file_name = %file_name,
-        size = file_size,
-        "File offer sent"
-    );
-
+    let (file, size, hash) = tokio::task::spawn_blocking(move || stage_file(Path::new(&file_path)))
+        .await
+        .map_err(|e| e.to_string())??;
+    let id = Uuid::new_v4();
+    let offer = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        file_transfer::reserve_capacity(&mut guard, size, true)?;
+        let (identity, _, _) = file_transfer::context(&guard, channel)?;
+        let dto = FileTransferDto {
+            file_id: id.to_string(),
+            channel_id: channel.to_string(),
+            file_name: name.clone(),
+            file_size: size,
+            status: "offered".into(),
+            progress: 0.0,
+            sender_id: hex::encode(identity.public_key_bytes()),
+            error: None,
+        };
+        let record = TransferRecord::new(dto, hash, Some(file));
+        file_transfer::emit(&app, &record);
+        guard.file_transfers.insert(id, record);
+        WireMessage::FileOffer(FileOffer {
+            sender: identity.user_id(),
+            channel_id: ChannelId(channel),
+            file_id: id,
+            file_name: name.clone(),
+            file_size: size,
+            file_hash: hash,
+            timestamp: Utc::now(),
+        })
+    };
+    if let Err(error) = file_transfer::publish(state.inner(), channel, offer).await {
+        file_transfer::fail(&app, state.inner(), id, error.clone());
+        return Err(error);
+    }
     Ok(FileSendResult {
-        file_id: file_id.to_string(),
-        file_name,
-        file_size,
+        file_id: id.to_string(),
+        file_name: name,
+        file_size: size,
     })
+}
+
+#[tauri::command]
+pub fn list_channel_files(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    channel_id: String,
+) -> Result<Vec<FileTransferDto>, String> {
+    let channel = Uuid::parse_str(&channel_id).map_err(|e| e.to_string())?;
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    guard
+        .database
+        .as_ref()
+        .ok_or("Base indisponible")?
+        .get_channel_key(channel)
+        .map_err(|e| e.to_string())?;
+    let _ = file_transfer::reserve_capacity(&mut guard, 0, false);
+    let mut result: Vec<_> = guard
+        .file_transfers
+        .values()
+        .filter(|r| r.dto.channel_id == channel_id)
+        .map(|r| r.dto.clone())
+        .collect();
+    result.sort_by(|a, b| {
+        a.file_name
+            .cmp(&b.file_name)
+            .then(a.file_id.cmp(&b.file_id))
+    });
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn accept_file(
+    app: AppHandle,
+    state: State<'_, Arc<Mutex<AppState>>>,
+    file_id: String,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&file_id).map_err(|e| e.to_string())?;
+    let (channel, accept) = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        let record = guard.file_transfers.get(&id).ok_or("Offre introuvable")?;
+        let size = record.dto.file_size;
+        let channel = Uuid::parse_str(&record.dto.channel_id).map_err(|e| e.to_string())?;
+        let (identity, _, _) = file_transfer::context(&guard, channel)?;
+        if record.dto.sender_id == hex::encode(identity.public_key_bytes())
+            || !matches!(record.dto.status.as_str(), "offered" | "failed")
+            || record.attempts >= 3
+        {
+            return Err("Offre non disponible, demandez un nouvel envoi".into());
+        }
+        file_transfer::reserve_capacity(&mut guard, size, false)?;
+        let record = guard.file_transfers.get_mut(&id).ok_or("Offre expirée")?;
+        if !matches!(record.dto.status.as_str(), "offered" | "failed") {
+            return Err("Offre expirée".into());
+        }
+        let file = NamedTempFile::new().map_err(|e| e.to_string())?;
+        file.as_file().set_len(size).map_err(|e| e.to_string())?;
+        record.file = Some(file);
+        record.dto.status = "receiving".into();
+        record.dto.error = None;
+        record.dto.progress = 0.0;
+        record.received.clear();
+        record.attempts += 1;
+        record.updated = Instant::now();
+        file_transfer::emit(&app, record);
+        (
+            channel,
+            WireMessage::FileAccept(FileAcceptance {
+                file_id: id,
+                accepter: identity.user_id(),
+            }),
+        )
+    };
+    if let Err(error) = file_transfer::publish(state.inner(), channel, accept).await {
+        file_transfer::fail(&app, state.inner(), id, error.clone());
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn dismiss_file(state: State<'_, Arc<Mutex<AppState>>>, file_id: String) -> Result<(), String> {
+    let id = Uuid::parse_str(&file_id).map_err(|e| e.to_string())?;
+    state
+        .lock()
+        .map_err(|e| e.to_string())?
+        .file_transfers
+        .remove(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_received_file(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    file_id: String,
+    file_path: String,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&file_id).map_err(|e| e.to_string())?;
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    let record = guard.file_transfers.get(&id).ok_or("Fichier introuvable")?;
+    if record.dto.status != "received" {
+        return Err("Réception non terminée".into());
+    }
+    let source = record.file.as_ref().ok_or("Fichier temporaire absent")?;
+    let destination = Path::new(&file_path);
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or("Destination invalide")?;
+    let mut temp = NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    std::io::copy(&mut source.reopen().map_err(|e| e.to_string())?, &mut temp)
+        .map_err(|e| e.to_string())?;
+    temp.as_file().sync_all().map_err(|e| e.to_string())?;
+    temp.persist(destination).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct BlobUploadResponse {
+    #[serde(rename = "id", alias = "blob_id")]
+    blob_id: String,
 }
 
 #[tauri::command]
@@ -134,37 +245,42 @@ pub async fn upload_premium_blob(
     file_path: String,
     channel_key_hex: String,
 ) -> Result<String, String> {
-    {
-        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-        if !guard.is_premium {
-            return Err("Premium subscription required for blob uploads".into());
+    let _permit = STAGING_LIMIT.acquire().await.map_err(|e| e.to_string())?;
+    let key: [u8; 32] = hex::decode(channel_key_hex)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Clé de canal invalide")?;
+    let (server, identity, token) = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        (
+            guard.server_url.clone(),
+            guard.identity.clone().ok_or("Aucune identité chargée")?,
+            guard.premium_token.clone(),
+        )
+    };
+    let encrypted = tokio::task::spawn_blocking(move || {
+        let (file, _, _) = stage_file(Path::new(&file_path))?;
+        if file.as_file().metadata().map_err(|e| e.to_string())?.len() > (MAX_FILE_SIZE - 40) as u64
+        {
+            return Err("Le fichier chiffré dépasse la limite serveur de 50 Mio".into());
         }
-    }
-
-    let key_bytes =
-        hex::decode(&channel_key_hex).map_err(|e| format!("Invalid channel key hex: {e}"))?;
-    if key_bytes.len() != 32 {
-        return Err("Channel key must be 32 bytes (64 hex chars)".into());
-    }
-    let mut channel_key = [0u8; 32];
-    channel_key.copy_from_slice(&key_bytes);
-
-    let file_data = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
-
-    let encrypted = liberte_shared::crypto::encrypt(&channel_key, &file_data)
-        .map_err(|e| format!("Encryption failed: {e}"))?;
-
-    let blob_id = Uuid::new_v4();
-
-    // TODO: HTTP POST to VPS relay endpoint with encrypted data.
-    // For now, store locally and mark as uploaded.
-    info!(
-        blob_id = %blob_id,
-        encrypted_size = encrypted.len(),
-        "Premium blob encrypted (upload pending VPS integration)"
-    );
-
-    Ok(blob_id.to_string())
+        let data = std::fs::read(file.path()).map_err(|e| e.to_string())?;
+        liberte_shared::crypto::encrypt(&key, &data).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let response = crate::server_client::signed_request(
+        &server,
+        reqwest::Method::POST,
+        "/blob/upload",
+        encrypted,
+        &identity,
+        token.as_ref(),
+        "application/octet-stream",
+    )
+    .await?;
+    let uploaded: BlobUploadResponse =
+        crate::server_client::read_json_limited(response, 4096).await?;
+    Uuid::parse_str(&uploaded.blob_id).map_err(|_| "Identifiant serveur invalide")?;
+    Ok(uploaded.blob_id)
 }

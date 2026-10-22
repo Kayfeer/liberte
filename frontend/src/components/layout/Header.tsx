@@ -9,12 +9,16 @@ import type { Message } from "../../lib/types";
 
 export default function Header() {
   const { channels, activeChannelId, channelKeys } = useMessageStore();
-  const { inCall, startCall, endCall } = useMediaStore();
+  const { inCall, startCall, endCall, mode, setMode, busy } = useMediaStore();
   const [showInvite, setShowInvite] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Message[]>([]);
   const [searching, setSearching] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [callPending, setCallPending] = useState(false);
+  const [modePending, setModePending] = useState(false);
+  const callGeneration = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeChannel = channels.find((c) => c.id === activeChannelId);
@@ -43,6 +47,25 @@ export default function Header() {
     setShowSearch(false);
     setSearchQuery("");
     setSearchResults([]);
+  };
+
+  const toggleCall = async () => {
+    if (!activeChannelId || callPending) return;
+    const generation = ++callGeneration.current;
+    setCallPending(true);
+    setCallError(null);
+    try {
+      if (inCall) await endCall();
+      else await startCall(activeChannelId);
+    } catch (error) { if (generation === callGeneration.current) setCallError(String(error)); }
+    finally { if (generation === callGeneration.current) setCallPending(false); }
+  };
+
+  const cancelCall = async () => {
+    ++callGeneration.current;
+    try { await endCall(); }
+    catch (error) { setCallError(String(error)); }
+    finally { setCallPending(false); }
   };
 
   return (
@@ -82,10 +105,32 @@ export default function Header() {
           <ConnectionBadge />
 
           {activeChannelId && (
+            <select
+              aria-label="Transport de l'appel"
+              title="Choisissez le transport avant de rejoindre l'appel"
+              value={mode}
+              disabled={inCall || busy || callPending || modePending}
+              onChange={(event) => {
+                setCallError(null);
+                setModePending(true);
+                void setMode(event.target.value as "mesh" | "sfu")
+                  .catch((error) => setCallError(String(error)))
+                  .finally(() => setModePending(false));
+              }}
+              className="bg-liberte-panel text-xs rounded px-2 py-1 disabled:opacity-60"
+            >
+              <option value="mesh">P2P direct</option>
+              <option value="sfu">SFU chiffré</option>
+            </select>
+          )}
+
+          {callPending && !inCall && <button onClick={() => void cancelCall()} className="text-xs text-red-300">Annuler la connexion</button>}
+
+          {activeChannelId && (
             <button
-              onClick={() =>
-                inCall ? endCall() : startCall(activeChannelId)
-              }
+              onClick={() => void toggleCall()}
+              disabled={callPending || busy || modePending}
+              aria-label={inCall ? "Quitter l'appel" : "Rejoindre l'appel"}
               className={`p-2 rounded-lg transition-colors ${
                 inCall
                   ? "bg-red-600 hover:bg-red-700 text-white"
@@ -102,18 +147,20 @@ export default function Header() {
         </div>
       </div>
 
+      {callError && <p role="alert" className="text-red-300 text-sm px-4 py-2">{callError}</p>}
+
       {/* Search panel */}
       {showSearch && (
         <div className="bg-liberte-surface border-b border-liberte-border px-4 py-2 space-y-2">
           <div className="flex items-center gap-2">
-            <Search className="w-4 h-4 text-liberte-muted flex-shrink-0" />
+            <Search className="w-4 h-4 text-liberte-muted shrink-0" />
             <input
               autoFocus
               type="text"
               placeholder="Rechercher dans les messages…"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
-              className="flex-1 bg-transparent text-sm focus:outline-none placeholder-liberte-muted"
+              className="flex-1 bg-transparent text-sm focus:outline-hidden placeholder-liberte-muted"
             />
             {searching && (
               <span className="text-xs text-liberte-muted">…</span>
