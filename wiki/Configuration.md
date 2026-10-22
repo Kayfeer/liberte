@@ -21,7 +21,10 @@ Les paramètres du client sont locaux. Les changements de réseau, de sauvegarde
 | MAX_TOTAL_BYTES | Quota total, 1 073 741 824 octets par défaut |
 | MAX_OBJECTS | Nombre maximal d'objets, 10 000 par défaut |
 | MAX_REPLAY_ENTRIES | Taille maximale du registre de rejeu HTTP, 10 000 par défaut |
-| MAX_HTTP_CONCURRENCY | Requêtes simultanées, 8 par défaut |
+| MAX_HTTP_CONCURRENCY | Requêtes simultanées, 2 par défaut |
+| LIVEKIT_URL | URL publique WSS du SFU optionnel ; WS accepté uniquement sur loopback en développement |
+| LIVEKIT_API_KEY | Identifiant API du SFU, configuré avec son URL et son secret |
+| LIVEKIT_API_SECRET | Secret API LiveKit, conservé uniquement côté serveur |
 | RUST_LOG | Niveau de journalisation |
 | HTTP_BIND | Variable Compose uniquement : interface hôte publiée, 127.0.0.1 par défaut |
 
@@ -36,6 +39,10 @@ Le port 8080 est destiné au réseau local de la machine hôte ou à un proxy in
 ## ICE et TURN
 
 Le client permet de renseigner les serveurs ICE. Aucun fournisseur tiers n'est nécessaire par défaut. Un exemple auto-hébergé se trouve dans [TURN](TURN.md). Les identifiants TURN sont distincts des clés d'identité, de l'API administrateur et des clés de mise à jour.
+
+## SFU LiveKit
+
+Configurer les trois variables `LIVEKIT_*` ensemble, ou les laisser toutes vides pour désactiver le SFU. Le client obtient un jeton court auprès de `POST /media/token`, avec une requête signée. Le secret API n'est pas transmis au client. L'exemple [LiveKit](LiveKit.md) décrit le déploiement mono-noeud et les ports ; la validité d'un jeton ne remplace pas les clés de chiffrement du canal.
 
 ## Sauvegardes
 

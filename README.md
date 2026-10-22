@@ -12,7 +12,7 @@ La branche 2.4.0 est une version de stabilisation avec un protocole incompatible
 | Messagerie | Enveloppe chiffrée XChaCha20-Poly1305, auteur signé, contrôle du canal, de la date et des rejeux. La clé de canal reste partagée et durable. |
 | Découverte | Réseau local et adresses de pairs dans les invitations. Les réseaux distants peuvent nécessiter un relais et une configuration réseau. |
 | Invitations | Codes signés contenant un secret d'accès, limités dans le temps. Ils ne sont pas chiffrés pour leur destinataire et doivent être transmis confidentiellement. |
-| Audio et vidéo | WebRTC dans le client, signalisation authentifiée. Permissions micro/caméra et connectivité ICE nécessaires. Aucun SFU de production n'est annoncé. |
+| Audio et vidéo | WebRTC entre pairs ou SFU LiveKit auto-hébergé optionnel avec chiffrement côté client. Permissions micro/caméra et connectivité ICE nécessaires. Voir les limites et essais de validation dans [LiveKit](wiki/LiveKit.md). |
 | Fichiers et sauvegardes | Stockage local et API de relais. Les opérations serveur sont authentifiées ; une sauvegarde doit être testée par une restauration avant d'être considérée comme fiable. |
 | Serveur | API HTTP, relais P2P et stockage. Utiliser un proxy HTTPS pour l'accès distant. |
 | Mise à jour | Installateurs manuels. Les mises à jour automatiques exigent une paire de clés de signature configurée et les artefacts signés vérifiés par la release. |
@@ -45,12 +45,12 @@ cargo check --workspace --all-targets --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cd crates/liberte-client
-npm --prefix ../../frontend run tauri -- dev
+node ../../frontend/node_modules/@tauri-apps/cli/tauri.js dev
 ```
 
 Si `Cargo.lock` manque sur la branche de migration, exécuter `python scripts/ci.py lockfile`, examiner le résultat et versionner le fichier. Le workflow CI peut aussi fournir cet artefact. Les releases restent bloquées tant que le lockfile n'est pas versionné. Ne pas remplacer systématiquement `--locked` par une résolution libre.
 
-Sur Ubuntu, installer notamment `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libglib2.0-dev libasound2-dev patchelf libssl-dev pkg-config`. Sur Windows, installer les outils de compilation C++ de Visual Studio et WebView2.
+Sur Ubuntu, installer notamment `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libglib2.0-dev libasound2-dev patchelf libssl-dev pkg-config`. Pour les médias WebKitGTK, installer aussi `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libnice10` et vérifier le support WebRTC de la distribution. Sur Windows, installer les outils de compilation C++ de Visual Studio et WebView2.
 
 ## Serveur auto-hébergé
 
@@ -62,11 +62,13 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-L'API est publiée sur `127.0.0.1:8080` par défaut. Le transport QUIC utilise UDP 4001. L'API HTTP n'est pas un serveur TURN et un serveur TURN ne découvre pas les pairs P2P. Le relais TURN optionnel pour WebRTC est décrit dans [TURN](wiki/TURN.md).
+L'API est publiée sur `127.0.0.1:8080` par défaut. Le transport QUIC utilise UDP 4001. L'API HTTP n'est pas un serveur TURN et un serveur TURN ne découvre pas les pairs P2P. Le relais TURN optionnel pour WebRTC est décrit dans [TURN](wiki/TURN.md). Le SFU optionnel et sa configuration HTTPS/WSS sont décrits dans [LiveKit](wiki/LiveKit.md).
 
 ## Vérification et distribution
 
-La CI exécute les tests frontend, les vérifications Rust, des tests d'authentification HTTP et le chargement/démarrage d'une image Docker réellement exportée. Elle ne remplace pas un appel entre deux appareils derrière des NAT différents, ni un audit cryptographique indépendant.
+La CI exécute les tests frontend, les vérifications Rust, des tests d'authentification HTTP, des échanges média dans Chromium et le chargement/démarrage d'une image Docker réellement exportée. Elle ne remplace pas un appel entre deux appareils derrière des NAT différents, un essai dans chaque WebView native, ni un audit cryptographique indépendant.
+
+Les jobs desktop produisent des paquets de test Windows, Linux et macOS dans les artefacts de l'exécution GitHub Actions. Leur nom et `build.json` identifient le commit ; vérifier aussi `SHA256SUMS`. Ces paquets CI ne sont pas signés ni publiés comme release et ne proposent pas de mise à jour automatique.
 
 Le workflow Release attend tous ces contrôles, vérifie le tag et les versions, puis construit les installateurs. Les images Docker sont distribuées **séparément pour AMD64 et ARM64**, avec sommes SHA-256. Une release non signée ne publie pas de `latest.json`.
 

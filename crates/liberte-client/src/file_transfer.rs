@@ -33,12 +33,13 @@ pub struct TransferRecord {
     pub recipients: HashSet<[u8; 32]>,
     pub acknowledgements: HashSet<[u8; 32]>,
     pub sending: bool,
+    pub attempts: u8,
     pub updated: Instant,
 }
 
 impl TransferRecord {
     pub fn new(dto: FileTransferDto, hash: [u8; 32], file: Option<NamedTempFile>) -> Self {
-        Self { dto, hash, file, received: HashSet::new(), recipients: HashSet::new(), acknowledgements: HashSet::new(), sending: false, updated: Instant::now() }
+        Self { dto, hash, file, received: HashSet::new(), recipients: HashSet::new(), acknowledgements: HashSet::new(), sending: false, attempts: 0, updated: Instant::now() }
     }
 }
 
@@ -46,17 +47,17 @@ pub fn emit(app: &AppHandle, record: &TransferRecord) {
     let _ = app.emit("file-transfer-updated", &record.dto);
 }
 
-pub fn reserve_capacity(state: &mut AppState, bytes: u64) -> Result<(), String> {
+pub fn reserve_capacity(state: &mut AppState, bytes: u64, adding_record: bool) -> Result<(), String> {
     // Offers expire and partial files are deleted even if a sender disappears.
     for record in state.file_transfers.values_mut() {
-        if record.updated.elapsed() > Duration::from_secs(180) && matches!(record.dto.status.as_str(), "receiving" | "sending" | "offered") {
+        if record.updated.elapsed() > Duration::from_secs(180) && matches!(record.dto.status.as_str(), "receiving" | "sending" | "offered" | "failed") {
             record.dto.status = "failed".into();
             record.dto.error = Some("Transfert expiré. Demandez un nouvel envoi.".into());
             record.file = None;
         }
     }
     state.file_transfers.retain(|_, r| r.updated.elapsed() < Duration::from_secs(86_400));
-    if state.file_transfers.len() >= MAX_RECORDS { return Err("Trop de transferts en attente".into()); }
+    if adding_record && state.file_transfers.len() >= MAX_RECORDS { return Err("Trop de transferts en attente".into()); }
     let staged: u64 = state.file_transfers.values().filter(|r| r.file.is_some()).map(|r| r.dto.file_size).sum();
     if staged.saturating_add(bytes) > MAX_STAGED_BYTES { return Err("Limite de fichiers temporaires atteinte (200 Mio)".into()); }
     Ok(())
@@ -79,9 +80,10 @@ pub async fn publish(state: &Arc<Mutex<AppState>>, channel: Uuid, msg: WireMessa
 
 pub fn fail(app: &AppHandle, state: &Arc<Mutex<AppState>>, id: Uuid, error: String) {
     if let Ok(mut guard) = state.lock() {
+        let own = guard.identity.as_ref().map(|id| hex::encode(id.public_key_bytes()));
         if let Some(r) = guard.file_transfers.get_mut(&id) {
             r.dto.status = "failed".into(); r.dto.error = Some(error); r.sending = false; r.updated = Instant::now();
-            r.file = None;
+            if own.as_deref() != Some(r.dto.sender_id.as_str()) { r.file = None; }
             emit(app, r);
         }
     }
@@ -128,7 +130,7 @@ pub fn handle_incoming(app: &AppHandle, state: &Arc<Mutex<AppState>>, channel: C
         match message {
             WireMessage::FileOffer(offer) => {
                 if offer.sender != author || offer.channel_id != channel || offer.file_size > MAX_FILE_SIZE as u64 || offer.file_name.is_empty() || offer.file_name.len() > 255 || offer.file_name.chars().any(|c| c.is_control() || c == '/' || c == '\\') { return; }
-                if guard.file_transfers.contains_key(&offer.file_id) || reserve_capacity(&mut guard, 0).is_err() { return; }
+                if guard.file_transfers.contains_key(&offer.file_id) || reserve_capacity(&mut guard, 0, true).is_err() { return; }
                 let dto = FileTransferDto { file_id: offer.file_id.to_string(), channel_id: channel.0.to_string(), file_name: offer.file_name, file_size: offer.file_size, status: "offered".into(), progress: 0.0, sender_id: hex::encode(author.0), error: None };
                 let record = TransferRecord::new(dto, offer.file_hash, None);
                 emit(app, &record);
@@ -138,8 +140,11 @@ pub fn handle_incoming(app: &AppHandle, state: &Arc<Mutex<AppState>>, channel: C
                 if accept.accepter != author { return; }
                 let Some(record) = guard.file_transfers.get_mut(&accept.file_id) else { return; };
                 if record.dto.channel_id != channel.0.to_string() || record.dto.sender_id != hex::encode(own.0) || record.file.is_none() || record.recipients.len() >= 64 { return; }
-                if !record.recipients.insert(author.0) { return; }
+                let new_recipient = record.recipients.insert(author.0);
+                if !new_recipient && (record.sending || record.acknowledgements.contains(&author.0) || record.updated.elapsed() < Duration::from_secs(5)) { return; }
                 if !record.sending {
+                    if record.attempts >= 3 { return; }
+                    record.attempts += 1;
                     record.sending = true; record.dto.status = "sending".into(); record.dto.error = None; record.updated = Instant::now();
                     start = Some(accept.file_id); emit(app, record);
                 }
@@ -178,6 +183,19 @@ pub fn handle_incoming(app: &AppHandle, state: &Arc<Mutex<AppState>>, channel: C
             let _ = publish(&state, channel.0, WireMessage::FileComplete(FileCompletion { file_id: id, receiver, channel_id: channel, file_hash: hash })).await;
         });
     }
+}
+
+pub fn start_cleanup(state: std::sync::Weak<Mutex<AppState>>, app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let Some(state) = state.upgrade() else { break; };
+            let Ok(mut guard) = state.lock() else { break; };
+            let expired: Vec<_> = guard.file_transfers.iter().filter(|(_, r)| r.updated.elapsed() > Duration::from_secs(180) && matches!(r.dto.status.as_str(), "receiving" | "sending" | "offered")).map(|(id, _)| *id).collect();
+            let _ = reserve_capacity(&mut guard, 0, false);
+            for id in expired { if let Some(record) = guard.file_transfers.get(&id) { emit(&app, record); } }
+        }
+    });
 }
 
 async fn send_chunks(app: &AppHandle, state: &Arc<Mutex<AppState>>, channel: Uuid, id: Uuid) -> Result<(), String> {

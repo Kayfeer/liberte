@@ -44,7 +44,7 @@ pub async fn send_file(app: AppHandle, state: State<'_, Arc<Mutex<AppState>>>, c
     let id = Uuid::new_v4();
     let offer = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
-        file_transfer::reserve_capacity(&mut guard, size)?;
+        file_transfer::reserve_capacity(&mut guard, size, true)?;
         let (identity, _, _) = file_transfer::context(&guard, channel)?;
         let dto = FileTransferDto { file_id: id.to_string(), channel_id: channel.to_string(), file_name: name.clone(), file_size: size, status: "offered".into(), progress: 0.0, sender_id: hex::encode(identity.public_key_bytes()), error: None };
         let record = TransferRecord::new(dto, hash, Some(file));
@@ -60,7 +60,7 @@ pub fn list_channel_files(state: State<'_, Arc<Mutex<AppState>>>, channel_id: St
     let channel = Uuid::parse_str(&channel_id).map_err(|e| e.to_string())?;
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.database.as_ref().ok_or("Base indisponible")?.get_channel_key(channel).map_err(|e| e.to_string())?;
-    let _ = file_transfer::reserve_capacity(&mut guard, 0);
+    let _ = file_transfer::reserve_capacity(&mut guard, 0, false);
     let mut result: Vec<_> = guard.file_transfers.values().filter(|r| r.dto.channel_id == channel_id).map(|r| r.dto.clone()).collect();
     result.sort_by(|a, b| a.file_name.cmp(&b.file_name).then(a.file_id.cmp(&b.file_id)));
     Ok(result)
@@ -75,17 +75,24 @@ pub async fn accept_file(app: AppHandle, state: State<'_, Arc<Mutex<AppState>>>,
         let size = record.dto.file_size;
         let channel = Uuid::parse_str(&record.dto.channel_id).map_err(|e| e.to_string())?;
         let (identity, _, _) = file_transfer::context(&guard, channel)?;
-        if record.dto.sender_id == hex::encode(identity.public_key_bytes()) || record.dto.status != "offered" { return Err("Offre non disponible".into()); }
-        file_transfer::reserve_capacity(&mut guard, size)?;
+        if record.dto.sender_id == hex::encode(identity.public_key_bytes()) || !matches!(record.dto.status.as_str(), "offered" | "failed") || record.attempts >= 3 { return Err("Offre non disponible, demandez un nouvel envoi".into()); }
+        file_transfer::reserve_capacity(&mut guard, size, false)?;
         let record = guard.file_transfers.get_mut(&id).ok_or("Offre expirée")?;
-        if record.dto.status != "offered" { return Err("Offre expirée".into()); }
+        if !matches!(record.dto.status.as_str(), "offered" | "failed") { return Err("Offre expirée".into()); }
         let file = NamedTempFile::new().map_err(|e| e.to_string())?;
         file.as_file().set_len(size).map_err(|e| e.to_string())?;
-        record.file = Some(file); record.dto.status = "receiving".into(); record.updated = Instant::now();
+        record.file = Some(file); record.dto.status = "receiving".into(); record.dto.error = None; record.dto.progress = 0.0; record.received.clear(); record.attempts += 1; record.updated = Instant::now();
         file_transfer::emit(&app, record);
         (channel, WireMessage::FileAccept(FileAcceptance { file_id: id, accepter: identity.user_id() }))
     };
     if let Err(error) = file_transfer::publish(state.inner(), channel, accept).await { file_transfer::fail(&app, state.inner(), id, error.clone()); return Err(error); }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn dismiss_file(state: State<'_, Arc<Mutex<AppState>>>, file_id: String) -> Result<(), String> {
+    let id = Uuid::parse_str(&file_id).map_err(|e| e.to_string())?;
+    state.lock().map_err(|e| e.to_string())?.file_transfers.remove(&id);
     Ok(())
 }
 

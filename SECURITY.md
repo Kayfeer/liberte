@@ -25,14 +25,14 @@ Les détails exécutables sont dans le code et les tests. Les fonctions déclar�
 - Les clés de canal sont durables. Pas de double ratchet, de confidentialité persistante des anciens messages après compromission de la clé, ni de révocation rétroactive des invitations déjà utilisées.
 - Les membres d'un canal peuvent copier le contenu et le retransmettre. La suppression locale ne retire pas les copies distantes.
 - Les pairs directs connaissent leurs adresses IP. Le chiffrement ne rend pas les participants anonymes.
-- La protection contre le rejeu est bornée et locale au processus ; elle ne constitue pas un journal distribué persistant.
+- La protection contre le rejeu est bornée. Le registre HTTP est persisté localement ; le registre des enveloppes P2P est en mémoire. Ils ne constituent pas un journal distribué.
 - Les connexions réseau, DNS, WebRTC, sauvegardes et téléchargements de mises à jour utilisent leurs propres chemins. Ne pas supposer que tout le trafic réseau est routé par un résolveur unique.
-- WebRTC et TURN ne prouvent pas à eux seuls un chiffrement applicatif indépendant de tout serveur SFU. Le client utilise un maillage de pairs, pas un service SFU de production.
+- En mode SFU, le client configure le chiffrement de bout en bout du SDK LiveKit avec une clé de canal. Le serveur conserve la visibilité sur les participants, les connexions et les métadonnées. La clé est partagée entre membres, sans révocation rétroactive ; vérifier la compatibilité des WebViews et le refus de publication sans E2EE avant usage sensible.
 - Les limites de débit, de stockage et de nombre de pairs doivent être adaptées à l'hébergement. Un service public requiert supervision, mises à jour, sauvegardes et gestion des abus.
 
 ## Déploiement
 
-Conserver l'API HTTP en écoute locale derrière un proxy HTTPS. Ne pas exposer le jeton administrateur à un client non fiable. Utiliser un compte TURN dédié avec un mot de passe aléatoire, des quotas et une rotation. Ne jamais copier la clé privée de signature des releases dans une configuration client.
+Conserver l'API HTTP en écoute locale derrière un proxy HTTPS. Ne pas exposer le jeton administrateur à un client non fiable. Utiliser un compte TURN dédié avec un mot de passe aléatoire, des quotas et une rotation. Pour LiveKit, employer une URL WSS avec certificat valide et conserver la clé API secrète côté serveur. Ne jamais copier la clé privée de signature des releases dans une configuration client.
 
 La CI doit être verte sur le commit effectivement distribué, avec `Cargo.lock` versionné. Les tests automatisés ne remplacent ni les essais sur plusieurs machines, ni la revue indépendante des frontières cryptographiques.
 

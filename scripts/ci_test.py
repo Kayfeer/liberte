@@ -18,6 +18,18 @@ def fake_public_key():
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_dependency_audit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "audit.json"
+            for report in ({}, {"error": {"code": "ENETUNREACH"}},
+                           {"metadata": {"vulnerabilities": {"high": 1, "critical": 0}}},
+                           {"metadata": {"vulnerabilities": {"high": 0, "critical": 1}}}):
+                ci.write_json(path, report)
+                with self.assertRaises(ValueError):
+                    ci.audit_gate(path)
+            ci.write_json(path, {"metadata": {"vulnerabilities": {"high": 0, "critical": 0, "moderate": 1}}})
+            ci.audit_gate(path)
+
     def test_partial_signing_configuration_is_rejected(self):
         for private, public in (("private", ""), ("", fake_public_key())):
             with self.assertRaises(ValueError):

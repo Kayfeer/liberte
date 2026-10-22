@@ -46,6 +46,7 @@ pub fn run() {
                 media_permissions::configure(&window)?;
             }
             let handle = app.handle().clone();
+            file_transfer::start_cleanup(Arc::downgrade(&app_state), handle.clone());
             if let Ok(mut guard) = app_state.lock() {
                 guard.app_handle = Some(handle);
             }
@@ -84,6 +85,7 @@ pub fn run() {
             commands::files::list_channel_files,
             commands::files::accept_file,
             commands::files::save_received_file,
+            commands::files::dismiss_file,
             commands::premium::check_premium,
             commands::premium::activate_premium,
             commands::settings::get_settings,

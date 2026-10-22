@@ -1,8 +1,10 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Home from "./Home";
 import { useMessageStore } from "../stores/messageStore";
 import { useNetworkStore } from "../stores/networkStore";
+import { useMediaStore } from "../stores/mediaStore";
+import { useNavigationStore } from "../stores/navigationStore";
 
 const mocks = vi.hoisted(() => ({
   listChannels: vi.fn(), getAllChannelKeys: vi.fn(), getNetworkStatus: vi.fn(),
@@ -16,9 +18,13 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: vi.fn().mockResolvedValue(false),
   requestPermission: vi.fn().mockResolvedValue("denied"), sendNotification: vi.fn(),
 }));
-vi.mock("../stores/mediaStore", () => ({ useMediaStore: { getState: () => ({
-  setupListeners: mocks.setupListeners, cleanup: mocks.cleanup,
-}) } }));
+vi.mock("../stores/mediaStore", async () => {
+  const { create } = await import("zustand");
+  return { useMediaStore: create(() => ({
+    inCall: false, error: null, setupListeners: mocks.setupListeners, cleanup: mocks.cleanup,
+  })) };
+});
+vi.mock("../components/voice/VoicePanel", () => ({ default: () => <div data-testid="voice-panel" /> }));
 vi.mock("../components/layout/Sidebar", () => ({ default: () => null }));
 vi.mock("../components/layout/Header", () => ({ default: () => null }));
 vi.mock("../components/layout/MainPanel", () => ({ default: () => null }));
@@ -34,6 +40,8 @@ describe("home lifecycle", () => {
     mocks.setupListeners.mockResolvedValue(undefined);
     useMessageStore.setState({ channels: [], error: null });
     useNetworkStore.setState({ error: null });
+    useMediaStore.setState({ inCall: false, error: null });
+    useNavigationStore.setState({ currentPage: "chat" });
   });
   it("loads channels once and does not re-register when channel data changes", async () => {
     const view = render(<Home />);
@@ -47,5 +55,16 @@ describe("home lifecycle", () => {
     expect(registrations).toBe(8);
     view.unmount();
     expect(mocks.cleanup).toHaveBeenCalledOnce();
+  });
+  it("keeps call playback mounted while settings are open and shows a fatal call error", async () => {
+    useMediaStore.setState({ inCall: true });
+    render(<Home />);
+    const playback = screen.getByTestId("voice-panel");
+    act(() => useNavigationStore.setState({ currentPage: "settings" }));
+    expect(screen.getByTestId("voice-panel")).toBe(playback);
+    act(() => useMediaStore.setState({ inCall: false, error: "Chiffrement interrompu" }));
+    expect(screen.queryByTestId("voice-panel")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("Chiffrement interrompu");
+    await waitFor(() => expect(useMessageStore.getState().channels).toHaveLength(1));
   });
 });

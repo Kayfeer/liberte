@@ -1,4 +1,4 @@
-"""CI helpers. No deployment, package installation or external API calls."""
+"""CI validation and packaging helpers. No deployment or publication."""
 from __future__ import annotations
 
 import argparse
@@ -84,12 +84,28 @@ def frontend_lock():
     package = read_json(directory / "package.json")
     path = directory / "package-lock.json"
     old = read_json(path) if path.is_file() else {}
-    if not npm_lock_matches(package, old):
+    original = path.read_bytes() if path.is_file() else None
+    mismatched = not npm_lock_matches(package, old)
+    if mismatched:
         print("::warning::Frontend manifest and lockfile differ. Generating a candidate for review.")
+    # npm lockfile v3 does not record root overrides. Let npm reconcile them
+    # without running package scripts; a release still rejects any lock diff.
+    if mismatched or package.get("overrides"):
         run(["npm", "install", "--package-lock-only", "--ignore-scripts"], cwd=directory)
         if not npm_lock_matches(package, read_json(path)):
             raise ValueError("npm did not produce a matching lockfile")
+    if path.read_bytes() != original:
         export_file(path, "frontend/package-lock.json")
+
+
+def audit_gate(path):
+    report = read_json(path)
+    counts = report.get("metadata", {}).get("vulnerabilities", {})
+    if report.get("error") or not all(isinstance(counts.get(level), int) for level in ("high", "critical")):
+        raise ValueError("Dependency audit did not produce a complete result")
+    if counts["high"] or counts["critical"]:
+        raise ValueError(f"Dependency audit: {counts['high']} high and {counts['critical']} critical vulnerabilities")
+    print("Dependency audit passed: no high or critical vulnerabilities")
 
 
 def format_patch():
@@ -189,6 +205,32 @@ def package_server(target, label):
     with archive.open("rb") as stream:
         checksum = hashlib.file_digest(stream, "sha256").hexdigest()
     archive.with_name(archive.name + ".sha256").write_text(f"{checksum}  {archive.name}\n", encoding="ascii")
+
+
+def package_desktop(label):
+    bundle = ROOT / "target/release/bundle"
+    pattern = {"windows-x86_64": "nsis/*setup.exe", "linux-x86_64": "appimage/*.AppImage",
+               "macos-aarch64": "macos/*.app"}[label]
+    candidates = list(bundle.glob(pattern))
+    if len(candidates) != 1:
+        raise ValueError(f"Expected one desktop package for {label}, found {len(candidates)}")
+    source = candidates[0]
+    destination = ROOT / ".ci-output/desktop"
+    destination.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        artifact = destination / f"liberte-{label}.tar.gz"
+        with tarfile.open(artifact, "w:gz") as archive:
+            archive.add(source, arcname=source.name)
+    else:
+        artifact = destination / source.name
+        shutil.copy2(source, artifact)
+    if artifact.stat().st_size < 1024:
+        raise ValueError("Desktop package is empty or truncated")
+    with artifact.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    write_json(destination / "build.json", {"version": versions(), "commit": os.environ["GITHUB_SHA"],
+               "platform": label, "signed": False, "file": artifact.name, "sha256": digest})
+    (destination / "SHA256SUMS").write_text(f"{digest}  {artifact.name}\n", encoding="utf-8")
 
 
 def request(base, path, method="GET", data=None, headers=None):
@@ -357,6 +399,8 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("lockfile")
     commands.add_parser("frontend-lock")
+    audit = commands.add_parser("audit-gate")
+    audit.add_argument("path")
     commands.add_parser("format-patch")
     version = commands.add_parser("versions")
     version.add_argument("--tag")
@@ -367,6 +411,8 @@ def main():
     server = commands.add_parser("package-server")
     server.add_argument("--target", required=True)
     server.add_argument("--label", required=True)
+    desktop = commands.add_parser("package-desktop")
+    desktop.add_argument("--label", required=True)
     smoke_parser = commands.add_parser("smoke")
     source = smoke_parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--binary")
@@ -380,6 +426,8 @@ def main():
         lockfile()
     elif args.command == "frontend-lock":
         frontend_lock()
+    elif args.command == "audit-gate":
+        audit_gate(args.path)
     elif args.command == "format-patch":
         format_patch()
     elif args.command == "versions":
@@ -390,6 +438,8 @@ def main():
         collect_client(args.target, args.label)
     elif args.command == "package-server":
         package_server(args.target, args.label)
+    elif args.command == "package-desktop":
+        package_desktop(args.label)
     elif args.command == "smoke":
         smoke(args.binary, args.image)
     elif args.command == "finalize-release":

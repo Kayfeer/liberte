@@ -32,6 +32,7 @@ interface MediaState {
 }
 
 let session: CallSession | null = null;
+let ending: Promise<void> | null = null;
 let generation = 0;
 let listenerGeneration = 0;
 let setupPromise: Promise<void> | null = null;
@@ -108,16 +109,21 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     }
   },
 
-  endCall: async () => {
+  endCall: () => {
+    if (ending) return ending;
     ++generation;
     const current = session;
     session = null;
     set({ ...idle, busy: true, error: null });
-    try {
-      await current?.stop();
-      await tauri.endCall();
-    } catch (error) { set({ error: errorText(error) }); throw error; }
-    finally { set({ busy: false }); }
+    const pending = (async () => {
+      try {
+        await current?.stop();
+        await tauri.endCall();
+      } catch (error) { set({ error: errorText(error) }); throw error; }
+      finally { ending = null; set({ busy: false }); }
+    })();
+    ending = pending;
+    return pending;
   },
 
   toggleMute: async () => {

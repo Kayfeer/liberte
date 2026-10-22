@@ -9,7 +9,7 @@ Le client Tauri relie l'interface React aux commandes Rust. Le bridge réseau tr
 | store | Données SQLite, migrations, fichiers et sauvegardes |
 | client | Commandes Tauri, session utilisateur et bridge événementiel |
 | frontend | Interface React, état utilisateur et flux WebRTC |
-| server | API authentifiée, stockage et relais P2P |
+| server | API authentifiée, stockage, relais P2P et jetons d'accès au SFU optionnel |
 | media | Composants média bas niveau ; leur présence ne signifie pas qu'un SFU est déployé |
 
 ## Frontières
@@ -19,6 +19,8 @@ Le réseau est non fiable. Les signatures et le chiffrement de canal sont vérif
 Le stockage local n'offre pas de protection contre un appareil compromis. Le serveur de blobs reçoit du contenu déjà chiffré et doit aussi vérifier qui possède le droit de le lire, modifier ou supprimer.
 
 Le réseau de signalisation et les flux WebRTC sont deux chemins distincts. Se connecter au serveur HTTP ou au serveur TURN ne garantit pas la découverte d'un pair libp2p.
+
+En mode SFU, LiveKit transporte les flux média chiffrés par le SDK client. L'API Liberté délivre les jetons d'accès de courte durée ; les clés de chiffrement proviennent du canal et ne sont pas confiées au SFU. La connectivité du SFU et la distribution des clés sont des frontières distinctes.
 
 ## Exploitation
 

@@ -4,13 +4,19 @@ Une publication est une opération distincte d'une pull request. Ne pas créer d
 
 ## Amorçage des lockfiles
 
-La CI résout une seule fois un `Cargo.lock` manquant et le rend disponible dans l'artefact `cargo-lock`. Si les dépendances directes du frontend ne correspondent plus à `package-lock.json`, elle produit un candidat avec `npm install --package-lock-only --ignore-scripts`, dans `frontend-lock`. Les builds utilisent ensuite les fichiers obtenus et les commandes strictes.
+La CI résout une seule fois un `Cargo.lock` manquant et le rend disponible dans l'artefact `cargo-lock`. Si les dépendances directes du frontend ne correspondent plus à `package-lock.json`, elle produit un candidat avec `npm install --package-lock-only --ignore-scripts`, dans `frontend-lock`. Cette réconciliation est également effectuée en présence d'overrides npm, car le lockfile ne conserve pas leur déclaration racine. Les builds utilisent ensuite les fichiers obtenus et les commandes strictes.
 
 Examiner les deux artefacts, les reporter dans le dépôt et les versionner. Les logs `CODEX_BOOTSTRAP_FILE` contiennent aussi leur contenu compressé, encodé en Base64 et accompagné d'un SHA-256. Ces exports sont réservés aux lockfiles et correctifs de formatage ; ne jamais y ajouter des secrets.
 
 Une erreur de formatage Rust produit `rustfmt-patch` sans transformer le résultat en succès. Les autres vérifications peuvent continuer pour donner un diagnostic complet, mais la gate finale reste rouge tant que toutes les vérifications n'ont pas réussi.
 
 La release exige `Cargo.lock` versionné, un lockfile npm identique à celui du dépôt et des versions Cargo/Tauri/frontend identiques.
+
+## Paquets de test CI
+
+Les jobs desktop construisent Windows NSIS, Linux AppImage et macOS ARM64 `.app` sans signature de distribution. Leurs artefacts `desktop-<plateforme>-<commit>` contiennent un paquet, `SHA256SUMS` et `build.json`. Sur Linux, rendre l'AppImage exécutable après extraction. Sur macOS, l'archive tar conserve les permissions et liens du bundle ; les exigences Gatekeeper et de signature doivent être traitées pour une distribution publique.
+
+Ces paquets permettent les essais sur machine, sans créer de release ni de tag. Les tests Rust continuent indépendamment des erreurs frontend ; un paquet desktop exige cependant le véritable frontend compilé. Une erreur de test, de type, de formatage, de lint, de smoke test ou une vulnérabilité npm high/critical conserve une CI en échec. Le rapport `npm-audit` et les traces Playwright sont disponibles pour le diagnostic.
 
 ## Chaîne de release
 

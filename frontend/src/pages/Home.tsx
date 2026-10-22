@@ -14,6 +14,7 @@ import { useProfileStore, type PeerProfile } from "../stores/profileStore";
 import Sidebar from "../components/layout/Sidebar";
 import Header from "../components/layout/Header";
 import MainPanel from "../components/layout/MainPanel";
+import VoicePanel from "../components/voice/VoicePanel";
 import UpdateBanner from "../components/common/UpdateBanner";
 import Settings from "./Settings";
 
@@ -22,6 +23,8 @@ export default function Home() {
   const channelError = useMessageStore((state) => state.error);
   const networkError = useNetworkStore((state) => state.error);
   const identityError = useIdentityStore((state) => state.error);
+  const inCall = useMediaStore((state) => state.inCall);
+  const mediaError = useMediaStore((state) => state.error);
   const autoBackupEnabled = useBackupStore((state) => state.autoBackupEnabled);
   const intervalMinutes = useBackupStore((state) => state.intervalMinutes);
   const [eventError, setEventError] = useState<string | null>(null);
@@ -86,13 +89,14 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [autoBackupEnabled, intervalMinutes]);
 
-  const error = eventError || channelError || networkError || identityError;
+  const error = eventError || channelError || networkError || identityError || (!inCall ? mediaError : null);
   return (
     <div className="flex h-screen bg-liberte-bg overflow-hidden">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0">
         <UpdateBanner />
         {error && <div role="alert" className="bg-red-900/20 text-red-300 px-4 py-2 text-sm">{error}</div>}
+        {inCall && <VoicePanel />}
         {currentPage === "settings" ? <Settings /> : <><Header /><MainPanel /></>}
       </div>
     </div>

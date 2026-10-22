@@ -19,6 +19,11 @@ PostCSS specifications and constrain Rollup to the patched 4.x line, preventing
 an older nested copy from remaining in the lockfile. LiveKit stays at 2.23.0.
 No `npm audit fix --force` or guessed lockfile integrity values are used.
 
+The override specifications are written explicitly and match their direct
+dependency specifications exactly. The integration runner's npm 10.9.9 failed to
+resolve the `$postcss` reference while bootstrapping the older lockfile, so the
+manifest does not rely on reference-style overrides.
+
 These are build/test dependencies; exploit conditions vary. For example, several
 Vite/Vitest issues require an exposed development or test server. Updating them
 still protects developer machines and CI. The production desktop application

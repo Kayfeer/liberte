@@ -82,7 +82,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/liberte-client
-          tauriScript: npm --prefix ../../frontend run tauri --
+          tauriScript: node ../../frontend/node_modules/@tauri-apps/cli/tauri.js
           args: --target ${{ matrix.target }} --config tauri-ci.conf.json -- --locked
           uploadUpdaterJson: false
       - name: Validate expected installers and signatures

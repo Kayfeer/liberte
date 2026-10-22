@@ -69,7 +69,7 @@ export class SfuSession implements CallSession {
     if (this.closed) return;
     // Stop capture synchronously before any network teardown can await.
     this.options.onError(message);
-    void this.stop().finally(() => this.options.onClosed?.(message));
+    void this.stop().catch(() => {}).finally(() => this.options.onClosed?.(message));
   }
 
   private publishLocalStream() {
@@ -205,7 +205,7 @@ export class SfuSession implements CallSession {
       registerMediaSession(this);
       this.publishLocalStream();
     } catch (error) {
-      await this.stop();
+      await this.stop().catch(() => {});
       throw error;
     }
   }
@@ -303,6 +303,15 @@ export class SfuSession implements CallSession {
   retryConnections() {
     if (this.closed) { this.options.onError("Rejoignez de nouveau l'appel SFU."); return; }
     void this.room?.startAudio().catch(() => this.options.onError("Autorisez la lecture audio dans le navigateur."));
+  }
+
+  /** Receiver statistics expose actual decoded media for diagnostics. */
+  async getStats(): Promise<RTCStatsReport[]> {
+    const tracks = [...(this.room?.remoteParticipants.values() ?? [])]
+      .flatMap((participant) => [...participant.trackPublications.values()])
+      .flatMap((publication) => publication.track ? [publication.track] : []);
+    const reports = await Promise.all(tracks.map((track) => track.getRTCStatsReport()));
+    return reports.filter((report): report is RTCStatsReport => !!report);
   }
 
   async stop(): Promise<void> {

@@ -102,7 +102,10 @@ export default function Header() {
               disabled={inCall || busy || callPending}
               onChange={(event) => {
                 setCallError(null);
-                void setMode(event.target.value as "mesh" | "sfu").catch((error) => setCallError(String(error)));
+                setCallPending(true);
+                void setMode(event.target.value as "mesh" | "sfu")
+                  .catch((error) => setCallError(String(error)))
+                  .finally(() => setCallPending(false));
               }}
               className="bg-liberte-panel text-xs rounded px-2 py-1 disabled:opacity-60"
             >

@@ -9,7 +9,7 @@ pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 
     window.with_webview(|platform| {
         let view = platform.inner();
-        if let Some(settings) = view.settings() {
+        if let Some(settings) = WebViewExt::settings(&view) {
             settings.set_enable_webrtc(true);
             settings.set_enable_media_stream(true);
             settings.set_media_playback_requires_user_gesture(false);
