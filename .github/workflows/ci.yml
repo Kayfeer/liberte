@@ -56,6 +56,8 @@ jobs:
   frontend:
     name: Frontend tests, types and build
     runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.build.outcome }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -75,21 +77,107 @@ jobs:
         run: git diff --exit-code -- frontend/package-lock.json
       - run: npm ci
         working-directory: frontend
-      - run: npm test
+      - name: Preserve dependency audit diagnostics
+        id: audit
+        continue-on-error: true
         working-directory: frontend
-      - run: npm run typecheck
+        run: |
+          mkdir -p ../.ci-output
+          npm audit --json > ../.ci-output/npm-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit
+          path: .ci-output/npm-audit.json
+          if-no-files-found: warn
+      - name: Print dependency audit for review
+        if: always()
+        run: cat .ci-output/npm-audit.json
+      - id: tests
+        continue-on-error: true
+        run: npm test
         working-directory: frontend
-      - run: npm run build
+      - id: types
+        continue-on-error: true
+        run: npm run typecheck
+        working-directory: frontend
+      - id: build
+        continue-on-error: true
+        run: npm run build
         working-directory: frontend
       - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
         with:
           name: frontend-dist
           path: frontend/dist
           if-no-files-found: error
+      - name: Require frontend tests, types and build to pass
+        if: always()
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          TYPES: ${{ steps.types.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+        run: |
+          for result in "$TESTS" "$TYPES" "$BUILD"; do
+            test "$result" = success || exit 1
+          done
+
+  media:
+    name: Browser media integration
+    needs: frontend
+    if: always() && needs.frontend.outputs.build == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      LIBERTE_SFU_TEST_URL: ws://127.0.0.1:7880
+      LIBERTE_SFU_API_KEY: liberte-ci
+      LIBERTE_SFU_API_SECRET: liberte-ci-only-not-a-production-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-lock
+          path: frontend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Start a local LiveKit instance for browser integration
+        run: |
+          docker run --detach --name liberte-ci-livekit --network host \
+            --env "LIVEKIT_KEYS=$LIBERTE_SFU_API_KEY: $LIBERTE_SFU_API_SECRET" \
+            livekit/livekit-server:v1.13.10 \
+            --dev --bind 127.0.0.1 --node-ip 127.0.0.1
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:7880/; then exit 0; fi
+            sleep 1
+          done
+          docker logs liberte-ci-livekit
+          exit 1
+      - run: npm run test:media
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-media-failure
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          if-no-files-found: warn
+      - name: Preserve LiveKit diagnostics and stop the test server
+        if: always()
+        run: |
+          docker logs liberte-ci-livekit || true
+          docker rm --force liberte-ci-livekit || true
 
   rust:
     name: Rust format, check, tests and Clippy
     needs: [lockfile, frontend]
+    if: always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

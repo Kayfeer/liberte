@@ -4,6 +4,7 @@ use std::{fmt, net::SocketAddr, path::PathBuf};
 pub struct ServerConfig {
     pub listen_addr: String,
     pub public_relay_addr: Option<String>,
+    pub livekit: Option<LiveKitConfig>,
     pub http_addr: SocketAddr,
     pub blob_storage_path: PathBuf,
     pub payment_server_pubkey: [u8; 32],
@@ -25,6 +26,7 @@ impl fmt::Debug for ServerConfig {
         f.debug_struct("ServerConfig")
             .field("listen_addr", &self.listen_addr)
             .field("public_relay_addr", &self.public_relay_addr)
+            .field("livekit", &self.livekit)
             .field("http_addr", &self.http_addr)
             .field("blob_storage_path", &self.blob_storage_path)
             .field("instance_name", &self.instance_name)
@@ -46,6 +48,7 @@ impl Default for ServerConfig {
         Self {
             listen_addr: "/ip4/0.0.0.0/udp/4001/quic-v1".to_string(),
             public_relay_addr: None,
+            livekit: None,
             http_addr: ([0, 0, 0, 0], 8080).into(),
             blob_storage_path: PathBuf::from("./blobs"),
             payment_server_pubkey: [0; 32],
@@ -54,7 +57,7 @@ impl Default for ServerConfig {
             max_total_bytes: 1024 * 1024 * 1024,
             max_objects: 10_000,
             max_replay_entries: 10_000,
-            max_http_concurrency: 8,
+            max_http_concurrency: 2,
             instance_name: "Liberte Node".to_string(),
             premium_required: true,
             admin_token: None,
@@ -69,7 +72,9 @@ impl ServerConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let mut config = Self::default();
         if let Ok(value) = std::env::var("LISTEN_ADDR") { config.listen_addr = value; }
-        if let Ok(value) = std::env::var("PUBLIC_RELAY_ADDR") { config.public_relay_addr = Some(value); }
+        if let Ok(value) = std::env::var("PUBLIC_RELAY_ADDR") {
+            if !value.is_empty() { config.public_relay_addr = Some(value); }
+        }
         if let Ok(value) = std::env::var("HTTP_ADDR") { config.http_addr = value.parse()?; }
         if let Ok(value) = std::env::var("BLOB_STORAGE_PATH") { config.blob_storage_path = value.into(); }
         if let Ok(value) = std::env::var("PAYMENT_SERVER_PUBKEY") {
@@ -77,8 +82,10 @@ impl ServerConfig {
         }
         if let Ok(value) = std::env::var("INSTANCE_NAME") { config.instance_name = value; }
         if let Ok(value) = std::env::var("ADMIN_TOKEN") {
-            anyhow::ensure!(value.len() >= 32, "ADMIN_TOKEN must contain at least 32 characters");
-            config.admin_token = Some(value);
+            if !value.is_empty() {
+                anyhow::ensure!(value.len() >= 32, "ADMIN_TOKEN must contain at least 32 characters");
+                config.admin_token = Some(value);
+            }
         }
         config.premium_required = env_bool("PREMIUM_REQUIRED", config.premium_required)?;
         config.registration_open = env_bool("REGISTRATION_OPEN", config.registration_open)?;
@@ -89,9 +96,55 @@ impl ServerConfig {
         config.max_replay_entries = env_limit("MAX_REPLAY_ENTRIES", config.max_replay_entries, 100_000)?;
         config.max_http_concurrency = env_limit("MAX_HTTP_CONCURRENCY", config.max_http_concurrency, 64)?;
         config.max_peers = env_limit("MAX_PEERS", config.max_peers, 4096)?;
+        config.livekit = LiveKitConfig::from_env()?;
         anyhow::ensure!(config.max_user_bytes >= config.max_blob_size as u64, "MAX_USER_BYTES must be >= MAX_BLOB_SIZE");
         anyhow::ensure!(config.max_total_bytes >= config.max_user_bytes, "MAX_TOTAL_BYTES must be >= MAX_USER_BYTES");
         Ok(config)
+    }
+}
+
+#[derive(Clone)]
+pub struct LiveKitConfig {
+    pub url: String,
+    pub api_key: String,
+    pub api_secret: String,
+}
+
+impl fmt::Debug for LiveKitConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LiveKitConfig")
+            .field("url", &self.url)
+            .field("api_key", &"[REDACTED]")
+            .field("api_secret", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl LiveKitConfig {
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let url = std::env::var("LIVEKIT_URL").ok().filter(|value| !value.is_empty());
+        let key = std::env::var("LIVEKIT_API_KEY").ok().filter(|value| !value.is_empty());
+        let secret = std::env::var("LIVEKIT_API_SECRET").ok().filter(|value| !value.is_empty());
+        match (url, key, secret) {
+            (None, None, None) => Ok(None),
+            (Some(url), Some(api_key), Some(api_secret)) => {
+                let config = Self { url, api_key, api_secret };
+                config.validate()?;
+                Ok(Some(config))
+            }
+            _ => anyhow::bail!("LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be configured together"),
+        }
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        let url = url::Url::parse(&self.url).map_err(|_| anyhow::anyhow!("Invalid LIVEKIT_URL"))?;
+        let local = url.host_str().is_some_and(|host| host.eq_ignore_ascii_case("localhost")
+            || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()));
+        anyhow::ensure!(url.scheme() == "wss" || (url.scheme() == "ws" && local), "LIVEKIT_URL requires wss outside loopback");
+        anyhow::ensure!(url.username().is_empty() && url.password().is_none() && url.query().is_none() && url.fragment().is_none(), "LIVEKIT_URL cannot contain credentials, query or fragment");
+        anyhow::ensure!(self.api_key.len() <= 128 && self.api_key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')), "Invalid LIVEKIT_API_KEY");
+        anyhow::ensure!(self.api_secret.len() >= 32 && self.api_secret.len() <= 1024, "LIVEKIT_API_SECRET must contain 32 to 1024 characters");
+        Ok(())
     }
 }
 
@@ -140,5 +193,20 @@ mod tests {
     fn parses_public_key() {
         assert_eq!(parse_hex_pubkey(&"ab".repeat(32)).unwrap(), [0xab; 32]);
         assert!(parse_hex_pubkey("abcd").is_err());
+    }
+
+    #[test]
+    fn media_configuration_masks_secrets_and_requires_secure_transport() {
+        let mut config = LiveKitConfig { url: "wss://media.example.test".into(), api_key: "test-key".into(), api_secret: "test-secret-longer-than-32-characters".into() };
+        assert!(config.validate().is_ok());
+        let debug = format!("{config:?}");
+        assert!(!debug.contains(&config.api_key));
+        assert!(!debug.contains(&config.api_secret));
+        config.url = "ws://media.example.test".into();
+        assert!(config.validate().is_err());
+        config.url = "ws://127.0.0.1:7880".into();
+        assert!(config.validate().is_ok());
+        config.url = "wss://name:password@media.example.test".into();
+        assert!(config.validate().is_err());
     }
 }

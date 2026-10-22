@@ -32,7 +32,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; connect-src 'self' ipc: asset:"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ipc: asset: http://ipc.localhost https: wss: ws://localhost:* ws://127.0.0.1:*"
     },
     "trayIcon": {
       "iconPath": "icons/icon.png",
@@ -66,7 +66,8 @@
       }
     },
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "entitlements": "Entitlements.plist"
     }
   }
 }

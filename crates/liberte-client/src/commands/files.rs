@@ -123,7 +123,7 @@ pub async fn upload_premium_blob(state: State<'_, Arc<Mutex<AppState>>>, file_pa
         liberte_shared::crypto::encrypt(&key, &data).map_err(|e| e.to_string())
     }).await.map_err(|e| e.to_string())??;
     let response = crate::server_client::signed_request(&server, reqwest::Method::POST, "/blob/upload", encrypted, &identity, token.as_ref(), "application/octet-stream").await?;
-    let uploaded: BlobUploadResponse = response.json().await.map_err(|e| format!("Réponse serveur invalide : {e}"))?;
+    let uploaded: BlobUploadResponse = crate::server_client::read_json_limited(response, 4096).await?;
     Uuid::parse_str(&uploaded.blob_id).map_err(|_| "Identifiant serveur invalide")?;
     Ok(uploaded.blob_id)
 }

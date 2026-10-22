@@ -239,7 +239,10 @@ pub async fn spawn_swarm(
                             for (peer, address) in peers {
                                 swarm.behaviour_mut().kademlia.add_address(&peer, address.clone());
                                 swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer);
-                                if peer != local_peer_id && !swarm.is_connected(&peer) { let _ = swarm.dial(address.with(Protocol::P2p(peer))); }
+                                if peer != local_peer_id && !swarm.is_connected(&peer) {
+                                    let address = if matches!(address.iter().last(), Some(Protocol::P2p(_))) { address } else { address.with(Protocol::P2p(peer)) };
+                                    let _ = swarm.dial(address);
+                                }
                             }
                         }
                         SwarmEvent::Behaviour(LiberteEvent::Mdns(libp2p::mdns::Event::Expired(peers))) => {
@@ -384,6 +387,13 @@ pub async fn spawn_swarm(
                         }
 
                         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                            let mut index = 0;
+                            while index < pending_dials.len() {
+                                if peer_id.is_some() && extract_peer_id(&pending_dials[index].0) == peer_id {
+                                    let (_, reply, _) = pending_dials.swap_remove(index);
+                                    let _ = reply.send(Err(error.to_string()));
+                                } else { index += 1; }
+                            }
                             warn!(
                                 peer = ?peer_id,
                                 error = %error,

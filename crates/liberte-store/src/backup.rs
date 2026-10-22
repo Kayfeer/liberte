@@ -172,9 +172,10 @@ impl Database {
                 Err(StoreError::NotFound) | Ok(_) => {}, Err(e) => return Err(e),
             }
         }
+        let message_channels: HashMap<_, _> = validated.messages.iter().map(|m| (m.id, m.channel_id)).collect();
         for reaction in &payload.reactions {
-            let channel = match validated.messages.iter().find(|m| m.id == reaction.message_id) {
-                Some(message) => message.channel_id, None => self.get_message_by_id(reaction.message_id)?.channel_id,
+            let channel = match message_channels.get(&reaction.message_id) {
+                Some(channel) => *channel, None => self.get_message_by_id(reaction.message_id)?.channel_id,
             };
             if channel != reaction.channel_id { return Err(invalid("Reaction channel does not match its message")); }
             let existing: Option<(String, String, String, String)> = tx.query_row("SELECT message_id,channel_id,user_pubkey,emoji FROM reactions WHERE id=?1", params![reaction.id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;

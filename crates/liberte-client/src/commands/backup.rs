@@ -33,7 +33,7 @@ pub fn export_backup(state: State<'_, Arc<Mutex<AppState>>>, password: Option<St
 }
 
 /// Replace a backup atomically, keeping the previous file intact if writing fails.
-fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("Cannot create backup file: {e}"))?;
     temporary.write_all(contents).map_err(|e| format!("Cannot write backup: {e}"))?;
@@ -76,14 +76,33 @@ pub async fn auto_backup(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Strin
 }
 
 #[tauri::command]
-pub fn import_backup(state: State<'_, Arc<Mutex<AppState>>>, json: String, password: Option<String>, allow_legacy: Option<bool>) -> Result<ImportStats, String> {
-    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    let plaintext = backup_crypto::decode_import(&json, password.as_deref(), guard.identity.as_ref(), BackupKind::Backup, allow_legacy.unwrap_or(false))?;
-    let payload: liberte_store::BackupPayload = serde_json::from_slice(&plaintext).map_err(|e| format!("Invalid backup contents: {e}"))?;
-    let db = guard.database.as_ref().ok_or("Database not opened")?;
-    let stats = db.import_backup(&payload).map_err(|e| format!("Import failed; existing data preserved: {e}"))?;
+pub async fn import_backup(state: State<'_, Arc<Mutex<AppState>>>, json: String, password: Option<String>, allow_legacy: Option<bool>) -> Result<ImportStats, String> {
+    let (stats, channels) = {
+        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+        let plaintext = backup_crypto::decode_import(&json, password.as_deref(), guard.identity.as_ref(), BackupKind::Backup, allow_legacy.unwrap_or(false))?;
+        let payload: liberte_store::BackupPayload = serde_json::from_slice(&plaintext).map_err(|e| format!("Invalid backup contents: {e}"))?;
+        let db = guard.database.as_ref().ok_or("Database not opened")?;
+        let stats = db.import_backup(&payload).map_err(|e| format!("Import failed; existing data preserved: {e}"))?;
+        (stats, payload.channels)
+    };
+    subscribe_restored_channels(state.inner(), &channels).await;
     info!(channels = stats.channels_imported, messages = stats.messages_imported, "Encrypted backup imported");
     Ok(stats)
+}
+
+async fn subscribe_restored_channels(state: &Arc<Mutex<AppState>>, channels: &[liberte_store::backup::BackupChannel]) {
+    let sender = state.lock().ok().and_then(|guard| guard.swarm_cmd_tx.clone());
+    let Some(sender) = sender else { return; };
+    for channel in channels {
+        // The importer has validated every UUID before committing.
+        let Ok(id) = uuid::Uuid::parse_str(&channel.id) else { continue; };
+        if let Err(error) = liberte_net::subscribe_topic(&sender, &liberte_shared::types::ChannelId(id)).await {
+            let message = format!("History restored, but channel subscription failed: {error}");
+            tracing::warn!(%message);
+            if let Ok(mut guard) = state.lock() { guard.network_error = Some(message); }
+            break;
+        }
+    }
 }
 
 #[tauri::command]
@@ -190,12 +209,16 @@ pub async fn restore_remote_backup(state: State<'_, Arc<Mutex<AppState>>>) -> Re
         remote_context(&guard)?
     };
     let payload = fetch_remote_backup(&base, &identity).await?;
-    let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
-    if guard.identity.as_ref().map(|i| i.public_key_bytes()) != Some(identity.public_key_bytes()) {
-        return Err("Identity changed during download; retry with the original identity".into());
-    }
-    guard.database.as_ref().ok_or("Database not opened")?.import_backup(&payload)
-        .map_err(|e| format!("Remote restore failed; existing data preserved: {e}"))
+    let stats = {
+        let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+        if guard.identity.as_ref().map(|i| i.public_key_bytes()) != Some(identity.public_key_bytes()) {
+            return Err("Identity changed during download; retry with the original identity".into());
+        }
+        guard.database.as_ref().ok_or("Database not opened")?.import_backup(&payload)
+            .map_err(|e| format!("Remote restore failed; existing data preserved: {e}"))?
+    };
+    subscribe_restored_channels(state.inner(), &payload.channels).await;
+    Ok(stats)
 }
 async fn cleanup_old_backups(dir: &Path, keep: usize) -> Result<(), String> {
     let mut rd = tokio::fs::read_dir(dir).await.map_err(|e| e.to_string())?;

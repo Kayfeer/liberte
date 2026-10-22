@@ -40,6 +40,9 @@ fn seal_message(state: &AppState, channel: &ChannelId, message: &WireMessage) ->
 }
 
 fn announce(state: &AppState, event_type: VoiceEventType) -> Result<(), String> {
+    // LiveKit supplies its own roster. Mixing mesh and SFU presence would cause
+    // mesh clients to negotiate with peers using a different media transport.
+    if state.call_mode == "sfu" { return Ok(()); }
     let channel = ChannelId(uuid::Uuid::parse_str(
         state.call_channel_id.as_deref().ok_or("Not in a call")?,
     ).map_err(|_| "Invalid channel UUID")?);
@@ -60,7 +63,14 @@ pub fn start_call(state: State<'_, Arc<Mutex<AppState>>>, channel_id: String) ->
     let channel_id = uuid::Uuid::parse_str(&channel_id).map_err(|_| "Invalid channel UUID")?.to_string();
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     if guard.is_in_call { return Err("Already in a call".into()); }
-    if guard.call_mode != "mesh" { return Err("SFU media transport is not available".into()); }
+    let channel = ChannelId(uuid::Uuid::parse_str(&channel_id).map_err(|_| "Invalid channel UUID")?);
+    let identity = guard.identity.as_ref().ok_or("No identity loaded")?;
+    // Validate local membership and key even for SFU, which has no GossipSub presence.
+    let membership_probe = WireMessage::VoiceEvent(VoiceEvent {
+        user_id: identity.user_id(), channel_id: channel.clone(),
+        event_type: VoiceEventType::Join, timestamp: chrono::Utc::now(),
+    });
+    seal_message(&guard, &channel, &membership_probe)?;
     guard.call_channel_id = Some(channel_id);
     if let Err(error) = announce(&guard, VoiceEventType::Join) {
         guard.call_channel_id = None;
@@ -123,7 +133,7 @@ pub async fn send_call_signal(
     let target = UserId(bytes.try_into().map_err(|_| "Invalid target identity length")?);
     let (tx, data) = {
         let guard = state.lock().map_err(|e| e.to_string())?;
-        if !guard.is_in_call || guard.call_channel_id.as_deref() != Some(canonical_channel.as_str()) {
+        if !guard.is_in_call || guard.call_mode != "mesh" || guard.call_channel_id.as_deref() != Some(canonical_channel.as_str()) {
             return Err("Signal does not belong to the active call".into());
         }
         let sender = guard.identity.as_ref().ok_or("No identity loaded")?.user_id();
@@ -156,8 +166,9 @@ pub fn toggle_video(state: State<'_, Arc<Mutex<AppState>>>) -> Result<bool, Stri
 
 #[tauri::command]
 pub fn set_call_mode(state: State<'_, Arc<Mutex<AppState>>>, mode: String) -> Result<String, String> {
-    if mode != "mesh" { return Err("Le transport SFU n'est pas encore disponible. Utilisez le mode P2P.".into()); }
+    if mode != "mesh" && mode != "sfu" { return Err("Invalid call mode".into()); }
     let mut guard = state.lock().map_err(|e| e.to_string())?;
+    if guard.is_in_call { return Err("Quittez l'appel avant de changer de transport.".into()); }
     guard.call_mode = mode.clone();
     Ok(mode)
 }

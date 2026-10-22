@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import * as tauri from "@/lib/tauri";
 import { useIdentityStore } from "@/stores/identityStore";
 import { useMessageStore } from "@/stores/messageStore";
@@ -20,7 +20,7 @@ export function ArchiveExport({ kind }: { kind: "profile" | "backup" }) {
     try {
       const path = await save({ defaultPath: `liberte_${kind}_${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: "Sauvegarde Liberté", extensions: ["json", "liberte"] }] });
       if (!path) return;
-      if (kind === "profile") await writeTextFile(path, await tauri.exportProfile(password));
+      if (kind === "profile") await tauri.saveProfileToFile(path, password);
       else await tauri.saveBackupToFile(path, password);
       setPassword(""); setConfirmation("");
       setNotice("Export chiffré enregistré. Conservez votre phrase secrète séparément.");

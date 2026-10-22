@@ -1,0 +1,23 @@
+# Explicit opt-in: docker compose -f docker-compose.yml -f docker-compose.livekit.yml up -d
+# Configure LIVEKIT_URL as your public wss:// URL and terminate TLS before port 7880.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.10
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET}"
+      NODE_IP: "${LIVEKIT_NODE_IP:?Set the public IP advertised by LiveKit}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "${LIVEKIT_HTTP_BIND:-127.0.0.1}:7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

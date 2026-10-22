@@ -55,6 +55,15 @@ fn validate_identity(payload: &ProfilePayload) -> Result<Identity, String> {
     Ok(identity)
 }
 
+#[tauri::command]
+pub async fn save_profile_to_file(state: State<'_, Arc<Mutex<AppState>>>, file_path: String, password: Option<String>) -> Result<String, String> {
+    let encrypted = export_profile(state, password)?;
+    let path = file_path.clone();
+    tokio::task::spawn_blocking(move || crate::commands::backup::write_atomic(std::path::Path::new(&path), encrypted.as_bytes()))
+        .await.map_err(|e| format!("Profile export task failed: {e}"))??;
+    Ok(file_path)
+}
+
 fn profile_backup(payload: &ProfilePayload) -> Result<BackupPayload, String> {
     if let Some(backup) = &payload.backup {
         if !payload.channels.is_empty() { return Err("Profile has ambiguous legacy and current channel lists".into()); }
@@ -130,11 +139,23 @@ mod tests {
     #[test]
     fn portable_profile_restores_and_cannot_overwrite_another_identity() {
         let dir = tempfile::tempdir().unwrap(); let identity = Identity::generate();
+        let source = Database::open_at(&dir.path().join("source.db"), &identity.derive_db_key()).unwrap();
+        let channel = liberte_store::Channel { id: uuid::Uuid::new_v4(), name: "Restored history".into(), server_id: None, created_at: chrono::Utc::now() };
+        source.create_channel(&channel).unwrap();
+        source.store_channel_key(channel.id,&hex::encode([9;32])).unwrap();
+        let message = liberte_store::Message { id: uuid::Uuid::new_v4(), channel_id: channel.id, sender_pubkey: identity.public_key_bytes(),
+            encrypted_content: liberte_shared::crypto::encrypt(&[9;32],b"migrated message").unwrap(), timestamp: chrono::Utc::now() };
+        source.insert_message(&message).unwrap();
+        let mut profile_payload = payload(&identity);
+        profile_payload.backup = Some(source.export_backup().unwrap());
         let db = Database::open_at(&dir.path().join("profile.db"), &identity.derive_db_key()).unwrap();
-        let exported = backup_crypto::encrypt_password(&serde_json::to_vec(&payload(&identity)).unwrap(), BackupKind::Profile, "portable profile password").unwrap();
+        let exported = backup_crypto::encrypt_password(&serde_json::to_vec(&profile_payload).unwrap(), BackupKind::Profile, "portable profile password").unwrap();
         let decrypted = backup_crypto::decode_import(&exported, Some("portable profile password"), None, BackupKind::Profile, false).unwrap();
         let profile: ProfilePayload = serde_json::from_slice(&decrypted).unwrap();
         restore_profile(&db, &profile, &validate_identity(&profile).unwrap()).unwrap();
+        let restored = db.get_message_by_id(message.id).unwrap();
+        let key: [u8;32] = hex::decode(db.get_channel_key(channel.id).unwrap()).unwrap().try_into().unwrap();
+        assert_eq!(liberte_shared::crypto::decrypt(&key,&restored.encrypted_content).unwrap(),b"migrated message");
         let other = Identity::generate();
         assert!(restore_profile(&db, &payload(&other), &other).is_err());
         let stored: String = db.conn().query_row("SELECT secret_key FROM local_identity WHERE id=1", [], |r| r.get(0)).unwrap();

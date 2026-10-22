@@ -85,10 +85,11 @@ pub async fn authenticate(
         signature: header(request.headers(), "x-liberte-signature")?,
     };
     let (mut parts, body) = request.into_parts();
+    let body_limit = if parts.uri.path() == "/media/token" { 4096 } else { state.config.max_blob_size.saturating_add(8192) };
     let bytes = tokio::time::timeout(std::time::Duration::from_secs(60),
-        to_bytes(body, state.config.max_blob_size.saturating_add(8192))).await
+        to_bytes(body, body_limit)).await
         .map_err(|_| ServerError::BadRequest("Request body timed out".into()))?
-        .map_err(|_| ServerError::BlobTooLarge { size: state.config.max_blob_size.saturating_add(1), max: state.config.max_blob_size })?;
+        .map_err(|_| ServerError::BlobTooLarge { size: body_limit.saturating_add(1), max: body_limit })?;
     let path = parts.uri.path_and_query().map(|path| path.as_str()).unwrap_or("/");
     let now = Utc::now().timestamp();
     let owner = signed.verify(parts.method.as_str(), path, &bytes, now)

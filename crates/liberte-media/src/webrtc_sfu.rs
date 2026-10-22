@@ -26,7 +26,8 @@ pub enum SfuState {
     Failed,
 }
 
-/// Experimental SFU frame codec. A network transport is not implemented yet.
+/// Legacy native SFU frame codec. The desktop SFU transport is implemented by
+/// the browser LiveKit E2EE session; this type must not claim a fake connection.
 #[allow(dead_code)]
 pub struct SfuClient {
     local_user: UserId,
@@ -62,7 +63,7 @@ impl SfuClient {
 
         self.state = SfuState::Failed;
         Err(SfuClientError::ConnectionError(
-            "SFU media transport is not implemented; use the WebRTC mesh call".into(),
+            "Native SFU transport is unavailable; use the desktop LiveKit media session".into(),
         ))
     }
 

@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod events;
 pub mod file_transfer;
+pub mod media_permissions;
 pub mod server_client;
 pub mod state;
 pub mod swarm_bridge;
@@ -8,6 +9,7 @@ pub mod swarm_bridge;
 use std::sync::{Arc, Mutex};
 
 use tracing_subscriber::{fmt, EnvFilter};
+use tauri::Manager;
 
 use crate::state::AppState;
 
@@ -40,6 +42,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(app_state.clone())
         .setup(move |app| {
+            if let Some(window) = app.get_webview_window("main") {
+                media_permissions::configure(&window)?;
+            }
             let handle = app.handle().clone();
             if let Ok(mut guard) = app_state.lock() {
                 guard.app_handle = Some(handle);
@@ -73,6 +78,7 @@ pub fn run() {
             commands::media::get_call_state,
             commands::media::send_call_signal,
             commands::media::announce_call,
+            commands::sfu::get_sfu_connection,
             commands::files::send_file,
             commands::files::upload_premium_blob,
             commands::files::list_channel_files,
@@ -95,6 +101,7 @@ pub fn run() {
             commands::backup::upload_remote_backup,
             commands::backup::restore_remote_backup,
             commands::profile::export_profile,
+            commands::profile::save_profile_to_file,
             commands::profile::import_profile,
         ])
         .run(tauri::generate_context!())

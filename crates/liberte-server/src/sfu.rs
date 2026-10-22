@@ -1,211 +1,142 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+//! LiveKit admission only. Media and E2EE keys never pass through this API.
+//! Grant schema: https://docs.livekit.io/frontends/reference/tokens-grants/
+use axum::{
+    extract::State,
+    http::header,
+    response::{IntoResponse, Response},
+    Extension, Json,
+};
+use chrono::Utc;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde::{Deserialize, Serialize};
 
-use libp2p::PeerId;
-use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, warn};
-use uuid::Uuid;
+use crate::{
+    api::AppState,
+    auth::AuthenticatedUser,
+    config::LiveKitConfig,
+    error::ServerError,
+};
 
-/// Opaque encrypted media frame -- the SFU never decrypts this.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct EncryptedFrame {
-    pub sender: PeerId,
-    pub payload: Vec<u8>,
+const TOKEN_TTL_SECONDS: i64 = 300;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenRequest {
+    pub room_name: String,
 }
 
-#[allow(dead_code)]
-pub struct SfuRoom {
-    pub room_id: Uuid,
-    participants: HashSet<PeerId>,
-    senders: HashMap<PeerId, mpsc::Sender<EncryptedFrame>>,
+#[derive(Serialize, Deserialize)]
+pub struct TokenResponse {
+    pub url: String,
+    pub token: String,
+    pub room_name: String,
 }
 
-#[allow(dead_code)]
-impl SfuRoom {
-    pub fn new(room_id: Uuid) -> Self {
-        Self {
-            room_id,
-            participants: HashSet::new(),
-            senders: HashMap::new(),
-        }
-    }
-
-    pub fn join(&mut self, peer_id: PeerId) -> mpsc::Receiver<EncryptedFrame> {
-        let (tx, rx) = mpsc::channel::<EncryptedFrame>(256);
-        self.participants.insert(peer_id);
-        self.senders.insert(peer_id, tx);
-
-        info!(
-            room = %self.room_id,
-            peer = %peer_id,
-            participants = self.participants.len(),
-            "Participant joined SFU room"
-        );
-
-        rx
-    }
-
-    pub fn leave(&mut self, peer_id: &PeerId) {
-        self.participants.remove(peer_id);
-        self.senders.remove(peer_id);
-
-        info!(
-            room = %self.room_id,
-            peer = %peer_id,
-            participants = self.participants.len(),
-            "Participant left SFU room"
-        );
-    }
-
-    /// Forward an encrypted frame to everyone except the sender.
-    pub async fn route_frame(&self, frame: EncryptedFrame) {
-        let sender = frame.sender;
-
-        for (peer_id, tx) in &self.senders {
-            if *peer_id == sender {
-                continue;
-            }
-
-            if tx.try_send(frame.clone()).is_err() {
-                debug!(
-                    room = %self.room_id,
-                    target = %peer_id,
-                    "Dropping frame for slow participant"
-                );
-            }
-        }
-    }
-
-    pub fn participants(&self) -> &HashSet<PeerId> {
-        &self.participants
-    }
-
-    pub fn participant_count(&self) -> usize {
-        self.participants.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.participants.is_empty()
-    }
+#[derive(Serialize)]
+struct Claims {
+    iss: String,
+    sub: String,
+    nbf: i64,
+    exp: i64,
+    video: VideoGrant,
 }
 
-#[derive(Clone)]
-#[allow(dead_code)]
-pub struct SfuManager {
-    rooms: Arc<RwLock<HashMap<Uuid, SfuRoom>>>,
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoGrant {
+    room: String,
+    room_join: bool,
+    room_create: bool,
+    room_list: bool,
+    room_admin: bool,
+    room_record: bool,
+    ingress_admin: bool,
+    can_publish: bool,
+    can_subscribe: bool,
+    can_publish_data: bool,
+    can_update_own_metadata: bool,
+    can_publish_sources: Vec<&'static str>,
 }
 
-#[allow(dead_code)]
-impl SfuManager {
-    pub fn new() -> Self {
-        Self {
-            rooms: Arc::new(RwLock::new(HashMap::new())),
-        }
+fn create_token(config: &LiveKitConfig, owner: &[u8; 32], room: &str) -> Result<TokenResponse, ServerError> {
+    if !matches!(room.len(), 32 | 64) || !room.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ServerError::BadRequest("Room must be a 32 or 64 character opaque hex identifier".into()));
     }
-
-    pub async fn create_room(&self) -> Uuid {
-        let room_id = Uuid::new_v4();
-        let room = SfuRoom::new(room_id);
-        self.rooms.write().await.insert(room_id, room);
-        info!(room = %room_id, "Created SFU room");
-        room_id
-    }
-
-    /// Join a room (creates it if missing). Returns the frame receiver.
-    pub async fn join_room(
-        &self,
-        room_id: Uuid,
-        peer_id: PeerId,
-    ) -> mpsc::Receiver<EncryptedFrame> {
-        let mut rooms = self.rooms.write().await;
-        let room = rooms
-            .entry(room_id)
-            .or_insert_with(|| SfuRoom::new(room_id));
-        room.join(peer_id)
-    }
-
-    /// Leave a room. Auto-deletes the room if it becomes empty.
-    pub async fn leave_room(&self, room_id: &Uuid, peer_id: &PeerId) {
-        let mut rooms = self.rooms.write().await;
-        let should_remove = if let Some(room) = rooms.get_mut(room_id) {
-            room.leave(peer_id);
-            room.is_empty()
-        } else {
-            false
-        };
-
-        if should_remove {
-            rooms.remove(room_id);
-            info!(room = %room_id, "Removed empty SFU room");
-        }
-    }
-
-    pub async fn route_frame(&self, room_id: &Uuid, frame: EncryptedFrame) {
-        let rooms = self.rooms.read().await;
-        if let Some(room) = rooms.get(room_id) {
-            room.route_frame(frame).await;
-        } else {
-            warn!(room = %room_id, "Attempted to route frame in non-existent room");
-        }
-    }
-
-    pub async fn list_rooms(&self) -> Vec<Uuid> {
-        self.rooms.read().await.keys().copied().collect()
-    }
-
-    pub async fn participant_count(&self, room_id: &Uuid) -> usize {
-        self.rooms
-            .read()
-            .await
-            .get(room_id)
-            .map(|r| r.participant_count())
-            .unwrap_or(0)
-    }
+    let room = room.to_ascii_lowercase();
+    let now = Utc::now().timestamp();
+    let claims = Claims {
+        iss: config.api_key.clone(),
+        sub: hex::encode(owner),
+        nbf: now,
+        exp: now + TOKEN_TTL_SECONDS,
+        video: VideoGrant {
+            room: room.clone(),
+            room_join: true,
+            room_create: false,
+            room_list: false,
+            room_admin: false,
+            room_record: false,
+            ingress_admin: false,
+            can_publish: true,
+            can_subscribe: true,
+            can_publish_data: false,
+            can_update_own_metadata: false,
+            can_publish_sources: vec!["camera", "microphone", "screen_share", "screen_share_audio"],
+        },
+    };
+    let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(config.api_secret.as_bytes()))
+        .map_err(|_| ServerError::Internal("Unable to create media token".into()))?;
+    Ok(TokenResponse { url: config.url.clone(), token, room_name: room })
 }
 
-impl Default for SfuManager {
-    fn default() -> Self {
-        Self::new()
-    }
+pub async fn issue_token(
+    State(state): State<AppState>,
+    Extension(AuthenticatedUser(owner)): Extension<AuthenticatedUser>,
+    Json(request): Json<TokenRequest>,
+) -> Result<Response, ServerError> {
+    let config = state.config.livekit.as_ref()
+        .ok_or_else(|| ServerError::ServiceUnavailable("Media server is not configured".into()))?;
+    let token = create_token(config, &owner, &request.room_name)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(token)).into_response())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 
-    #[tokio::test]
-    async fn test_room_join_leave() {
-        let manager = SfuManager::new();
-        let room_id = manager.create_room().await;
-        let peer = PeerId::random();
-
-        let _rx = manager.join_room(room_id, peer).await;
-        assert_eq!(manager.participant_count(&room_id).await, 1);
-
-        manager.leave_room(&room_id, &peer).await;
-        assert_eq!(manager.list_rooms().await.len(), 0);
+    fn config() -> LiveKitConfig {
+        LiveKitConfig {
+            url: "wss://media.example.test".into(),
+            api_key: "testkey".into(),
+            api_secret: "a-test-secret-longer-than-32-characters".into(),
+        }
     }
 
-    #[tokio::test]
-    async fn test_frame_routing() {
-        let manager = SfuManager::new();
-        let room_id = manager.create_room().await;
+    #[test]
+    fn signed_grant_is_scoped_to_identity_room_and_short_ttl() {
+        let config = config();
+        let room = "ab".repeat(32);
+        let owner = [42; 32];
+        let response = create_token(&config, &owner, &room).unwrap();
+        let header = decode_header(&response.token).unwrap();
+        assert_eq!(header.alg, Algorithm::HS256);
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&[&config.api_key]);
+        let claims = decode::<serde_json::Value>(&response.token, &DecodingKey::from_secret(config.api_secret.as_bytes()), &validation).unwrap().claims;
+        assert_eq!(claims["sub"], hex::encode(owner));
+        assert_eq!(claims["video"]["room"], room);
+        assert_eq!(claims["video"]["roomJoin"], true);
+        assert_eq!(claims["video"]["roomAdmin"], false);
+        assert_eq!(claims["video"]["canPublishData"], false);
+        assert_eq!(claims["exp"].as_i64().unwrap() - claims["nbf"].as_i64().unwrap(), TOKEN_TTL_SECONDS);
+        assert!(decode::<serde_json::Value>(&response.token, &DecodingKey::from_secret(b"wrong-secret"), &validation).is_err());
+    }
 
-        let sender = PeerId::random();
-        let receiver = PeerId::random();
-
-        let _sender_rx = manager.join_room(room_id, sender).await;
-        let mut receiver_rx = manager.join_room(room_id, receiver).await;
-
-        let frame = EncryptedFrame {
-            sender,
-            payload: vec![0xDE, 0xAD, 0xBE, 0xEF],
-        };
-
-        manager.route_frame(&room_id, frame.clone()).await;
-
-        let received = receiver_rx.try_recv().unwrap();
-        assert_eq!(received.payload, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    #[test]
+    fn non_opaque_and_unbounded_room_names_are_rejected() {
+        for room in ["", "public-room", "../room", &"a".repeat(65), &"g".repeat(64)] {
+            assert!(create_token(&config(), &[42; 32], room).is_err());
+        }
     }
 }

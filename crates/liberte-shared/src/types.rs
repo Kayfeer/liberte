@@ -85,3 +85,15 @@ impl FrameType {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn identity_parser_rejects_bad_lengths_without_panicking() {
+        for value in ["", "aa", &"aa".repeat(31), &"aa".repeat(33), "zz"] {
+            assert!(UserId::from_hex(value).is_err());
+        }
+        assert_eq!(UserId::from_hex(&"ab".repeat(32)).unwrap().0, [0xab; 32]);
+    }
+}
+

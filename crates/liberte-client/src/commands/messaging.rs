@@ -158,6 +158,11 @@ pub async fn send_message(
             .swarm_cmd_tx
             .clone()
             .ok_or_else(|| "Swarm not started".to_string())?;
+        let db = guard.database.as_ref().ok_or("Database not opened")?;
+        let stored = db.get_channel_key(channel_uuid).map_err(|e| e.to_string())?;
+        if hex::decode(stored).map_err(|e| e.to_string())?.as_slice() != channel_key {
+            return Err("Channel key does not match the stored channel".into());
+        }
         (identity.clone(), tx)
     };
     let sender_pubkey = identity.public_key_bytes();
@@ -421,6 +426,11 @@ pub async fn remove_reaction(
 }
 
 async fn publish_reaction(state: &Arc<Mutex<AppState>>, channel_id: Uuid, message_id: Uuid, emoji: String, action: liberte_shared::protocol::ReactionAction) -> Result<(), String> {
+    {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        let db = guard.database.as_ref().ok_or("Database not opened")?;
+        if !db.get_message_by_id(message_id).is_ok_and(|message| message.channel_id == channel_id) { return Err("Message is not in this channel".into()); }
+    }
     let (identity, key, tx) = channel_context(state, channel_id)?;
     let msg = WireMessage::MessageReaction(liberte_shared::protocol::MessageReactionMsg {
         sender: identity.user_id(), channel_id: ChannelId(channel_id), message_id, emoji, action, timestamp: Utc::now(),

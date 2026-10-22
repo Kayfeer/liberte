@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 
 describe("Tauri event subscriptions", () => {
-  beforeEach(() => mocks.listen.mockReset());
+  beforeEach(() => { mocks.listen.mockReset(); });
   it("releases a registration which completes after unmount", async () => {
     let resolve!: (value: () => void) => void;
     mocks.listen.mockReturnValue(new Promise<() => void>((done) => { resolve = done; }));

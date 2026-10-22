@@ -9,7 +9,7 @@ import type { Message } from "../../lib/types";
 
 export default function Header() {
   const { channels, activeChannelId, channelKeys } = useMessageStore();
-  const { inCall, startCall, endCall } = useMediaStore();
+  const { inCall, startCall, endCall, mode, setMode, busy } = useMediaStore();
   const [showInvite, setShowInvite] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -95,9 +95,26 @@ export default function Header() {
           <ConnectionBadge />
 
           {activeChannelId && (
+            <select
+              aria-label="Transport de l'appel"
+              title="Choisissez le transport avant de rejoindre l'appel"
+              value={mode}
+              disabled={inCall || busy || callPending}
+              onChange={(event) => {
+                setCallError(null);
+                void setMode(event.target.value as "mesh" | "sfu").catch((error) => setCallError(String(error)));
+              }}
+              className="bg-liberte-panel text-xs rounded px-2 py-1 disabled:opacity-60"
+            >
+              <option value="mesh">P2P direct</option>
+              <option value="sfu">SFU chiffré</option>
+            </select>
+          )}
+
+          {activeChannelId && (
             <button
               onClick={() => void toggleCall()}
-              disabled={callPending}
+              disabled={callPending || busy}
               aria-label={inCall ? "Quitter l'appel" : "Rejoindre l'appel"}
               className={`p-2 rounded-lg transition-colors ${
                 inCall

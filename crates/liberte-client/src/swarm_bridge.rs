@@ -324,6 +324,7 @@ fn handle_incoming_message(
                     Err(_) => return,
                 };
                 if let Some(ref db) = guard.database {
+                    if !db.get_message_by_id(reaction.message_id).is_ok_and(|message| message.channel_id == channel_uuid) { return; }
                     match reaction.action {
                         liberte_shared::protocol::ReactionAction::Add => {
                             let _ = db.add_reaction(
@@ -470,7 +471,7 @@ fn handle_incoming_message(
             emit_event(app, "profile-updated", ProfilePayload { user_id, display_name: profile.display_name, bio: profile.bio, status: profile.status });
         }
         WireMessage::Signal(signal) => {
-            let active = state.lock().ok().and_then(|g| g.call_channel_id.clone());
+            let active = state.lock().ok().and_then(|g| if g.call_mode == "mesh" { g.call_channel_id.clone() } else { None });
             if own_pubkey != Some(signal.target.0) || active.as_deref() != Some(channel_uuid_str) { return; }
             #[derive(serde::Serialize, Clone)]
             #[serde(rename_all = "camelCase")]

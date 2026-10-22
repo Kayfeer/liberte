@@ -59,8 +59,6 @@ async fn main() -> anyhow::Result<()> {
     // 10 req/s sustained, burst of 30
     let rate_limiter = RateLimiter::default();
 
-    let _sfu_manager = sfu::SfuManager::new();
-
     let app_state = AppState {
         blob_store,
         premium_verifier,

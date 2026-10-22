@@ -142,11 +142,6 @@ pub async fn get_server_info(server_url: String) -> Result<ServerInfo, String> {
         return Err(format!("Le serveur a répondu {}", resp.status()));
     }
 
-    let info: ServerInfo = resp
-        .json()
-        .await
-        .map_err(|e| format!("Réponse invalide du serveur: {e}"))?;
-
-    Ok(info)
+    crate::server_client::read_json_limited(resp, 65536).await
 }
 

@@ -8,7 +8,7 @@ export interface CallSignalEvent {
   signalType: CallSignal;
 }
 
-interface Preferences {
+export interface Preferences {
   selectedAudioInput: string;
   selectedAudioOutput: string;
   selectedVideoInput: string;
@@ -27,7 +27,7 @@ const defaults: Preferences = {
   echoCancellation: true, autoGainControl: true, voiceIsolation: false, iceServers: [],
 };
 
-function preferences(): Preferences {
+export function preferences(): Preferences {
   try {
     const saved: Partial<Preferences> = JSON.parse(localStorage.getItem("liberte-media-settings") || "{}");
     return { ...defaults, ...saved, iceServers: Array.isArray(saved.iceServers) ? saved.iceServers : [] };
@@ -51,21 +51,21 @@ function audioConstraints(settings: Preferences): MediaTrackConstraints {
   return constraints;
 }
 
-interface AudioCapture {
+export interface AudioCapture {
   raw: MediaStream;
   stream: MediaStream;
   context: AudioContext;
   gain: GainNode;
 }
 
-function disposeAudio(capture: AudioCapture | null) {
+export function disposeAudio(capture: AudioCapture | null) {
   if (!capture) return;
   capture.raw.getTracks().forEach((track) => track.stop());
   capture.stream.getTracks().forEach((track) => track.stop());
   void capture.context.close().catch(() => {});
 }
 
-async function captureAudio(settings: Preferences): Promise<AudioCapture> {
+export async function captureAudio(settings: Preferences): Promise<AudioCapture> {
   const raw = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(settings), video: false });
   let context: AudioContext | undefined;
   try {
@@ -83,7 +83,7 @@ async function captureAudio(settings: Preferences): Promise<AudioCapture> {
   }
 }
 
-async function captureVideo(settings: Preferences): Promise<MediaStreamTrack> {
+export async function captureVideo(settings: Preferences): Promise<MediaStreamTrack> {
   const video: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
   if (settings.selectedVideoInput) video.deviceId = { exact: settings.selectedVideoInput };
   const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
@@ -118,7 +118,22 @@ export function releasePlayback(element: HTMLMediaElement) {
   element.srcObject = null;
 }
 
-let activeSession: MediaSession | null = null;
+export interface CallSession {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  announce(): void;
+  setMuted(muted: boolean): void;
+  setVideoEnabled(enabled: boolean): Promise<void>;
+  applyPreferences(): Promise<void>;
+  retryConnections(): void;
+  ensurePeer?(userId: string): unknown;
+  removePeer?(userId: string): void;
+  receive?(event: CallSignalEvent): Promise<void>;
+}
+
+let activeSession: CallSession | null = null;
+export function registerMediaSession(session: CallSession) { activeSession = session; }
+export function releaseMediaSession(session: CallSession) { if (activeSession === session) activeSession = null; }
 
 /** Called by settings after persistence; applies devices and levels to an active call. */
 export async function applyMediaPreferences(): Promise<void> {
@@ -142,7 +157,7 @@ interface Peer {
   timeout?: ReturnType<typeof setTimeout>;
 }
 
-interface SessionOptions {
+export interface SessionOptions {
   userId: string;
   channelId: string;
   sendSignal: (target: string, signal: CallSignal) => Promise<void>;
@@ -152,9 +167,10 @@ interface SessionOptions {
   onPeer: (userId: string, patch: Partial<PeerInfo> | null) => void;
   onError: (message: string) => void;
   onCameraEnded: () => void;
+  onClosed?: (message: string) => void;
 }
 
-export class MediaSession {
+export class MediaSession implements CallSession {
   private closed = false;
   private started = false;
   private audio: AudioCapture | null = null;
@@ -180,7 +196,7 @@ export class MediaSession {
     const capture = await captureAudio(this.settings);
     if (this.closed) { disposeAudio(capture); throw new Error("Appel annulé."); }
     this.audio = capture;
-    activeSession = this;
+    registerMediaSession(this);
     capture.raw.getAudioTracks()[0]?.addEventListener("ended", () => this.error("Le microphone a été déconnecté. Choisissez un périphérique dans les paramètres."));
     this.publishLocalStream();
   }
@@ -360,6 +376,11 @@ export class MediaSession {
     void this.options.announce().catch((error) => this.error(error));
   }
 
+  /** Browser RTC statistics for connection diagnostics and integration tests. */
+  getStats(): Promise<RTCStatsReport[]> {
+    return Promise.all([...this.peers.values()].map((peer) => peer.pc.getStats()));
+  }
+
   async receive(event: CallSignalEvent): Promise<void> {
     if (this.closed || event.channelId !== this.options.channelId || event.target !== this.options.userId) return;
     if (event.signalType === "Hangup") { this.removePeer(event.sender); return; }
@@ -421,7 +442,7 @@ export class MediaSession {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    if (activeSession === this) activeSession = null;
+    releaseMediaSession(this);
     clearInterval(this.heartbeat);
     const hangups = [...this.peers.keys()].map((userId) => this.options.sendSignal(userId, "Hangup"));
     for (const userId of [...this.peers.keys()]) this.removePeer(userId);

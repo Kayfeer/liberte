@@ -45,6 +45,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/blob/:id", get(blob_download).delete(blob_delete))
         .route("/backup/sync", post(backup_sync_upload))
         .route("/backup/:pubkey_hex", get(backup_sync_download))
+        .route("/media/token", post(crate::sfu::issue_token))
         .layer(DefaultBodyLimit::max(state.config.max_blob_size.saturating_add(8192)))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
 
@@ -79,6 +80,7 @@ async fn server_info(State(state): State<AppState>) -> Json<serde_json::Value> {
         "registration_open": state.config.registration_open,
         "max_peers": state.config.max_peers,
         "max_blob_size": state.config.max_blob_size,
+        "sfu_enabled": state.config.livekit.is_some(),
         "payment_server_pubkey": (state.config.payment_server_pubkey != [0; 32])
             .then(|| hex::encode(state.config.payment_server_pubkey)),
         "http_auth": "ed25519-v1"
@@ -351,5 +353,37 @@ mod tests {
         state.premium_verifier.admin_grant(&owner.public_key_bytes()).await.unwrap();
         let response = app.oneshot(signed_request(&owner, "POST", "/blob/upload", &vec![1; 1025])).await.unwrap();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn media_route_requires_auth_entitlement_and_explicit_configuration() {
+        let (_dir, state) = fixture(false).await;
+        let owner = Identity::generate();
+        let body = serde_json::to_vec(&serde_json::json!({"room_name": "ab".repeat(32)})).unwrap();
+        let app = build_router(state);
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/media/token").header("content-type", "application/json").body(Body::from(body.clone())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = app.oneshot(signed_request(&owner, "POST", "/media/token", &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let (_dir, mut state) = fixture(true).await;
+        Arc::make_mut(&mut state.config).livekit = Some(crate::config::LiveKitConfig {
+            url: "wss://media.example.test".into(), api_key: "testkey".into(),
+            api_secret: "a-test-secret-longer-than-32-characters".into(),
+        });
+        let app = build_router(state.clone());
+        let response = app.clone().oneshot(signed_request(&owner, "POST", "/media/token", &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        state.premium_verifier.admin_grant(&owner.public_key_bytes()).await.unwrap();
+        let response = app.clone().oneshot(signed_request(&owner, "POST", "/media/token", &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get(header::CACHE_CONTROL).unwrap(), "no-store");
+        let token: crate::sfu::TokenResponse = serde_json::from_slice(&bytes(response).await).unwrap();
+        let claims = jsonwebtoken::decode::<serde_json::Value>(&token.token, &jsonwebtoken::DecodingKey::from_secret(b"a-test-secret-longer-than-32-characters"), &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256)).unwrap().claims;
+        assert_eq!(claims["sub"], hex::encode(owner.public_key_bytes()));
+        assert_eq!(claims["video"]["room"], "ab".repeat(32));
+        let forged_identity = serde_json::to_vec(&serde_json::json!({"room_name": "ab".repeat(32), "participant_identity": "other"})).unwrap();
+        let response = app.oneshot(signed_request(&owner, "POST", "/media/token", &forged_identity)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

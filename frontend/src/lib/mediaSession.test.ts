@@ -39,7 +39,7 @@ class Connection {
   restartIce = vi.fn();
   setConfiguration = vi.fn();
   setLocalDescription = vi.fn().mockResolvedValue(undefined);
-  setRemoteDescription = vi.fn(async (description) => { this.remoteDescription = description; });
+  setRemoteDescription = vi.fn(async (description: unknown) => { this.remoteDescription = description; });
   constructor() { Connection.instances.push(this); }
   addTransceiver() { const sender = { replaceTrack: vi.fn().mockResolvedValue(undefined) }; this.senders.push(sender); return { sender }; }
   createDataChannel() { return this.data; }

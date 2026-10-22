@@ -2,6 +2,16 @@ use std::time::Duration;
 
 use liberte_shared::{http_auth::SignedRequest, identity::Identity, premium::PremiumToken};
 
+pub async fn read_json_limited<T: serde::de::DeserializeOwned>(mut response: reqwest::Response, limit: usize) -> Result<T, String> {
+    if response.content_length().is_some_and(|len| len > limit as u64) { return Err("Réponse serveur trop volumineuse".into()); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len().saturating_add(chunk.len()) > limit { return Err("Réponse serveur trop volumineuse".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("Réponse serveur invalide : {e}"))
+}
+
 /// Remote endpoints require TLS. Plain HTTP is allowed only for local development.
 pub fn endpoint(base: &str, path: &str) -> Result<reqwest::Url, String> {
     let mut url = reqwest::Url::parse(base.trim()).map_err(|_| "URL du serveur invalide")?;

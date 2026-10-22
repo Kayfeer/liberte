@@ -2,7 +2,8 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import type { PeerInfo } from "@/lib/types";
-import { MediaSession, type CallSignalEvent } from "@/lib/mediaSession";
+import { MediaSession, type CallSession, type CallSignalEvent } from "@/lib/mediaSession";
+import { SfuSession } from "@/lib/sfuSession";
 import { useIdentityStore } from "./identityStore";
 import * as tauri from "@/lib/tauri";
 
@@ -30,7 +31,7 @@ interface MediaState {
   cleanup: () => void;
 }
 
-let session: MediaSession | null = null;
+let session: CallSession | null = null;
 let generation = 0;
 let listenerGeneration = 0;
 let setupPromise: Promise<void> | null = null;
@@ -45,9 +46,10 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     const identity = useIdentityStore.getState().identity;
     if (!identity) throw new Error("Identité indisponible.");
     const callGeneration = ++generation;
+    const mode = get().mode;
     set({ busy: true, error: null });
     let backendStarted = false;
-    const current = new MediaSession({
+    const current: CallSession = new (mode === "sfu" ? SfuSession : MediaSession)({
       userId: identity.publicKey,
       channelId,
       sendSignal: (target, signalType) => invoke("send_call_signal", { channelId, target, signalType }),
@@ -71,6 +73,10 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         });
       },
       onError: (error) => { if (session === current) set({ error }); },
+      onClosed: (error) => {
+        if (session !== current) return;
+        void get().endCall().catch(() => {}).finally(() => set({ error }));
+      },
       onCameraEnded: () => {
         if (session !== current || !get().isVideoEnabled) return;
         set({ isVideoEnabled: false });
@@ -80,14 +86,14 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     session = current;
     try {
       await get().setupListeners();
+      set({ channelId, participants: [], remoteStreams: {} });
       await current.start();
       if (generation !== callGeneration) return;
       // Set the channel before publication so an immediate answer is accepted.
-      set({ channelId, participants: [], remoteStreams: {} });
       await tauri.startCall(channelId);
       backendStarted = true;
       if (generation !== callGeneration) return;
-      set({ inCall: true, isMuted: false, isVideoEnabled: false, mode: "mesh" });
+      set({ inCall: true, isMuted: false, isVideoEnabled: false, mode });
       current.announce();
     } catch (error) {
       await current.stop();
@@ -150,6 +156,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
 
   setParticipants: (participants) => set({ participants }),
   setMode: async (mode) => {
+    if (get().inCall || get().busy) throw new Error("Quittez l'appel avant de changer de transport.");
     try { await tauri.setCallMode(mode); set({ mode, error: null }); }
     catch (error) { set({ error: errorText(error) }); throw error; }
   },
@@ -164,20 +171,23 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     const promise = (async () => {
       try {
         unlisteners.push(await listen<CallSignalEvent>("call-signal", ({ payload }) => {
-          void session?.receive(payload).catch((error) => set({ error: errorText(error) }));
+          void session?.receive?.(payload).catch((error) => set({ error: errorText(error) }));
         }));
         unlisteners.push(await listen<{ channelId: string; userId: string }>("voice-peer-joined", ({ payload }) => {
           if (get().channelId === payload.channelId) {
-            try { session?.ensurePeer(payload.userId); }
+            try { session?.ensurePeer?.(payload.userId); }
             catch (error) { set({ error: errorText(error) }); }
           }
         }));
         unlisteners.push(await listen<{ channelId: string; userId: string }>("voice-peer-left", ({ payload }) => {
-          if (get().channelId === payload.channelId) session?.removePeer(payload.userId);
+          if (get().channelId === payload.channelId) session?.removePeer?.(payload.userId);
         }));
         unlisteners.push(await listen<{ channelId: string; userId: string; muted: boolean }>("voice-peer-muted", ({ payload }) => {
           if (get().channelId === payload.channelId) set((state) => ({ participants: state.participants.map((peer) => peer.userId === payload.userId ? { ...peer, isMuted: payload.muted } : peer) }));
         }));
+        // A WebView reload may outlive its JS tracks but leave backend presence
+        // active. Reconcile it before accepting the next call.
+        if (!session && setupGeneration === listenerGeneration) await tauri.endCall();
         if (setupGeneration !== listenerGeneration) unlisteners.forEach((unlisten) => unlisten());
         else set({ unlisteners });
       } catch (error) { unlisteners.forEach((unlisten) => unlisten()); throw error; }
