@@ -18,7 +18,7 @@ Non pour la nouvelle version de protocole. Mettre à jour les participants et g�
 
 ## Les appels passent-ils par un SFU ?
 
-Le client utilise WebRTC entre pairs. La présence de types ou composants SFU dans le dépôt n'est pas une preuve d'un service SFU utilisable.
+Le mode par défaut utilise WebRTC entre pairs. Le mode SFU utilise une instance LiveKit configurée par l'opérateur et le chiffrement E2EE du SDK client. Voir [LiveKit](LiveKit.md) pour les prérequis et les essais ; aucun service cloud n'est préconfiguré.
 
 ## Pourquoi les mises à jour automatiques peuvent-elles être absentes ?
 

@@ -72,7 +72,7 @@
       }
     },
     "macOS": {
-      "minimumSystemVersion": "10.15",
+      "minimumSystemVersion": "13.3",
       "entitlements": "Entitlements.plist"
     }
   }

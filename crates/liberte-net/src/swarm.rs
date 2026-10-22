@@ -14,15 +14,34 @@ use crate::transport::build_swarm_with_discovery;
 
 use liberte_shared::constants::DEFAULT_QUIC_PORT;
 
+type PendingDial = (
+    Multiaddr,
+    tokio::sync::oneshot::Sender<Result<(), String>>,
+    std::time::Instant,
+);
+
 #[derive(Debug)]
 pub enum SwarmCommand {
     Dial(Multiaddr),
-    PublishMessage { topic: String, data: Vec<u8> },
-    PublishConfirmed { topic: String, data: Vec<u8>, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    DialConfirmed { address: Multiaddr, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
+    PublishMessage {
+        topic: String,
+        data: Vec<u8>,
+    },
+    PublishConfirmed {
+        topic: String,
+        data: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    DialConfirmed {
+        address: Multiaddr,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
     ListenRelay(Multiaddr),
     SubscribeTopic(String),
-    SubscribeConfirmed { topic: String, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
+    SubscribeConfirmed {
+        topic: String,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
     GetPeers(tokio::sync::oneshot::Sender<Vec<PeerId>>),
     GetSnapshot(tokio::sync::oneshot::Sender<NetworkSnapshot>),
     Shutdown,
@@ -46,6 +65,10 @@ pub enum SwarmNotification {
     },
     PeerDisconnected {
         peer_id: PeerId,
+    },
+    PeerSubscribed {
+        peer_id: PeerId,
+        topic: String,
     },
     MessageReceived {
         source: Option<PeerId>,
@@ -89,16 +112,26 @@ pub async fn spawn_swarm(
     let mut swarm = build_swarm_with_discovery(keypair, config.enable_mdns)?;
     let local_peer_id = *swarm.local_peer_id();
 
-    let listen_addr_v4: Multiaddr = format!("/ip4/{}/udp/{}/quic-v1", if config.loopback_only { "127.0.0.1" } else { "0.0.0.0" }, config.listen_port)
-        .parse()
-        .expect("valid multiaddr");
+    let listen_addr_v4: Multiaddr = format!(
+        "/ip4/{}/udp/{}/quic-v1",
+        if config.loopback_only {
+            "127.0.0.1"
+        } else {
+            "0.0.0.0"
+        },
+        config.listen_port
+    )
+    .parse()
+    .expect("valid multiaddr");
     let listen_addr_v6: Multiaddr = format!("/ip6/::/udp/{}/quic-v1", config.listen_port)
         .parse()
         .expect("valid multiaddr");
 
     swarm.listen_on(listen_addr_v4)?;
     if !config.loopback_only {
-        if let Err(e) = swarm.listen_on(listen_addr_v6) { warn!(error = %e, "IPv6 unavailable; IPv4 remains active"); }
+        if let Err(e) = swarm.listen_on(listen_addr_v6) {
+            warn!(error = %e, "IPv6 unavailable; IPv4 remains active");
+        }
     }
 
     info!(peer_id = %local_peer_id, port = config.listen_port, "Swarm listening");
@@ -137,7 +170,7 @@ pub async fn spawn_swarm(
 
     tokio::spawn(async move {
         let mut peer_tracker = PeerTracker::new();
-        let mut pending_dials: Vec<(Multiaddr, tokio::sync::oneshot::Sender<Result<(), String>>, std::time::Instant)> = Vec::new();
+        let mut pending_dials: Vec<PendingDial> = Vec::new();
         let mut maintenance = tokio::time::interval(std::time::Duration::from_secs(1));
         let mut relay_reservations = std::collections::HashSet::new();
 
@@ -247,6 +280,14 @@ pub async fn spawn_swarm(
                         }
                         SwarmEvent::Behaviour(LiberteEvent::Mdns(libp2p::mdns::Event::Expired(peers))) => {
                             for (peer, _) in peers { swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer); }
+                        }
+                        SwarmEvent::Behaviour(LiberteEvent::Gossipsub(
+                            gossipsub::Event::Subscribed { peer_id, topic },
+                        )) => {
+                            let _ = notif_tx.send(SwarmNotification::PeerSubscribed {
+                                peer_id,
+                                topic: topic.to_string(),
+                            }).await;
                         }
                         SwarmEvent::Behaviour(LiberteEvent::Gossipsub(
                             gossipsub::Event::Message {
@@ -426,4 +467,3 @@ fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
         }
     })
 }
-

@@ -81,12 +81,14 @@ export const useMediaStore = create<MediaState>((set, get) => ({
       onCameraEnded: () => {
         if (session !== current || !get().isVideoEnabled) return;
         set({ isVideoEnabled: false });
-        void tauri.toggleVideo().catch((error) => set({ error: errorText(error) }));
+        void tauri.toggleVideo(false).catch((error) => set({ error: errorText(error) }));
       },
     });
     session = current;
     try {
       await get().setupListeners();
+      await tauri.setCallMode(mode);
+      if (generation !== callGeneration) return;
       set({ channelId, participants: [], remoteStreams: {} });
       await current.start();
       if (generation !== callGeneration) return;
@@ -130,10 +132,11 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     if (!session || get().busy) return;
     set({ busy: true, error: null });
     const current = session;
+    const desired = !get().isMuted;
     // Silence immediately, even before the IPC roundtrip completes.
     if (!get().isMuted) current.setMuted(true);
     try {
-      const isMuted = await tauri.toggleMute();
+      const isMuted = await tauri.toggleMute(desired);
       if (session === current) { current.setMuted(isMuted); set({ isMuted }); }
     } catch (error) {
       if (session === current) { current.setMuted(true); set({ isMuted: true, error: errorText(error) }); }
@@ -149,12 +152,12 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     try {
       await current.setVideoEnabled(enabled);
       if (session !== current) return;
-      const isVideoEnabled = await tauri.toggleVideo();
+      const isVideoEnabled = await tauri.toggleVideo(enabled);
       if (session === current) set({ isVideoEnabled });
     } catch (error) {
       if (session === current) {
-        await current.setVideoEnabled(!enabled).catch(() => {});
-        set({ error: errorText(error) });
+        await current.setVideoEnabled(false).catch(() => {});
+        set({ isVideoEnabled: false, error: errorText(error) });
       }
       throw error;
     } finally { set({ busy: false }); }

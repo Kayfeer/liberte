@@ -5,7 +5,7 @@ import { useFileStore } from "@/stores/fileStore";
 import { useIdentityStore } from "@/stores/identityStore";
 import type { FileTransferDto } from "@/lib/tauri";
 
-const mocks = vi.hoisted(() => ({ listChannelFiles: vi.fn(), acceptFile: vi.fn(), saveReceivedFile: vi.fn(), save: vi.fn() }));
+const mocks = vi.hoisted(() => ({ listChannelFiles: vi.fn(), acceptFile: vi.fn(), dismissFile: vi.fn(), saveReceivedFile: vi.fn(), save: vi.fn() }));
 vi.mock("@/lib/tauri", () => mocks);
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: mocks.save }));
 
@@ -40,6 +40,20 @@ describe("file transfers", () => {
     render(<FileTransfers channelId="room" />);
     await screen.findByText("document.txt");
     expect(screen.queryByRole("button", { name: "Recevoir" })).toBeNull();
+  });
+  it("removes a transfer only after acknowledgement and ignores stale progress", async () => {
+    const file = { ...offered, fileId: "dismiss", status: "received" as const };
+    mocks.listChannelFiles.mockResolvedValue([file]);
+    mocks.dismissFile.mockRejectedValueOnce(new Error("Temporary file in use"));
+    render(<FileTransfers channelId="room" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retirer document.txt" }));
+    await screen.findByText("Error: Temporary file in use");
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeTruthy();
+    mocks.dismissFile.mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Retirer document.txt" }));
+    await waitFor(() => expect(screen.queryByText("document.txt")).toBeNull());
+    useFileStore.getState().upsert(file);
+    expect(useFileStore.getState().transfers.dismiss).toBeUndefined();
   });
 });
 

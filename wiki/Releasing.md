@@ -18,6 +18,8 @@ Les jobs desktop construisent Windows NSIS, Linux AppImage et macOS ARM64 `.app`
 
 Ces paquets permettent les essais sur machine, sans créer de release ni de tag. Les tests Rust continuent indépendamment des erreurs frontend ; un paquet desktop exige cependant le véritable frontend compilé. Une erreur de test, de type, de formatage, de lint, de smoke test ou une vulnérabilité npm high/critical conserve une CI en échec. Le rapport `npm-audit` et les traces Playwright sont disponibles pour le diagnostic.
 
+Le job RustSec indépendant emploie [cargo-audit 0.22.2](https://github.com/rustsec/rustsec/releases/tag/cargo-audit/v0.22.2), dont l'archive officielle est vérifiée par SHA-256. Il examine le `Cargo.lock` conservé, actualise la base officielle RustSec et conserve le JSON complet, le commit de la base et le statut de l'outil dans les logs et l'artefact `cargo-audit`. Toute vulnérabilité signalée bloque, y compris sans correctif publié ; aucune exception n'est configurée. Les avis de maintenance, notamment `unmaintained`, restent visibles séparément et ne sont pas comptés comme des vulnérabilités. Une base inaccessible ou un rapport incomplet bloque aussi. Toute exception future nécessiterait une justification précise et révisable, sans retirer l'avis du rapport.
+
 ## Chaîne de release
 
 1. Créer un nouveau tag complet correspondant à la version, par exemple `v2.4.0`. Ne pas déplacer un ancien tag.

@@ -71,11 +71,11 @@ export const startCall = (channelId: string) =>
 export const endCall = () =>
   invoke<void>("end_call");
 
-export const toggleMute = () =>
-  invoke<boolean>("toggle_mute");
+export const toggleMute = (muted?: boolean) =>
+  invoke<boolean>("toggle_mute", { muted });
 
-export const toggleVideo = () =>
-  invoke<boolean>("toggle_video");
+export const toggleVideo = (enabled?: boolean) =>
+  invoke<boolean>("toggle_video", { enabled });
 
 export const setCallMode = (mode: "mesh" | "sfu") =>
   invoke<string>("set_call_mode", { mode });
@@ -108,6 +108,7 @@ export interface FileTransferDto {
 export const listChannelFiles = (channelId: string) =>
   invoke<FileTransferDto[]>("list_channel_files", { channelId });
 export const acceptFile = (fileId: string) => invoke<void>("accept_file", { fileId });
+export const dismissFile = (fileId: string) => invoke<void>("dismiss_file", { fileId });
 export const saveReceivedFile = (fileId: string, filePath: string) =>
   invoke<void>("save_received_file", { fileId, filePath });
 

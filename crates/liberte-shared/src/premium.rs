@@ -119,4 +119,3 @@ mod tests {
         assert!(!check_premium_status_with_key(&token, &wrong_pubkey));
     }
 }
-

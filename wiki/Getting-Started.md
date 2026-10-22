@@ -13,7 +13,7 @@ npm run build
 cd ..
 cargo test --workspace --locked
 cd crates/liberte-client
-npm --prefix ../../frontend run tauri -- dev
+node ../../frontend/node_modules/@tauri-apps/cli/tauri.js dev
 ```
 
 Si `Cargo.lock` est absent pendant la migration, le générer une seule fois avec `python scripts/ci.py lockfile`, examiner le résultat et le versionner. Il ne faut pas ignorer les erreurs `--locked`.

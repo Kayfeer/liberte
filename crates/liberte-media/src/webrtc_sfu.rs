@@ -110,4 +110,3 @@ impl SfuClient {
         &self.room_id
     }
 }
-

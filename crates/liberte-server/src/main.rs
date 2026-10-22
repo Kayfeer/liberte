@@ -44,17 +44,31 @@ async fn main() -> anyhow::Result<()> {
         "Self-hosted instance settings"
     );
 
-    let blob_store = Arc::new(BlobStore::new(
-        config.blob_storage_path.clone(), config.max_blob_size,
-        config.max_user_bytes, config.max_total_bytes, config.max_objects,
-    ).await?);
+    let blob_store = Arc::new(
+        BlobStore::new(
+            config.blob_storage_path.clone(),
+            config.max_blob_size,
+            config.max_user_bytes,
+            config.max_total_bytes,
+            config.max_objects,
+        )
+        .await?,
+    );
 
-    let premium_verifier = Arc::new(PremiumVerifier::open(
-        config.payment_server_pubkey, config.blob_storage_path.join("entitlements.json"),
-    ).await?);
-    let replay_guard = Arc::new(ReplayGuard::open(
-        config.blob_storage_path.join("http-replay.json"), config.max_replay_entries,
-    ).await?);
+    let premium_verifier = Arc::new(
+        PremiumVerifier::open(
+            config.payment_server_pubkey,
+            config.blob_storage_path.join("entitlements.json"),
+        )
+        .await?,
+    );
+    let replay_guard = Arc::new(
+        ReplayGuard::open(
+            config.blob_storage_path.join("http-replay.json"),
+            config.max_replay_entries,
+        )
+        .await?,
+    );
 
     // 10 req/s sustained, burst of 30
     let rate_limiter = RateLimiter::default();
@@ -102,4 +116,3 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-

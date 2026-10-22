@@ -81,4 +81,3 @@ pub fn build_circuit_addr(relay_addr: &Multiaddr, relay_peer_id: &PeerId) -> Mul
         .with(libp2p::multiaddr::Protocol::P2p(*relay_peer_id))
         .with(libp2p::multiaddr::Protocol::P2pCircuit)
 }
-

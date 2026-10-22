@@ -44,7 +44,7 @@ export default function JoinChannelModal({ isOpen, onClose }: Props) {
             onChange={(e) => setCode(e.target.value)}
             placeholder="Collez le code d'invitation ici..."
             autoFocus
-            className="w-full bg-liberte-bg border border-liberte-panel rounded px-3 py-2 text-xs font-mono resize-none h-24 focus:outline-none focus:border-liberte-accent"
+            className="w-full bg-liberte-bg border border-liberte-panel rounded px-3 py-2 text-xs font-mono resize-none h-24 focus:outline-hidden focus:border-liberte-accent"
           />
         </div>
 
@@ -63,3 +63,4 @@ export default function JoinChannelModal({ isOpen, onClose }: Props) {
     </Modal>
   );
 }
+

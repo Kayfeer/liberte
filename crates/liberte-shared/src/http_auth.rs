@@ -17,12 +17,7 @@ pub struct SignedRequest {
 }
 
 impl SignedRequest {
-    pub fn new(
-        identity: &Identity,
-        method: &str,
-        path: &str,
-        body: &[u8],
-    ) -> Result<Self, String> {
+    pub fn new(identity: &Identity, method: &str, path: &str, body: &[u8]) -> Result<Self, String> {
         let mut request = Self {
             public_key: hex::encode(identity.public_key_bytes()),
             timestamp: Utc::now().timestamp(),
@@ -112,14 +107,29 @@ mod tests {
         let identity = Identity::generate();
         let request = SignedRequest::new(&identity, "POST", "/backup/sync", b"backup").unwrap();
         let now = Utc::now().timestamp();
-        assert_eq!(request.verify("POST", "/backup/sync", b"backup", now).unwrap(), identity.public_key_bytes());
-        assert!(request.verify("POST", "/backup/sync", b"changed", now).is_err());
-        assert!(request.verify("POST", "/blob/upload", b"backup", now).is_err());
-        assert!(request.verify("DELETE", "/backup/sync", b"backup", now).is_err());
+        assert_eq!(
+            request
+                .verify("POST", "/backup/sync", b"backup", now)
+                .unwrap(),
+            identity.public_key_bytes()
+        );
+        assert!(request
+            .verify("POST", "/backup/sync", b"changed", now)
+            .is_err());
+        assert!(request
+            .verify("POST", "/blob/upload", b"backup", now)
+            .is_err());
+        assert!(request
+            .verify("DELETE", "/backup/sync", b"backup", now)
+            .is_err());
         let mut changed = request.clone();
         changed.public_key = hex::encode(Identity::generate().public_key_bytes());
-        assert!(changed.verify("POST", "/backup/sync", b"backup", now).is_err());
-        assert!(request.verify("POST", "/backup/sync", b"backup", now + 121).is_err());
+        assert!(changed
+            .verify("POST", "/backup/sync", b"backup", now)
+            .is_err());
+        assert!(request
+            .verify("POST", "/backup/sync", b"backup", now + 121)
+            .is_err());
     }
 
     #[test]
@@ -128,13 +138,19 @@ mod tests {
         let valid = SignedRequest::new(&identity, "GET", "/backup/test", b"").unwrap();
         let mut invalid = valid.clone();
         invalid.timestamp = i64::MIN;
-        assert!(invalid.verify("GET", "/backup/test", b"", i64::MAX).is_err());
+        assert!(invalid
+            .verify("GET", "/backup/test", b"", i64::MAX)
+            .is_err());
         invalid = valid.clone();
         invalid.signature = "00".repeat(64);
-        assert!(invalid.verify("GET", "/backup/test", b"", Utc::now().timestamp()).is_err());
+        assert!(invalid
+            .verify("GET", "/backup/test", b"", Utc::now().timestamp())
+            .is_err());
         invalid = valid;
         invalid.public_key = "z".repeat(64);
-        assert!(invalid.verify("GET", "/backup/test", b"", Utc::now().timestamp()).is_err());
+        assert!(invalid
+            .verify("GET", "/backup/test", b"", Utc::now().timestamp())
+            .is_err());
         assert!(SignedRequest::new(&identity, "GET", "/invalid\npath", b"").is_err());
     }
 }

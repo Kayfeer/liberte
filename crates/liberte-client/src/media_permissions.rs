@@ -2,10 +2,13 @@
 
 #[cfg(target_os = "linux")]
 pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use gtk::prelude::*;
     use std::cell::Cell;
     use std::rc::Rc;
-    use gtk::prelude::*;
-    use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, UserMediaPermissionRequestExt, WebViewExt};
+    use webkit2gtk::{
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt,
+    };
 
     window.with_webview(|platform| {
         let view = platform.inner();
@@ -17,7 +20,9 @@ pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
         let audio_granted = Rc::new(Cell::new(false));
         let video_granted = Rc::new(Cell::new(false));
         view.connect_permission_request(move |view, request| {
-            let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else { return false; };
+            let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
+                return false;
+            };
             if !view.uri().as_deref().is_some_and(trusted_origin) {
                 request.deny();
                 return true;
@@ -33,21 +38,33 @@ pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
                 (true, false) => "le microphone",
                 _ => "la caméra",
             };
-            let parent = view.toplevel().and_then(|widget| widget.downcast::<gtk::Window>().ok());
+            let parent = view
+                .toplevel()
+                .and_then(|widget| widget.downcast::<gtk::Window>().ok());
             let dialog = gtk::MessageDialog::new(
-                parent.as_ref(), gtk::DialogFlags::MODAL, gtk::MessageType::Question,
+                parent.as_ref(),
+                gtk::DialogFlags::MODAL,
+                gtk::MessageType::Question,
                 gtk::ButtonsType::YesNo,
-                &format!("Autoriser Liberté à utiliser {device} pour les appels de cette session ?"),
+                &format!(
+                    "Autoriser Liberté à utiliser {device} pour les appels de cette session ?"
+                ),
             );
             let request = request.clone();
             let audio_granted = audio_granted.clone();
             let video_granted = video_granted.clone();
             dialog.connect_response(move |dialog, response| {
                 if response == gtk::ResponseType::Yes {
-                    if audio { audio_granted.set(true); }
-                    if video { video_granted.set(true); }
+                    if audio {
+                        audio_granted.set(true);
+                    }
+                    if video {
+                        video_granted.set(true);
+                    }
                     request.allow();
-                } else { request.deny(); }
+                } else {
+                    request.deny();
+                }
                 dialog.close();
             });
             dialog.show_all();
@@ -57,11 +74,15 @@ pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn configure(_window: &tauri::WebviewWindow) -> tauri::Result<()> { Ok(()) }
+pub fn configure(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    Ok(())
+}
 
 #[cfg(target_os = "linux")]
 fn trusted_origin(uri: &str) -> bool {
-    let Ok(url) = tauri::Url::parse(uri) else { return false; };
+    let Ok(url) = tauri::Url::parse(uri) else {
+        return false;
+    };
     (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
         || (cfg!(debug_assertions)
             && url.scheme() == "http"

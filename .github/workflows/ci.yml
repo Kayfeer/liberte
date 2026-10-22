@@ -53,6 +53,56 @@ jobs:
       - run: python -m unittest discover -s scripts -p 'ci_test.py' -v
       - run: python scripts/ci.py versions
 
+  rust-audit:
+    name: RustSec dependency audit
+    needs: lockfile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the verified official cargo-audit release
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2.tgz \
+            --output "$RUNNER_TEMP/cargo-audit.tgz"
+          printf '%s  %s\n' ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39 "$RUNNER_TEMP/cargo-audit.tgz" | sha256sum --check -
+          tar --extract --gzip --file "$RUNNER_TEMP/cargo-audit.tgz" --directory "$RUNNER_TEMP"
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2/cargo-audit" --version
+      - name: Audit the preserved lockfile against the current RustSec database
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ci-output" "$RUNNER_TEMP/audit-work/.cargo"
+          cd "$RUNNER_TEMP/audit-work"
+          printf '[advisories]\nignore = []\n' > .cargo/audit.toml
+          set +e
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2/cargo-audit" audit \
+            --file "$GITHUB_WORKSPACE/Cargo.lock" \
+            --url https://github.com/RustSec/advisory-db \
+            --db "$RUNNER_TEMP/rustsec-advisory-db" --json \
+            > "$GITHUB_WORKSPACE/.ci-output/cargo-audit.json"
+          result=$?
+          printf '%s\n' "$result" > "$GITHUB_WORKSPACE/.ci-output/cargo-audit-exit.txt"
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit
+          path: |
+            .ci-output/cargo-audit.json
+            .ci-output/cargo-audit-exit.txt
+          if-no-files-found: warn
+      - name: Print the complete RustSec report for review
+        if: always() && hashFiles('.ci-output/cargo-audit.json') != ''
+        run: cat .ci-output/cargo-audit.json
+      - name: Require a complete audit with no known vulnerability
+        if: always()
+        run: python scripts/ci.py rust-audit-gate --report .ci-output/cargo-audit.json --status .ci-output/cargo-audit-exit.txt
+
   frontend:
     name: Frontend tests, types and build
     runs-on: ubuntu-24.04
@@ -175,6 +225,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: desktop-${{ matrix.label }}
+          cache-on-failure: true
       - name: Install Linux build and media dependencies
         if: runner.os == 'Linux'
         run: |
@@ -262,6 +313,8 @@ jobs:
           toolchain: '1.99.1'
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Install native dependencies
         run: |
           sudo apt-get update

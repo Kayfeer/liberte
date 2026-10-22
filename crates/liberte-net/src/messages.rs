@@ -2,37 +2,35 @@ use tokio::sync::{mpsc, oneshot};
 use liberte_shared::{crypto::SymmetricKey, identity::Identity, protocol::WireMessage, types::ChannelId};
 use crate::swarm::{NetworkSnapshot, SwarmCommand, SwarmNotification};
 
-async fn result_with_timeout(receiver: oneshot::Receiver<Result<(), String>>) -> Result<(), String> {
-    tokio::time::timeout(std::time::Duration::from_secs(15), receiver)
-        .await.map_err(|_| "Network operation timed out".to_string())?
-        .map_err(|_| "Network task stopped".to_string())?
+async fn request_with_timeout<T>(cmd_tx: &mpsc::Sender<SwarmCommand>, command: SwarmCommand, receiver: oneshot::Receiver<T>, duration: std::time::Duration) -> Result<T, String> {
+    // Include the bounded command queue in the deadline: the swarm may itself be
+    // waiting for the notification consumer that is requesting this operation.
+    tokio::time::timeout(duration, async {
+        cmd_tx.send(command).await.map_err(|_| "Network task stopped".to_string())?;
+        receiver.await.map_err(|_| "Network task stopped".to_string())
+    }).await.map_err(|_| "Network operation timed out".to_string())?
 }
 
 /// Confirms acceptance by GossipSub, not delivery/read by a remote recipient.
 pub async fn publish_confirmed(cmd_tx: &mpsc::Sender<SwarmCommand>, topic: String, data: Vec<u8>) -> Result<(), String> {
     let (reply, receiver) = oneshot::channel();
-    cmd_tx.send(SwarmCommand::PublishConfirmed { topic, data, reply }).await.map_err(|_| "Network task stopped".to_string())?;
-    result_with_timeout(receiver).await
+    request_with_timeout(cmd_tx, SwarmCommand::PublishConfirmed { topic, data, reply }, receiver, std::time::Duration::from_secs(15)).await?
 }
 
 pub async fn dial_confirmed(cmd_tx: &mpsc::Sender<SwarmCommand>, address: libp2p::Multiaddr) -> Result<(), String> {
     let (reply, receiver) = oneshot::channel();
-    cmd_tx.send(SwarmCommand::DialConfirmed { address, reply }).await.map_err(|_| "Network task stopped".to_string())?;
-    result_with_timeout(receiver).await
+    request_with_timeout(cmd_tx, SwarmCommand::DialConfirmed { address, reply }, receiver, std::time::Duration::from_secs(15)).await?
 }
 
 pub async fn network_snapshot(cmd_tx: &mpsc::Sender<SwarmCommand>) -> Result<NetworkSnapshot, String> {
     let (reply, receiver) = oneshot::channel();
-    cmd_tx.send(SwarmCommand::GetSnapshot(reply)).await.map_err(|_| "Network task stopped".to_string())?;
-    tokio::time::timeout(std::time::Duration::from_secs(3), receiver).await
-        .map_err(|_| "Network status timed out".to_string())?.map_err(|_| "Network task stopped".to_string())
+    request_with_timeout(cmd_tx, SwarmCommand::GetSnapshot(reply), receiver, std::time::Duration::from_secs(3)).await
 }
 
 pub async fn subscribe_topic(cmd_tx: &mpsc::Sender<SwarmCommand>, channel_id: &ChannelId) -> anyhow::Result<()> {
     let (reply, receiver) = oneshot::channel();
-    cmd_tx.send(SwarmCommand::SubscribeConfirmed { topic: channel_id.to_topic(), reply }).await
-        .map_err(|_| anyhow::anyhow!("Network task stopped"))?;
-    result_with_timeout(receiver).await.map_err(anyhow::Error::msg)
+    request_with_timeout(cmd_tx, SwarmCommand::SubscribeConfirmed { topic: channel_id.to_topic(), reply }, receiver, std::time::Duration::from_secs(15))
+        .await.map_err(anyhow::Error::msg)?.map_err(anyhow::Error::msg)
 }
 
 pub async fn publish_message(cmd_tx: &mpsc::Sender<SwarmCommand>, channel_id: &ChannelId, channel_key: &SymmetricKey, identity: &Identity, message: &WireMessage) -> anyhow::Result<()> {
@@ -48,5 +46,21 @@ pub fn try_decode_notification(notification: &SwarmNotification, channel_id: &Ch
     match notification {
         SwarmNotification::MessageReceived { topic, data, .. } if topic == &channel_id.to_topic() => decode_message(data, channel_id, channel_key).ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn full_command_queue_is_included_in_request_deadline() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(SwarmCommand::Shutdown).await.unwrap();
+        let (reply, receiver) = oneshot::channel();
+        let result = request_with_timeout(&tx, SwarmCommand::GetSnapshot(reply), receiver, std::time::Duration::from_millis(20)).await;
+        assert_eq!(result.unwrap_err(), "Network operation timed out");
+        assert!(matches!(rx.try_recv(), Ok(SwarmCommand::Shutdown)));
+        assert!(rx.try_recv().is_err());
     }
 }

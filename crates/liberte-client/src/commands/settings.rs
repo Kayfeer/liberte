@@ -73,7 +73,11 @@ pub fn update_settings(
     if !settings.server_url.trim().is_empty() {
         crate::server_client::endpoint(&settings.server_url, "/info")?;
     }
-    if settings.display_name.as_ref().is_some_and(|name| name.len() > 128) {
+    if settings
+        .display_name
+        .as_ref()
+        .is_some_and(|name| name.len() > 128)
+    {
         return Err("Nom trop long (128 octets maximum)".into());
     }
     let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
@@ -134,7 +138,10 @@ pub async fn get_server_info(server_url: String) -> Result<ServerInfo, String> {
     let resp = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
-        .build().map_err(|e| e.to_string())?.get(url).send()
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("Impossible de contacter le serveur: {e}"))?;
 
@@ -144,4 +151,3 @@ pub async fn get_server_info(server_url: String) -> Result<ServerInfo, String> {
 
     crate::server_client::read_json_limited(resp, 65536).await
 }
-

@@ -8,8 +8,8 @@ use libp2p::{
 };
 use tracing::{debug, info, warn};
 
-use liberte_shared::constants::PROTOCOL_VERSION;
 use crate::{blob_store::atomic_write, config::ServerConfig};
+use liberte_shared::constants::PROTOCOL_VERSION;
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "RelayServerEvent")]
@@ -25,17 +25,24 @@ pub enum RelayServerEvent {
 }
 
 impl From<relay::Event> for RelayServerEvent {
-    fn from(event: relay::Event) -> Self { Self::Relay(event) }
+    fn from(event: relay::Event) -> Self {
+        Self::Relay(event)
+    }
 }
 
 impl From<identify::Event> for RelayServerEvent {
-    fn from(event: identify::Event) -> Self { Self::Identify(Box::new(event)) }
+    fn from(event: identify::Event) -> Self {
+        Self::Identify(Box::new(event))
+    }
 }
 
 async fn load_identity(path: &Path) -> anyhow::Result<libp2p::identity::Keypair> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => {
-            anyhow::ensure!(!metadata.file_type().is_symlink(), "Relay identity must not be a symlink");
+            anyhow::ensure!(
+                !metadata.file_type().is_symlink(),
+                "Relay identity must not be a symlink"
+            );
             let bytes = tokio::fs::read(path).await?;
             Ok(libp2p::identity::Keypair::from_protobuf_encoding(&bytes)?)
         }
@@ -103,7 +110,12 @@ pub async fn spawn_relay(config: &ServerConfig) -> anyhow::Result<PeerId> {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     info!(addr = %address, "Relay listening");
                 }
-                SwarmEvent::ConnectionEstablished { peer_id, connection_id, num_established, .. } => {
+                SwarmEvent::ConnectionEstablished {
+                    peer_id,
+                    connection_id,
+                    num_established,
+                    ..
+                } => {
                     if !connected.contains(&peer_id) && connected.len() >= max_peers {
                         let _ = swarm.disconnect_peer_id(peer_id);
                     } else if num_established.get() > 2 {
@@ -112,7 +124,11 @@ pub async fn spawn_relay(config: &ServerConfig) -> anyhow::Result<PeerId> {
                         connected.insert(peer_id);
                     }
                 }
-                SwarmEvent::ConnectionClosed { peer_id, num_established: 0, .. } => {
+                SwarmEvent::ConnectionClosed {
+                    peer_id,
+                    num_established: 0,
+                    ..
+                } => {
                     connected.remove(&peer_id);
                 }
                 SwarmEvent::OutgoingConnectionError { error, .. } => {

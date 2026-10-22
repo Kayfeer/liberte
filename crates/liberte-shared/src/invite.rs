@@ -1,8 +1,8 @@
+use bincode::Options;
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use bincode::Options;
 
 use crate::identity::Identity;
 
@@ -38,7 +38,13 @@ impl InviteToken {
         Self::create_with_addresses(identity, channel_id, channel_name, channel_key, Vec::new())
     }
 
-    pub fn create_with_addresses(identity: &Identity, channel_id: Uuid, channel_name: String, channel_key: [u8;32], addresses: Vec<String>) -> Self {
+    pub fn create_with_addresses(
+        identity: &Identity,
+        channel_id: Uuid,
+        channel_name: String,
+        channel_key: [u8; 32],
+        addresses: Vec<String>,
+    ) -> Self {
         let now = Utc::now();
         let payload = InvitePayload {
             version: 2,
@@ -68,20 +74,30 @@ impl InviteToken {
 
     /// Decode a base64url string back into an InviteToken.
     pub fn decode(code: &str) -> Result<Self, InviteError> {
-        if code.len() > 16_384 { return Err(InviteError::InvalidFormat); }
+        if code.len() > 16_384 {
+            return Err(InviteError::InvalidFormat);
+        }
         let bytes = base64_url_decode(code)?;
-        bincode::DefaultOptions::new().with_fixint_encoding().with_limit(12_288).reject_trailing_bytes()
-            .deserialize(&bytes).map_err(|_| InviteError::InvalidFormat)
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(12_288)
+            .reject_trailing_bytes()
+            .deserialize(&bytes)
+            .map_err(|_| InviteError::InvalidFormat)
     }
 
     /// Verify the token's signature and expiry.
     pub fn verify(&self) -> Result<(), InviteError> {
-        if self.payload.version != 2 || self.payload.channel_name.trim().is_empty()
-            || self.payload.channel_name.len() > 128 || self.payload.addresses.len() > 8
+        if self.payload.version != 2
+            || self.payload.channel_name.trim().is_empty()
+            || self.payload.channel_name.len() > 128
+            || self.payload.addresses.len() > 8
             || self.payload.addresses.iter().any(|s| s.len() > 1024)
             || self.payload.created_at > Utc::now() + Duration::seconds(30)
             || self.payload.expires_at < self.payload.created_at
-            || self.payload.expires_at - self.payload.created_at > Duration::seconds(INVITE_DURATION_SECS) {
+            || self.payload.expires_at - self.payload.created_at
+                > Duration::seconds(INVITE_DURATION_SECS)
+        {
             return Err(InviteError::InvalidFormat);
         }
         // Check expiry
@@ -172,4 +188,3 @@ mod tests {
         assert!(bad_token.verify().is_err());
     }
 }
-

@@ -21,4 +21,3 @@ pub const KDF_CONTEXT_CHANNEL_KEY: &str = "liberte-channel-key-v1";
 pub const KDF_CONTEXT_DB_KEY: &str = "liberte-db-key-v1";
 
 pub const PREMIUM_PRICE_EUR: f64 = 0.99;
-

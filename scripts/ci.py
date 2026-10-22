@@ -108,6 +108,32 @@ def audit_gate(path):
     print("Dependency audit passed: no high or critical vulnerabilities")
 
 
+def rust_audit_gate(report_path, status_path):
+    report = read_json(report_path)
+    status = int(Path(status_path).read_text(encoding="ascii").strip())
+    settings = report.get("settings", {})
+    if any(settings.get(name) for name in ("ignore", "severity", "target_arch", "target_os")):
+        raise ValueError("RustSec audit must not hide advisories with ignore, severity or target filters")
+    database = report.get("database", {})
+    vulnerabilities = report.get("vulnerabilities", {})
+    entries = vulnerabilities.get("list")
+    if (not database.get("last-commit") or report.get("lockfile", {}).get("dependency-count", 0) <= 0
+            or not isinstance(entries, list) or vulnerabilities.get("count") != len(entries)
+            or vulnerabilities.get("found") is not bool(entries)):
+        raise ValueError("RustSec audit did not produce a complete, consistent report")
+    for category, warnings in report.get("warnings", {}).items():
+        print(f"RustSec informational warning {category}: {len(warnings)} (see full report)")
+    if entries:
+        for entry in entries:
+            advisory, package = entry["advisory"], entry["package"]
+            patched = entry.get("versions", {}).get("patched", [])
+            print(f"{advisory['id']}: {package['name']} {package['version']}; patched versions: {patched or 'none published'}")
+        raise ValueError(f"RustSec found {len(entries)} known vulnerabilities; no exceptions are configured")
+    if status != 0:
+        raise ValueError(f"cargo-audit failed with exit code {status}")
+    print(f"RustSec audit passed against database commit {database['last-commit']}; informational warnings remain separate")
+
+
 def format_patch():
     """Capture rustfmt changes but test the original source, without weakening the gate."""
     check = subprocess.run(["cargo", "fmt", "--all", "--", "--check"], cwd=ROOT, check=False)
@@ -311,6 +337,11 @@ def smoke(binary=None, image=None):
                     time.sleep(0.3)
                 probe_api(base, token, versions())
                 print("Server smoke passed: health, version, admin and unauthenticated API rejection")
+            except Exception:
+                log.flush()
+                if process is not None:
+                    print(log_path.read_text(encoding="utf-8", errors="replace")[-65536:])
+                raise
             finally:
                 if process is not None:
                     process.terminate()
@@ -340,9 +371,10 @@ def build_manifest(directory, repository, tag, version, public_key=""):
         return None
     if not public_key:
         raise ValueError("Signed release requires the public verification key")
+    updater_mode("verification-key-present", public_key)
     encoded_key = base64.b64decode(public_key, validate=True)
     platforms = {}
-    for platform, pattern in (("windows-x86_64", "*setup.exe"), ("linux-x86_64", "*.AppImage")):
+    for platform, pattern in (("windows-x86_64", "*setup.exe"), ("linux-x86_64", "*.AppImage"), (None, "*.msi")):
         matches = list(directory.glob(pattern))
         if len(matches) != 1:
             raise ValueError(f"Expected exactly one updater bundle for {platform}")
@@ -355,10 +387,11 @@ def build_manifest(directory, repository, tag, version, public_key=""):
             key_file.write_bytes(encoded_key)
             sig_file.write_bytes(decoded_signature)
             run(["minisign", "-V", "-m", str(artifact), "-p", str(key_file), "-x", str(sig_file)])
-        platforms[platform] = {
-            "signature": encoded_signature,
-            "url": f"https://github.com/{repository}/releases/download/{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(artifact.name, safe='')}",
-        }
+        if platform is not None:
+            platforms[platform] = {
+                "signature": encoded_signature,
+                "url": f"https://github.com/{repository}/releases/download/{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(artifact.name, safe='')}",
+            }
     manifest = {"version": version, "notes": "See CHANGELOG.md and migration notes before updating.", "platforms": platforms}
     write_json(manifest_path, manifest)
     return manifest
@@ -401,6 +434,9 @@ def main():
     commands.add_parser("frontend-lock")
     audit = commands.add_parser("audit-gate")
     audit.add_argument("path")
+    rust_audit = commands.add_parser("rust-audit-gate")
+    rust_audit.add_argument("--report", required=True)
+    rust_audit.add_argument("--status", required=True)
     commands.add_parser("format-patch")
     version = commands.add_parser("versions")
     version.add_argument("--tag")
@@ -428,6 +464,8 @@ def main():
         frontend_lock()
     elif args.command == "audit-gate":
         audit_gate(args.path)
+    elif args.command == "rust-audit-gate":
+        rust_audit_gate(args.report, args.status)
     elif args.command == "format-patch":
         format_patch()
     elif args.command == "versions":

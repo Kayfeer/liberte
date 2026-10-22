@@ -145,10 +145,10 @@ pub async fn send_call_signal(
 }
 
 #[tauri::command]
-pub fn toggle_mute(state: State<'_, Arc<Mutex<AppState>>>) -> Result<bool, String> {
+pub fn toggle_mute(state: State<'_, Arc<Mutex<AppState>>>, muted: Option<bool>) -> Result<bool, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     if !guard.is_in_call { return Err("Not in a call".into()); }
-    let muted = !guard.is_muted;
+    let muted = muted.unwrap_or(!guard.is_muted);
     // Presence failure must never prevent silencing the microphone.
     let event = if muted { VoiceEventType::Mute } else { VoiceEventType::Unmute };
     if let Err(error) = announce(&guard, event) { tracing::warn!(%error, "Mute announcement failed"); }
@@ -157,10 +157,10 @@ pub fn toggle_mute(state: State<'_, Arc<Mutex<AppState>>>) -> Result<bool, Strin
 }
 
 #[tauri::command]
-pub fn toggle_video(state: State<'_, Arc<Mutex<AppState>>>) -> Result<bool, String> {
+pub fn toggle_video(state: State<'_, Arc<Mutex<AppState>>>, enabled: Option<bool>) -> Result<bool, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     if !guard.is_in_call { return Err("Not in a call".into()); }
-    guard.is_video_enabled = !guard.is_video_enabled;
+    guard.is_video_enabled = enabled.unwrap_or(!guard.is_video_enabled);
     Ok(guard.is_video_enabled)
 }
 

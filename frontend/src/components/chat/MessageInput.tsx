@@ -83,7 +83,7 @@ export default function MessageInput({ channelId }: Props) {
           onKeyDown={handleKeyDown}
           placeholder="Envoyer un message chiffré..."
           rows={1}
-          className="flex-1 bg-transparent resize-none outline-none text-sm
+          className="flex-1 bg-transparent resize-none outline-hidden text-sm
                      text-liberte-text placeholder-liberte-muted py-2
                      max-h-32 overflow-y-auto"
         />

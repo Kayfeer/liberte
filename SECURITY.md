@@ -15,7 +15,7 @@ Envoyer les détails à **genesistrakd@gmail.com**, sans publier de secret ni de
 - Les invitations sont signées et temporaires. Elles contiennent la clé d'accès du canal : ce sont des secrets au porteur, pas des liens publics.
 - Les opérations de stockage HTTP exigent la preuve de possession d'une clé, avec protection contre le rejeu. Le chiffrement du contenu reste effectué côté client.
 - L'administration utilise un jeton distinct. Une valeur vide désactive l'API d'administration.
-- Une mise à jour automatique n'est proposée que si les fichiers de distribution et le manifeste sont signés et vérifiés avec la clé publique configurée.
+- Une mise à jour automatique utilise un manifeste HTTPS référençant les paquets signés ; leurs signatures sont vérifiées avec la clé publique configurée. Le manifeste JSON n'a pas de signature séparée.
 
 Les détails exécutables sont dans le code et les tests. Les fonctions déclarées mais non branchées ne constituent pas une garantie.
 

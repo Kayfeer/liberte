@@ -8,8 +8,8 @@ pub mod swarm_bridge;
 
 use std::sync::{Arc, Mutex};
 
-use tracing_subscriber::{fmt, EnvFilter};
 use tauri::Manager;
+use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::state::AppState;
 
@@ -109,4 +109,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("Failed to run Tauri application");
 }
-

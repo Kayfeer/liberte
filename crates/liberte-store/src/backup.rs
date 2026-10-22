@@ -1,9 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use crate::{
+    database::Database,
+    error::{Result, StoreError},
+    models::{Channel, Message, Reaction, Server, User},
+};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-use crate::{database::Database, error::{Result, StoreError}, models::{Channel, Message, Reaction, Server, User}};
 
 /// Sensitive payload: callers must encrypt before writing or returning it.
 /// Attachment files are not included; local file paths cannot restore their contents.
@@ -14,16 +18,27 @@ pub struct BackupPayload {
     pub channels: Vec<BackupChannel>,
     pub messages: Vec<BackupMessage>,
     pub channel_keys: HashMap<String, String>,
-    #[serde(default)] pub servers: Vec<Server>,
-    #[serde(default)] pub users: Vec<User>,
-    #[serde(default)] pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub servers: Vec<Server>,
+    #[serde(default)]
+    pub users: Vec<User>,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackupChannel { pub id: String, pub name: String, pub server_id: Option<String>, pub created_at: String }
+pub struct BackupChannel {
+    pub id: String,
+    pub name: String,
+    pub server_id: Option<String>,
+    pub created_at: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupMessage {
-    pub id: String, pub channel_id: String, pub sender_pubkey_hex: String,
-    pub encrypted_content_hex: String, pub timestamp: String,
+    pub id: String,
+    pub channel_id: String,
+    pub sender_pubkey_hex: String,
+    pub encrypted_content_hex: String,
+    pub timestamp: String,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -35,15 +50,25 @@ pub struct ImportStats {
     pub users_imported: usize,
     pub reactions_imported: usize,
 }
-fn invalid(message: impl Into<String>) -> StoreError { StoreError::InvalidBackup(message.into()) }
+fn invalid(message: impl Into<String>) -> StoreError {
+    StoreError::InvalidBackup(message.into())
+}
 pub(crate) fn decode_key(value: &str) -> Result<[u8; 32]> {
-    hex::decode(value)?.try_into().map_err(|_| invalid("Expected a 32-byte key"))
+    hex::decode(value)?
+        .try_into()
+        .map_err(|_| invalid("Expected a 32-byte key"))
 }
 fn unique(seen: &mut HashSet<Uuid>, id: Uuid, kind: &str) -> Result<()> {
-    if !seen.insert(id) { return Err(invalid(format!("Duplicate {kind} id: {id}"))); }
+    if !seen.insert(id) {
+        return Err(invalid(format!("Duplicate {kind} id: {id}")));
+    }
     Ok(())
 }
-struct ValidatedBackup { channels: Vec<Channel>, messages: Vec<Message>, keys: HashMap<Uuid, String> }
+struct ValidatedBackup {
+    channels: Vec<Channel>,
+    messages: Vec<Message>,
+    keys: HashMap<Uuid, String>,
+}
 impl BackupPayload {
     fn validate(&self) -> Result<ValidatedBackup> {
         DateTime::parse_from_rfc3339(&self.created_at)?;
@@ -52,14 +77,22 @@ impl BackupPayload {
         for ch in &self.channels {
             let id = Uuid::parse_str(&ch.id)?;
             unique(&mut seen, id, "channel")?;
-            if ch.name.trim().is_empty() || ch.name.len() > 512 { return Err(invalid("Invalid channel name")); }
-            channels.push(Channel { id, name: ch.name.clone(),
+            if ch.name.trim().is_empty() || ch.name.len() > 512 {
+                return Err(invalid("Invalid channel name"));
+            }
+            channels.push(Channel {
+                id,
+                name: ch.name.clone(),
                 server_id: ch.server_id.as_deref().map(Uuid::parse_str).transpose()?,
-                created_at: DateTime::parse_from_rfc3339(&ch.created_at)?.with_timezone(&Utc) });
+                created_at: DateTime::parse_from_rfc3339(&ch.created_at)?.with_timezone(&Utc),
+            });
         }
         let mut keys = HashMap::new();
         for (id, key) in &self.channel_keys {
-            if keys.insert(Uuid::parse_str(id)?, hex::encode(decode_key(key)?)).is_some() {
+            if keys
+                .insert(Uuid::parse_str(id)?, hex::encode(decode_key(key)?))
+                .is_some()
+            {
                 return Err(invalid("Duplicate channel key"));
             }
         }
@@ -69,79 +102,147 @@ impl BackupPayload {
             let id = Uuid::parse_str(&msg.id)?;
             unique(&mut seen, id, "message")?;
             let encrypted_content = hex::decode(&msg.encrypted_content_hex)?;
-            if encrypted_content.len() < 40 { return Err(invalid("Truncated encrypted message")); }
-            messages.push(Message { id, channel_id: Uuid::parse_str(&msg.channel_id)?,
-                sender_pubkey: decode_key(&msg.sender_pubkey_hex)?, encrypted_content,
-                timestamp: DateTime::parse_from_rfc3339(&msg.timestamp)?.with_timezone(&Utc) });
+            if encrypted_content.len() < 40 {
+                return Err(invalid("Truncated encrypted message"));
+            }
+            messages.push(Message {
+                id,
+                channel_id: Uuid::parse_str(&msg.channel_id)?,
+                sender_pubkey: decode_key(&msg.sender_pubkey_hex)?,
+                encrypted_content,
+                timestamp: DateTime::parse_from_rfc3339(&msg.timestamp)?.with_timezone(&Utc),
+            });
         }
         seen.clear();
-        for server in &self.servers { unique(&mut seen, server.id, "server")?; }
+        for server in &self.servers {
+            unique(&mut seen, server.id, "server")?;
+        }
         let mut users = HashSet::new();
         for user in &self.users {
-            if !users.insert(user.pubkey) { return Err(invalid("Duplicate user")); }
-            if !["online", "dnd", "idle", "invisible", "offline"].contains(&user.status.as_str()) { return Err(invalid("Invalid user status")); }
+            if !users.insert(user.pubkey) {
+                return Err(invalid("Duplicate user"));
+            }
+            if !["online", "dnd", "idle", "invisible", "offline"].contains(&user.status.as_str()) {
+                return Err(invalid("Invalid user status"));
+            }
         }
         seen.clear();
         let mut reactions = HashSet::new();
         for reaction in &self.reactions {
             unique(&mut seen, reaction.id, "reaction")?;
             decode_key(&reaction.user_pubkey)?;
-            if reaction.emoji.is_empty() || reaction.emoji.len() > 128 { return Err(invalid("Invalid reaction")); }
-            if !reactions.insert((reaction.message_id, reaction.user_pubkey.to_lowercase(), &reaction.emoji)) { return Err(invalid("Duplicate reaction")); }
+            if reaction.emoji.is_empty() || reaction.emoji.len() > 128 {
+                return Err(invalid("Invalid reaction"));
+            }
+            if !reactions.insert((
+                reaction.message_id,
+                reaction.user_pubkey.to_lowercase(),
+                &reaction.emoji,
+            )) {
+                return Err(invalid("Duplicate reaction"));
+            }
         }
-        Ok(ValidatedBackup { channels, messages, keys })
+        Ok(ValidatedBackup {
+            channels,
+            messages,
+            keys,
+        })
     }
 }
 impl Database {
     pub fn export_backup(&self) -> Result<BackupPayload> {
         let tx = self.conn().unchecked_transaction()?;
-        let channels = self.list_channels()?.into_iter().map(|c| BackupChannel {
-            id: c.id.to_string(), name: c.name, server_id: c.server_id.map(|id| id.to_string()), created_at: c.created_at.to_rfc3339(),
-        }).collect();
+        let channels = self
+            .list_channels()?
+            .into_iter()
+            .map(|c| BackupChannel {
+                id: c.id.to_string(),
+                name: c.name,
+                server_id: c.server_id.map(|id| id.to_string()),
+                created_at: c.created_at.to_rfc3339(),
+            })
+            .collect();
         let messages = {
             let mut stmt = tx.prepare("SELECT id, channel_id, sender_pubkey, encrypted_content, timestamp FROM messages ORDER BY timestamp, id")?;
             let rows = stmt.query_map([], crate::messages::row_to_message)?;
             let mut messages = Vec::new();
             for row in rows {
                 let m = row?;
-                messages.push(BackupMessage { id: m.id.to_string(), channel_id: m.channel_id.to_string(),
-                    sender_pubkey_hex: hex::encode(m.sender_pubkey), encrypted_content_hex: hex::encode(m.encrypted_content), timestamp: m.timestamp.to_rfc3339() });
+                messages.push(BackupMessage {
+                    id: m.id.to_string(),
+                    channel_id: m.channel_id.to_string(),
+                    sender_pubkey_hex: hex::encode(m.sender_pubkey),
+                    encrypted_content_hex: hex::encode(m.encrypted_content),
+                    timestamp: m.timestamp.to_rfc3339(),
+                });
             }
             messages
         };
         let users = {
-            let mut stmt = tx.prepare("SELECT pubkey, display_name, avatar_hash, bio, status, created_at FROM users")?;
+            let mut stmt = tx.prepare(
+                "SELECT pubkey, display_name, avatar_hash, bio, status, created_at FROM users",
+            )?;
             let mut rows = stmt.query([])?;
             let mut users = Vec::new();
             while let Some(row) = rows.next()? {
-                users.push(User { pubkey: decode_key(&row.get::<_, String>(0)?)?, display_name: row.get(1)?, avatar_hash: row.get(2)?,
-                    bio: row.get(3)?, status: row.get(4)?, created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)?.with_timezone(&Utc) });
+                users.push(User {
+                    pubkey: decode_key(&row.get::<_, String>(0)?)?,
+                    display_name: row.get(1)?,
+                    avatar_hash: row.get(2)?,
+                    bio: row.get(3)?,
+                    status: row.get(4)?,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)?
+                        .with_timezone(&Utc),
+                });
             }
             users
         };
         let reactions = {
-            let mut stmt = tx.prepare("SELECT id, message_id, channel_id, user_pubkey, emoji, created_at FROM reactions")?;
+            let mut stmt = tx.prepare(
+                "SELECT id, message_id, channel_id, user_pubkey, emoji, created_at FROM reactions",
+            )?;
             let mut rows = stmt.query([])?;
             let mut reactions = Vec::new();
             while let Some(row) = rows.next()? {
-                reactions.push(Reaction { id: Uuid::parse_str(&row.get::<_, String>(0)?)?, message_id: Uuid::parse_str(&row.get::<_, String>(1)?)?,
-                    channel_id: Uuid::parse_str(&row.get::<_, String>(2)?)?, user_pubkey: row.get(3)?, emoji: row.get(4)?,
-                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)?.with_timezone(&Utc) });
+                reactions.push(Reaction {
+                    id: Uuid::parse_str(&row.get::<_, String>(0)?)?,
+                    message_id: Uuid::parse_str(&row.get::<_, String>(1)?)?,
+                    channel_id: Uuid::parse_str(&row.get::<_, String>(2)?)?,
+                    user_pubkey: row.get(3)?,
+                    emoji: row.get(4)?,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)?
+                        .with_timezone(&Utc),
+                });
             }
             reactions
         };
-        let payload = BackupPayload { created_at: Utc::now().to_rfc3339(), version: env!("CARGO_PKG_VERSION").to_string(),
-            channels, messages, channel_keys: self.get_all_channel_keys()?.into_iter().map(|(id, key)| (id.to_string(), key)).collect(),
-            servers: self.list_servers()?, users, reactions };
+        let payload = BackupPayload {
+            created_at: Utc::now().to_rfc3339(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            channels,
+            messages,
+            channel_keys: self
+                .get_all_channel_keys()?
+                .into_iter()
+                .map(|(id, key)| (id.to_string(), key))
+                .collect(),
+            servers: self.list_servers()?,
+            users,
+            reactions,
+        };
         payload.validate()?;
         tx.commit()?;
         Ok(payload)
     }
-    pub fn import_backup(&self, payload: &BackupPayload) -> Result<ImportStats> { self.import_backup_with(payload, |_| Ok(())) }
+    pub fn import_backup(&self, payload: &BackupPayload) -> Result<ImportStats> {
+        self.import_backup_with(payload, |_| Ok(()))
+    }
 
     /// Identity/settings restoration can join this transaction. Every error rolls back.
     pub fn import_backup_with<F>(&self, payload: &BackupPayload, extra: F) -> Result<ImportStats>
-    where F: FnOnce(&Connection) -> Result<()> {
+    where
+        F: FnOnce(&Connection) -> Result<()>,
+    {
         let validated = payload.validate()?;
         let tx = self.conn().unchecked_transaction()?;
         let mut stats = ImportStats::default();
@@ -150,43 +251,85 @@ impl Database {
         // Resolve references and immutable conflicts before any writes.
         for ch in &validated.channels {
             if let Some(server) = ch.server_id {
-                if !servers.contains(&server) { self.get_server(server)?; }
+                if !servers.contains(&server) {
+                    self.get_server(server)?;
+                }
             }
             match self.get_channel(ch.id) {
-                Ok(old) if old.server_id != ch.server_id => return Err(invalid("Channel belongs to a different server")),
-                Err(StoreError::NotFound) | Ok(_) => {}, Err(e) => return Err(e),
+                Ok(old) if old.server_id != ch.server_id => {
+                    return Err(invalid("Channel belongs to a different server"))
+                }
+                Err(StoreError::NotFound) | Ok(_) => {}
+                Err(e) => return Err(e),
             }
         }
-        for id in validated.keys.keys().chain(validated.messages.iter().map(|m| &m.channel_id)) {
-            if !channels.contains(id) { self.get_channel(*id)?; }
+        for id in validated
+            .keys
+            .keys()
+            .chain(validated.messages.iter().map(|m| &m.channel_id))
+        {
+            if !channels.contains(id) {
+                self.get_channel(*id)?;
+            }
         }
         for (id, key) in &validated.keys {
             match self.get_channel_key(*id) {
-                Ok(old) if decode_key(&old)? != decode_key(key)? => return Err(invalid("Existing channel has a different encryption key")),
-                Err(StoreError::NotFound) | Ok(_) => {}, Err(e) => return Err(e),
+                Ok(old) if decode_key(&old)? != decode_key(key)? => {
+                    return Err(invalid("Existing channel has a different encryption key"))
+                }
+                Err(StoreError::NotFound) | Ok(_) => {}
+                Err(e) => return Err(e),
             }
         }
         for msg in &validated.messages {
             match self.get_message_by_id(msg.id) {
-                Ok(old) if old != *msg => return Err(invalid("Existing message has different contents")),
-                Err(StoreError::NotFound) | Ok(_) => {}, Err(e) => return Err(e),
+                Ok(old) if old != *msg => {
+                    return Err(invalid("Existing message has different contents"))
+                }
+                Err(StoreError::NotFound) | Ok(_) => {}
+                Err(e) => return Err(e),
             }
         }
-        let message_channels: HashMap<_, _> = validated.messages.iter().map(|m| (m.id, m.channel_id)).collect();
+        let message_channels: HashMap<_, _> = validated
+            .messages
+            .iter()
+            .map(|m| (m.id, m.channel_id))
+            .collect();
         for reaction in &payload.reactions {
             let channel = match message_channels.get(&reaction.message_id) {
-                Some(channel) => *channel, None => self.get_message_by_id(reaction.message_id)?.channel_id,
+                Some(channel) => *channel,
+                None => self.get_message_by_id(reaction.message_id)?.channel_id,
             };
-            if channel != reaction.channel_id { return Err(invalid("Reaction channel does not match its message")); }
-            let existing: Option<(String, String, String, String)> = tx.query_row("SELECT message_id,channel_id,user_pubkey,emoji FROM reactions WHERE id=?1", params![reaction.id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+            if channel != reaction.channel_id {
+                return Err(invalid("Reaction channel does not match its message"));
+            }
+            let existing: Option<(String, String, String, String)> = tx
+                .query_row(
+                    "SELECT message_id,channel_id,user_pubkey,emoji FROM reactions WHERE id=?1",
+                    params![reaction.id.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional()?;
             if let Some(old) = existing {
-                if old != (reaction.message_id.to_string(), reaction.channel_id.to_string(), reaction.user_pubkey.to_lowercase(), reaction.emoji.clone()) { return Err(invalid("Reaction id conflict")); }
+                if old
+                    != (
+                        reaction.message_id.to_string(),
+                        reaction.channel_id.to_string(),
+                        reaction.user_pubkey.to_lowercase(),
+                        reaction.emoji.clone(),
+                    )
+                {
+                    return Err(invalid("Reaction id conflict"));
+                }
             }
         }
         for server in &payload.servers {
             match self.get_server(server.id) {
-                Ok(old) if old.owner_pubkey != server.owner_pubkey => return Err(invalid("Server owner conflict")),
-                Err(StoreError::NotFound) | Ok(_) => {}, Err(e) => return Err(e),
+                Ok(old) if old.owner_pubkey != server.owner_pubkey => {
+                    return Err(invalid("Server owner conflict"))
+                }
+                Err(StoreError::NotFound) | Ok(_) => {}
+                Err(e) => return Err(e),
             }
         }
         for server in &payload.servers {
@@ -227,48 +370,98 @@ mod tests {
         (dir, db)
     }
     fn seed(db: &Database) -> BackupPayload {
-        let channel = Channel { id: Uuid::new_v4(), name: "portable".into(), server_id: None, created_at: Utc::now() };
+        let channel = Channel {
+            id: Uuid::new_v4(),
+            name: "portable".into(),
+            server_id: None,
+            created_at: Utc::now(),
+        };
         db.create_channel(&channel).unwrap();
-        db.store_channel_key(channel.id, &hex::encode([7; 32])).unwrap();
-        let message = Message { id: Uuid::new_v4(), channel_id: channel.id, sender_pubkey: [8; 32],
-            encrypted_content: liberte_shared::crypto::encrypt(&[7; 32], b"portable history").unwrap(), timestamp: Utc::now() };
+        db.store_channel_key(channel.id, &hex::encode([7; 32]))
+            .unwrap();
+        let message = Message {
+            id: Uuid::new_v4(),
+            channel_id: channel.id,
+            sender_pubkey: [8; 32],
+            encrypted_content: liberte_shared::crypto::encrypt(&[7; 32], b"portable history")
+                .unwrap(),
+            timestamp: Utc::now(),
+        };
         db.insert_message(&message).unwrap();
         db.export_backup().unwrap()
     }
     #[test]
     fn portable_restore_and_duplicate_counts() {
-        let (_one, source) = db(); let payload = seed(&source); let (_two, target) = db();
+        let (_one, source) = db();
+        let payload = seed(&source);
+        let (_two, target) = db();
         let stats = target.import_backup(&payload).unwrap();
-        assert_eq!((stats.channels_imported,stats.messages_imported,stats.keys_imported), (1,1,1));
-        assert_eq!(target.import_backup(&payload).unwrap(), ImportStats::default());
-        let restored = target.get_message_by_id(Uuid::parse_str(&payload.messages[0].id).unwrap()).unwrap();
+        assert_eq!(
+            (
+                stats.channels_imported,
+                stats.messages_imported,
+                stats.keys_imported
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            target.import_backup(&payload).unwrap(),
+            ImportStats::default()
+        );
+        let restored = target
+            .get_message_by_id(Uuid::parse_str(&payload.messages[0].id).unwrap())
+            .unwrap();
         let key = decode_key(&target.get_channel_key(restored.channel_id).unwrap()).unwrap();
-        assert_eq!(liberte_shared::crypto::decrypt(&key,&restored.encrypted_content).unwrap(), b"portable history");
+        assert_eq!(
+            liberte_shared::crypto::decrypt(&key, &restored.encrypted_content).unwrap(),
+            b"portable history"
+        );
     }
     #[test]
     fn invalid_record_and_transaction_failure_leave_no_partial_import() {
-        let (_one, source) = db(); let mut payload = seed(&source); let (_two, target) = db();
+        let (_one, source) = db();
+        let mut payload = seed(&source);
+        let (_two, target) = db();
         payload.messages[0].sender_pubkey_hex = "00".into();
-        assert!(target.import_backup(&payload).is_err()); assert!(target.list_channels().unwrap().is_empty());
+        assert!(target.import_backup(&payload).is_err());
+        assert!(target.list_channels().unwrap().is_empty());
         payload = source.export_backup().unwrap();
-        let result = target.import_backup_with(&payload, |conn| { conn.execute("INSERT INTO nonexistent VALUES (1)", [])?; Ok(()) });
-        assert!(result.is_err()); assert!(target.list_channels().unwrap().is_empty());
+        let result = target.import_backup_with(&payload, |conn| {
+            conn.execute("INSERT INTO nonexistent VALUES (1)", [])?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(target.list_channels().unwrap().is_empty());
     }
     #[test]
     fn key_conflict_preserves_existing_history() {
-        let (_one, target) = db(); let mut payload = seed(&target);
-        *payload.channel_keys.values_mut().next().unwrap() = hex::encode([9;32]);
+        let (_one, target) = db();
+        let mut payload = seed(&target);
+        *payload.channel_keys.values_mut().next().unwrap() = hex::encode([9; 32]);
         assert!(target.import_backup(&payload).is_err());
-        assert_eq!(target.get_all_channel_keys().unwrap().values().next().unwrap(), &hex::encode([7;32]));
+        assert_eq!(
+            target
+                .get_all_channel_keys()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap(),
+            &hex::encode([7; 32])
+        );
         assert_eq!(target.export_backup().unwrap().messages.len(), 1);
     }
     #[test]
     fn missing_server_rolls_back_and_legacy_shape_still_parses() {
-        let (_one, source) = db(); let mut payload = seed(&source); let (_two, target) = db();
+        let (_one, source) = db();
+        let mut payload = seed(&source);
+        let (_two, target) = db();
         payload.channels[0].server_id = Some(Uuid::new_v4().to_string());
-        assert!(target.import_backup(&payload).is_err()); assert!(target.list_channels().unwrap().is_empty());
+        assert!(target.import_backup(&payload).is_err());
+        assert!(target.list_channels().unwrap().is_empty());
         let mut value = serde_json::to_value(&payload).unwrap();
-        for field in ["servers","users","reactions"] { value.as_object_mut().unwrap().remove(field); }
+        for field in ["servers", "users", "reactions"] {
+            value.as_object_mut().unwrap().remove(field);
+        }
         assert!(serde_json::from_value::<BackupPayload>(value).is_ok());
     }
 }

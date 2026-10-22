@@ -245,7 +245,17 @@ export class MediaSession implements CallSession {
   setVideoEnabled(enabled: boolean): Promise<void> {
     return this.mutate(async () => {
       if (enabled === !!this.video) return;
-      const next = enabled ? await captureVideo(this.settings) : null;
+      if (!enabled) {
+        // Releasing the camera never depends on a peer or network operation.
+        const previous = this.video;
+        this.video = null;
+        previous?.stop();
+        this.publishLocalStream();
+        this.broadcastState();
+        await Promise.allSettled([...this.peers.values()].map((peer) => peer.video.replaceTrack(null)));
+        return;
+      }
+      const next = await captureVideo(this.settings);
       if (this.closed) { next?.stop(); return; }
       try { await this.replaceTrack("video", next, this.video); }
       catch (error) { next?.stop(); throw error; }

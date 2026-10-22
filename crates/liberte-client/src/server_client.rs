@@ -2,11 +2,21 @@ use std::time::Duration;
 
 use liberte_shared::{http_auth::SignedRequest, identity::Identity, premium::PremiumToken};
 
-pub async fn read_json_limited<T: serde::de::DeserializeOwned>(mut response: reqwest::Response, limit: usize) -> Result<T, String> {
-    if response.content_length().is_some_and(|len| len > limit as u64) { return Err("Réponse serveur trop volumineuse".into()); }
+pub async fn read_json_limited<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<T, String> {
+    if response
+        .content_length()
+        .is_some_and(|len| len > limit as u64)
+    {
+        return Err("Réponse serveur trop volumineuse".into());
+    }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        if bytes.len().saturating_add(chunk.len()) > limit { return Err("Réponse serveur trop volumineuse".into()); }
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err("Réponse serveur trop volumineuse".into());
+        }
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|e| format!("Réponse serveur invalide : {e}"))
@@ -15,12 +25,22 @@ pub async fn read_json_limited<T: serde::de::DeserializeOwned>(mut response: req
 /// Remote endpoints require TLS. Plain HTTP is allowed only for local development.
 pub fn endpoint(base: &str, path: &str) -> Result<reqwest::Url, String> {
     let mut url = reqwest::Url::parse(base.trim()).map_err(|_| "URL du serveur invalide")?;
-    if !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
-        return Err("L'URL du serveur ne doit pas contenir d'identifiants, de requête ou de fragment".into());
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            "L'URL du serveur ne doit pas contenir d'identifiants, de requête ou de fragment"
+                .into(),
+        );
     }
     let local = url.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
-            || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
     });
     if url.scheme() != "https" && !(url.scheme() == "http" && local) {
         return Err("HTTPS est requis pour un serveur distant".into());
@@ -52,16 +72,28 @@ pub async fn signed_request(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let mut request = client.request(method, url).header("content-type", content_type);
+    let mut request = client
+        .request(method, url)
+        .header("content-type", content_type);
     for (name, value) in auth.headers() {
         request = request.header(name, value);
     }
     if let Some(token) = premium {
-        request = request.header("x-liberte-premium", serde_json::to_string(token).map_err(|e| e.to_string())?);
+        request = request.header(
+            "x-liberte-premium",
+            serde_json::to_string(token).map_err(|e| e.to_string())?,
+        );
     }
-    let response = request.body(body).send().await.map_err(|e| format!("Serveur inaccessible : {e}"))?;
+    let response = request
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Serveur inaccessible : {e}"))?;
     if !response.status().is_success() {
-        return Err(format!("Le serveur a refusé l'opération ({})", response.status()));
+        return Err(format!(
+            "Le serveur a refusé l'opération ({})",
+            response.status()
+        ));
     }
     Ok(response)
 }
@@ -75,7 +107,10 @@ mod tests {
         assert!(endpoint("http://example.com", "/info").is_err());
         assert!(endpoint("https://user:password@example.com", "/info").is_err());
         assert!(endpoint("https://example.com/prefix", "/info").is_err());
-        assert_eq!(endpoint("https://example.com", "/info").unwrap().as_str(), "https://example.com/info");
+        assert_eq!(
+            endpoint("https://example.com", "/info").unwrap().as_str(),
+            "https://example.com/info"
+        );
         assert!(endpoint("http://127.0.0.1:8080", "/info").is_ok());
     }
 }

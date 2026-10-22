@@ -235,11 +235,13 @@ export class SfuSession implements CallSession {
       const room = this.room!;
       if (!enabled) {
         const previous = this.videoTrack!;
-        // Silence before awaiting unpublish.
+        // Release the camera before signalling; a transport failure must not
+        // reactivate capture after the user has disabled it.
         previous.mediaStreamTrack.enabled = false;
-        await room.localParticipant.unpublishTrack(previous, true);
         previous.stop();
         this.videoTrack = null;
+        this.publishLocalStream();
+        await room.localParticipant.unpublishTrack(previous, true);
       } else {
         const raw = await captureVideo(this.settings);
         if (this.closed) { raw.stop(); this.assertOpen(); }

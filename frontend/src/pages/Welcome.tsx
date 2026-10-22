@@ -66,7 +66,7 @@ export default function Welcome() {
               placeholder="Ex: Kayfeer"
               maxLength={32}
               className="w-full bg-liberte-surface border border-liberte-border rounded-lg px-3 py-2
-                         text-sm text-liberte-text placeholder-liberte-muted outline-none
+                         text-sm text-liberte-text placeholder-liberte-muted outline-hidden
                          focus:border-liberte-accent transition-colors"
             />
             <p className="text-xs text-liberte-muted">

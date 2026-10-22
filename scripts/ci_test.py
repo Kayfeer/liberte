@@ -18,6 +18,35 @@ def fake_public_key():
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_rustsec_gate_keeps_informational_warnings_separate(self):
+        report = {"database": {"last-commit": "database-commit"}, "lockfile": {"dependency-count": 1},
+                  "settings": {"ignore": [], "severity": None, "target_arch": [], "target_os": []},
+                  "vulnerabilities": {"found": False, "count": 0, "list": []},
+                  "warnings": {"unmaintained": [{"package": {"name": "example"}}]}}
+        with tempfile.TemporaryDirectory() as folder:
+            report_path, status_path = Path(folder) / "report.json", Path(folder) / "status.txt"
+            ci.write_json(report_path, report)
+            status_path.write_text("0")
+            ci.rust_audit_gate(report_path, status_path)
+            status_path.write_text("2")
+            with self.assertRaises(ValueError):
+                ci.rust_audit_gate(report_path, status_path)
+            status_path.write_text("0")
+            report["settings"]["ignore"] = ["RUSTSEC-2099-0001"]
+            ci.write_json(report_path, report)
+            with self.assertRaises(ValueError):
+                ci.rust_audit_gate(report_path, status_path)
+            report["settings"]["ignore"] = []
+            report["vulnerabilities"] = {"found": True, "count": 1, "list": [
+                {"advisory": {"id": "RUSTSEC-2099-0001"},
+                 "package": {"name": "example", "version": "1.0.0"}, "versions": {"patched": []}}]}
+            ci.write_json(report_path, report)
+            with self.assertRaisesRegex(ValueError, "known vulnerabilities"):
+                ci.rust_audit_gate(report_path, status_path)
+            ci.write_json(report_path, {})
+            with self.assertRaises(ValueError):
+                ci.rust_audit_gate(report_path, status_path)
+
     def test_dependency_audit_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "audit.json"

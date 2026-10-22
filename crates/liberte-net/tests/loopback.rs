@@ -38,13 +38,22 @@ async fn publication_without_subscribers_returns_an_error() {
 #[tokio::test]
 async fn two_loopback_clients_exchange_an_authenticated_encrypted_message() {
     let (alice_tx, mut alice_rx, _) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), isolated_config()).await.unwrap();
-    let (bob_tx, mut bob_rx, _) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), isolated_config()).await.unwrap();
-    let alice_notifications = tokio::spawn(async move { while alice_rx.recv().await.is_some() {} });
+    let (bob_tx, mut bob_rx, bob_peer) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), isolated_config()).await.unwrap();
     let channel = ChannelId::new();
     subscribe_topic(&alice_tx, &channel).await.unwrap();
-    subscribe_topic(&bob_tx, &channel).await.unwrap();
     let bob_address = listen_address(&bob_tx).await;
     dial_confirmed(&alice_tx, bob_address).await.unwrap();
+    // Joining after discovery/connection must notify existing channel members.
+    subscribe_topic(&bob_tx, &channel).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(notification) = alice_rx.recv().await {
+            if let SwarmNotification::PeerSubscribed { peer_id, topic } = notification {
+                if peer_id == bob_peer && topic == channel.to_topic() { return; }
+            }
+        }
+        panic!("subscription notification stream stopped");
+    }).await.expect("late channel subscription should be observable");
+    let alice_notifications = tokio::spawn(async move { while alice_rx.recv().await.is_some() {} });
 
     let identity = Identity::generate();
     let key = crypto::generate_symmetric_key();

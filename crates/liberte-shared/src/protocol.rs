@@ -1,8 +1,8 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use crate::{constants::MAX_MESSAGE_SIZE, crypto, identity::Identity};
 use bincode::Options;
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, VerifyingKey};
-use crate::{crypto, identity::Identity, constants::MAX_MESSAGE_SIZE};
+use serde::{Deserialize, Serialize};
 
 use crate::types::{ChannelId, ConnectionMode, ServerId, UserId};
 
@@ -172,7 +172,12 @@ pub enum VoiceEventType {
 
 impl WireMessage {
     /// Authenticated protocol v2. Legacy plaintext wire messages are never accepted here.
-    pub fn seal(&self, channel_id: ChannelId, key: &[u8; 32], identity: &Identity) -> Result<Vec<u8>, String> {
+    pub fn seal(
+        &self,
+        channel_id: ChannelId,
+        key: &[u8; 32],
+        identity: &Identity,
+    ) -> Result<Vec<u8>, String> {
         self.validate(&identity.user_id(), &channel_id)?;
         let body = EnvelopeBody {
             domain: "liberte-envelope-v2".to_string(),
@@ -183,50 +188,94 @@ impl WireMessage {
             message: self.clone(),
         };
         let signed = codec().serialize(&body).map_err(|e| e.to_string())?;
-        let envelope = SignedEnvelope { body, signature: identity.sign(&signed).to_bytes().to_vec() };
+        let envelope = SignedEnvelope {
+            body,
+            signature: identity.sign(&signed).to_bytes().to_vec(),
+        };
         let plaintext = codec().serialize(&envelope).map_err(|e| e.to_string())?;
         let encrypted = crypto::encrypt(key, &plaintext).map_err(|e| e.to_string())?;
-        if encrypted.len() > MAX_MESSAGE_SIZE - 1024 { return Err("Message exceeds network limit".into()); }
+        if encrypted.len() > MAX_MESSAGE_SIZE - 1024 {
+            return Err("Message exceeds network limit".into());
+        }
         Ok(encrypted)
     }
 
-    pub fn open(data: &[u8], expected_channel: ChannelId, key: &[u8; 32]) -> Result<(UserId, WireMessage), String> {
+    pub fn open(
+        data: &[u8],
+        expected_channel: ChannelId,
+        key: &[u8; 32],
+    ) -> Result<(UserId, WireMessage), String> {
         let verified = Self::open_authenticated(data, expected_channel, key)?;
         Ok((verified.author, verified.message))
     }
 
-    pub fn open_authenticated(data: &[u8], expected_channel: ChannelId, key: &[u8; 32]) -> Result<VerifiedMessage, String> {
-        if data.len() > MAX_MESSAGE_SIZE { return Err("Message exceeds network limit".into()); }
-        let plaintext = crypto::decrypt(key, data).map_err(|_| "Invalid encrypted envelope".to_string())?;
-        let envelope: SignedEnvelope = codec().deserialize(&plaintext).map_err(|_| "Invalid envelope format".to_string())?;
+    pub fn open_authenticated(
+        data: &[u8],
+        expected_channel: ChannelId,
+        key: &[u8; 32],
+    ) -> Result<VerifiedMessage, String> {
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err("Message exceeds network limit".into());
+        }
+        let plaintext =
+            crypto::decrypt(key, data).map_err(|_| "Invalid encrypted envelope".to_string())?;
+        let envelope: SignedEnvelope = codec()
+            .deserialize(&plaintext)
+            .map_err(|_| "Invalid envelope format".to_string())?;
         let body = &envelope.body;
         if body.domain != "liberte-envelope-v2" || body.channel_id != expected_channel {
             return Err("Envelope protocol or channel mismatch".into());
         }
-        let age = Utc::now().timestamp_millis().saturating_sub(body.issued_at_ms);
-        if !(-30_000..=300_000).contains(&age) { return Err("Envelope expired or from future".into()); }
+        let age = Utc::now()
+            .timestamp_millis()
+            .saturating_sub(body.issued_at_ms);
+        if !(-30_000..=300_000).contains(&age) {
+            return Err("Envelope expired or from future".into());
+        }
         let signed = codec().serialize(body).map_err(|e| e.to_string())?;
-        let public = VerifyingKey::from_bytes(&body.author.0).map_err(|_| "Invalid author key".to_string())?;
-        let signature = Signature::from_slice(&envelope.signature).map_err(|_| "Invalid signature".to_string())?;
-        public.verify_strict(&signed, &signature).map_err(|_| "Invalid signature".to_string())?;
+        let public = VerifyingKey::from_bytes(&body.author.0)
+            .map_err(|_| "Invalid author key".to_string())?;
+        let signature = Signature::from_slice(&envelope.signature)
+            .map_err(|_| "Invalid signature".to_string())?;
+        public
+            .verify_strict(&signed, &signature)
+            .map_err(|_| "Invalid signature".to_string())?;
         body.message.validate(&body.author, &expected_channel)?;
-        Ok(VerifiedMessage { author: body.author.clone(), id: body.id, issued_at_ms: body.issued_at_ms, message: body.message.clone() })
+        Ok(VerifiedMessage {
+            author: body.author.clone(),
+            id: body.id,
+            issued_at_ms: body.issued_at_ms,
+            message: body.message.clone(),
+        })
     }
 
     fn validate(&self, author: &UserId, channel: &ChannelId) -> Result<(), String> {
         let (sender, inner_channel) = match self {
             Self::ChatMessage(v) => {
-                if v.encrypted_content.len() > 65_576 { return Err("Chat message too large".into()); }
+                if v.encrypted_content.len() > 65_576 {
+                    return Err("Chat message too large".into());
+                }
                 (&v.sender, Some(&v.channel_id))
             }
             Self::FileOffer(v) => {
-                if v.file_name.is_empty() || v.file_name.len() > 255 || v.file_size > crate::constants::MAX_FILE_SIZE as u64 { return Err("Invalid file offer".into()); }
+                if v.file_name.is_empty()
+                    || v.file_name.len() > 255
+                    || v.file_size > crate::constants::MAX_FILE_SIZE as u64
+                {
+                    return Err("Invalid file offer".into());
+                }
                 (&v.sender, Some(&v.channel_id))
             }
             Self::FileAccept(v) => (&v.accepter, None),
             Self::FileComplete(v) => (&v.receiver, Some(&v.channel_id)),
             Self::FileChunk(v) => {
-                if v.data.len() > 65_536 || v.total_chunks == 0 || v.chunk_index >= v.total_chunks || v.total_chunks > 1600 { return Err("Invalid file chunk".into()); }
+                if v.data.len() > 65_536
+                    || v.total_chunks == 0
+                    || v.chunk_index >= v.total_chunks
+                    || v.total_chunks > 1600
+                {
+                    return Err("Invalid file chunk".into());
+                }
                 (author, None)
             }
             Self::Signal(v) => (&v.sender, Some(&v.channel_id)),
@@ -234,33 +283,49 @@ impl WireMessage {
             Self::ChannelInvite(v) => (&v.inviter, Some(&v.channel_id)),
             Self::PremiumAuth(v) => (&v.user_id, None),
             Self::TypingIndicator(v) => {
-                if v.sender_display_name.as_ref().is_some_and(|s| s.len() > 128) { return Err("Display name too long".into()); }
+                if v.sender_display_name
+                    .as_ref()
+                    .is_some_and(|s| s.len() > 128)
+                {
+                    return Err("Display name too long".into());
+                }
                 (&v.sender, Some(&v.channel_id))
             }
             Self::StatusUpdate(v) => {
-                if !["online", "dnd", "idle", "invisible"].contains(&v.status.as_str()) { return Err("Invalid status".into()); }
+                if !["online", "dnd", "idle", "invisible"].contains(&v.status.as_str()) {
+                    return Err("Invalid status".into());
+                }
                 (&v.user_id, None)
             }
             Self::MessageReaction(v) => {
-                if v.emoji.is_empty() || v.emoji.len() > 32 { return Err("Invalid reaction".into()); }
+                if v.emoji.is_empty() || v.emoji.len() > 32 {
+                    return Err("Invalid reaction".into());
+                }
                 (&v.sender, Some(&v.channel_id))
             }
             Self::VoiceFrame(v) => {
-                if v.audio_data.len() != 640 { return Err("Invalid voice frame size".into()); }
+                if v.audio_data.len() != 640 {
+                    return Err("Invalid voice frame size".into());
+                }
                 (&v.sender, Some(&v.channel_id))
             }
             Self::VoiceEvent(v) => (&v.user_id, Some(&v.channel_id)),
             Self::ProfileUpdate(v) => {
                 if v.display_name.as_ref().is_some_and(|s| s.len() > 128)
                     || v.bio.as_ref().is_some_and(|s| s.len() > 2000)
-                    || !["online", "dnd", "idle", "invisible"].contains(&v.status.as_str()) {
+                    || !["online", "dnd", "idle", "invisible"].contains(&v.status.as_str())
+                {
                     return Err("Invalid profile update".into());
                 }
                 (&v.user_id, None)
             }
         };
-        if sender != author { return Err("Payload author does not match signer".into()); }
-        if inner_channel.is_some_and(|c| c != channel) { return Err("Payload channel mismatch".into()); }
+        if sender != author {
+            return Err("Payload author does not match signer".into());
+        }
+        if inner_channel.is_some_and(|c| c != channel) {
+            return Err("Payload channel mismatch".into());
+        }
         Ok(())
     }
 
@@ -274,7 +339,10 @@ impl WireMessage {
 }
 
 fn codec() -> impl Options {
-    bincode::DefaultOptions::new().with_fixint_encoding().with_limit(MAX_MESSAGE_SIZE as u64).reject_trailing_bytes()
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_MESSAGE_SIZE as u64)
+        .reject_trailing_bytes()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,7 +356,10 @@ struct EnvelopeBody {
 }
 
 #[derive(Serialize, Deserialize)]
-struct SignedEnvelope { body: EnvelopeBody, signature: Vec<u8> }
+struct SignedEnvelope {
+    body: EnvelopeBody,
+    signature: Vec<u8>,
+}
 
 pub struct VerifiedMessage {
     pub author: UserId,
@@ -299,16 +370,22 @@ pub struct VerifiedMessage {
 
 /// Per-client replay guard. Full capacity rejects new messages instead of evicting live entries.
 #[derive(Default)]
-pub struct ReplayGuard { seen: std::collections::HashMap<uuid::Uuid, i64>, last_pruned: i64 }
+pub struct ReplayGuard {
+    seen: std::collections::HashMap<uuid::Uuid, i64>,
+    last_pruned: i64,
+}
 
 impl ReplayGuard {
     pub fn accept(&mut self, message: &VerifiedMessage) -> bool {
         let now = Utc::now().timestamp_millis();
         if now.saturating_sub(self.last_pruned) >= 30_000 {
-            self.seen.retain(|_, issued| now.saturating_sub(*issued) <= 330_000);
+            self.seen
+                .retain(|_, issued| now.saturating_sub(*issued) <= 330_000);
             self.last_pruned = now;
         }
-        if self.seen.contains_key(&message.id) || self.seen.len() >= 65_536 { return false; }
+        if self.seen.contains_key(&message.id) || self.seen.len() >= 65_536 {
+            return false;
+        }
         self.seen.insert(message.id, message.issued_at_ms);
         true
     }
@@ -323,9 +400,11 @@ mod tests {
         let channel = ChannelId::new();
         let key = crypto::generate_symmetric_key();
         let msg = WireMessage::ChatMessage(ChatMessage {
-            sender: identity.user_id(), channel_id: channel.clone(),
+            sender: identity.user_id(),
+            channel_id: channel.clone(),
             encrypted_content: crypto::encrypt(&key, b"hello").unwrap(),
-            timestamp: Utc::now(), message_id: uuid::Uuid::new_v4(),
+            timestamp: Utc::now(),
+            message_id: uuid::Uuid::new_v4(),
         });
         (identity, channel, key, msg)
     }
@@ -358,11 +437,16 @@ mod tests {
     fn valid_member_signature_cannot_claim_a_different_payload_author() {
         let (id, channel, key, msg) = authenticated_fixture();
         let bytes = msg.seal(channel.clone(), &key, &id).unwrap();
-        let mut envelope: SignedEnvelope = codec().deserialize(&crypto::decrypt(&key, &bytes).unwrap()).unwrap();
+        let mut envelope: SignedEnvelope = codec()
+            .deserialize(&crypto::decrypt(&key, &bytes).unwrap())
+            .unwrap();
         if let WireMessage::ChatMessage(ref mut chat) = envelope.body.message {
             chat.sender = Identity::generate().user_id();
         }
-        envelope.signature = id.sign(&codec().serialize(&envelope.body).unwrap()).to_bytes().to_vec();
+        envelope.signature = id
+            .sign(&codec().serialize(&envelope.body).unwrap())
+            .to_bytes()
+            .to_vec();
         let forged = crypto::encrypt(&key, &codec().serialize(&envelope).unwrap()).unwrap();
         assert!(WireMessage::open(&forged, channel, &key).is_err());
     }
@@ -383,9 +467,14 @@ mod tests {
     fn expired_signed_envelope_is_rejected() {
         let (id, channel, key, msg) = authenticated_fixture();
         let bytes = msg.seal(channel.clone(), &key, &id).unwrap();
-        let mut envelope: SignedEnvelope = codec().deserialize(&crypto::decrypt(&key, &bytes).unwrap()).unwrap();
+        let mut envelope: SignedEnvelope = codec()
+            .deserialize(&crypto::decrypt(&key, &bytes).unwrap())
+            .unwrap();
         envelope.body.issued_at_ms -= 600_000;
-        envelope.signature = id.sign(&codec().serialize(&envelope.body).unwrap()).to_bytes().to_vec();
+        envelope.signature = id
+            .sign(&codec().serialize(&envelope.body).unwrap())
+            .to_bytes()
+            .to_vec();
         let expired = crypto::encrypt(&key, &codec().serialize(&envelope).unwrap()).unwrap();
         assert!(WireMessage::open(&expired, channel, &key).is_err());
     }
@@ -412,4 +501,3 @@ mod tests {
         }
     }
 }
-

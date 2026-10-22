@@ -128,6 +128,17 @@ describe("WebRTC call lifecycle", () => {
     expect(captures[0].getAudioTracks()[0].stop).not.toHaveBeenCalled();
   });
 
+  it("stops the camera even when a peer refuses track detachment", async () => {
+    const { session } = fixture();
+    await session.start();
+    session.ensurePeer(remoteId);
+    await session.setVideoEnabled(true);
+    Connection.instances[0].senders[1].replaceTrack.mockRejectedValueOnce(new Error("Peer closed"));
+    await session.setVideoEnabled(false);
+    expect(captures[1].getVideoTracks()[0].stop).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
   it("replaces microphone without unmuting and applies the configured gain", async () => {
     const { session } = fixture();
     await session.start();

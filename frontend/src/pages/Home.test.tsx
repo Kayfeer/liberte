@@ -41,7 +41,7 @@ describe("home lifecycle", () => {
     useMessageStore.setState({ channels: [], error: null });
     useNetworkStore.setState({ error: null });
     useMediaStore.setState({ inCall: false, error: null });
-    useNavigationStore.setState({ currentPage: "chat" });
+    useNavigationStore.setState({ currentPage: "home" });
   });
   it("loads channels once and does not re-register when channel data changes", async () => {
     const view = render(<Home />);

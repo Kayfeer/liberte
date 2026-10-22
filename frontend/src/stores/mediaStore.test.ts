@@ -91,4 +91,15 @@ describe("media store lifecycle", () => {
     expect(useMediaStore.getState().unlisteners).toHaveLength(0);
     expect(mocks.unlisten).toHaveBeenCalledTimes(4);
   });
+
+  it("never restarts the camera when a disable IPC fails", async () => {
+    await useMediaStore.getState().startCall("channel");
+    await useMediaStore.getState().toggleVideo();
+    expect(useMediaStore.getState().isVideoEnabled).toBe(true);
+    mocks.camera.mockClear();
+    mocks.toggleVideo.mockRejectedValueOnce(new Error("IPC unavailable"));
+    await expect(useMediaStore.getState().toggleVideo()).rejects.toThrow("IPC unavailable");
+    expect(mocks.camera.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
+    expect(useMediaStore.getState().isVideoEnabled).toBe(false);
+  });
 });

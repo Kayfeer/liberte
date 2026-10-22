@@ -99,4 +99,3 @@ pub fn build_swarm_with_discovery(
 
     Ok(swarm)
 }
-

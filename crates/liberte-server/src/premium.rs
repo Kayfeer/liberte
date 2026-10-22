@@ -22,14 +22,28 @@ impl PremiumVerifier {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(e) => return Err(ServerError::Internal(e.to_string())),
         };
-        if overrides.len() > 10_000 || overrides.keys().any(|key| hex::decode(key).map_or(true, |key| key.len() != 32)) {
+        if overrides.len() > 10_000
+            || overrides
+                .keys()
+                .any(|key| hex::decode(key).map_or(true, |key| key.len() != 32))
+        {
             return Err(ServerError::Internal("Invalid entitlement state".into()));
         }
-        Ok(Self { server_pubkey, overrides: Arc::new(RwLock::new(overrides)), state_path })
+        Ok(Self {
+            server_pubkey,
+            overrides: Arc::new(RwLock::new(overrides)),
+            state_path,
+        })
     }
 
     pub async fn verify(&self, token: &PremiumToken) -> bool {
-        if self.overrides.read().await.get(&hex::encode(token.user_pubkey)) == Some(&false) {
+        if self
+            .overrides
+            .read()
+            .await
+            .get(&hex::encode(token.user_pubkey))
+            == Some(&false)
+        {
             return false;
         }
         self.server_pubkey != [0; 32] && check_premium_status_with_key(token, &self.server_pubkey)
@@ -62,10 +76,13 @@ impl PremiumVerifier {
         let mut updated = overrides.clone();
         let key = hex::encode(user);
         if updated.len() >= 10_000 && !updated.contains_key(&key) {
-            return Err(ServerError::ServiceUnavailable("Entitlement capacity reached".into()));
+            return Err(ServerError::ServiceUnavailable(
+                "Entitlement capacity reached".into(),
+            ));
         }
         updated.insert(key, granted);
-        let bytes = serde_json::to_vec(&updated).map_err(|e| ServerError::Internal(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec(&updated).map_err(|e| ServerError::Internal(e.to_string()))?;
         atomic_write(self.state_path.clone(), bytes).await?;
         *overrides = updated;
         Ok(())
@@ -84,7 +101,12 @@ mod tests {
     async fn every_token_is_verified_and_bound_to_its_user() {
         let dir = tempfile::tempdir().unwrap();
         let issuer = SigningKey::generate(&mut OsRng);
-        let verifier = PremiumVerifier::open(issuer.verifying_key().to_bytes(), dir.path().join("entitlements.json")).await.unwrap();
+        let verifier = PremiumVerifier::open(
+            issuer.verifying_key().to_bytes(),
+            dir.path().join("entitlements.json"),
+        )
+        .await
+        .unwrap();
         let user = [42; 32];
         let token = create_premium_token(&user, Utc::now() + Duration::days(1), &issuer);
         assert!(verifier.authorized(&user, Some(&token)).await);

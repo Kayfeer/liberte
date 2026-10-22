@@ -89,8 +89,14 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
     })?;
     let sender_pubkey: [u8; 32] = sender_bytes.try_into().map_err(|_| {
-        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Sender key must be 32 bytes")))
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Sender key must be 32 bytes",
+            )),
+        )
     })?;
 
     let timestamp: DateTime<Utc> = DateTime::parse_from_rfc3339(&ts_str)
@@ -107,4 +113,3 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         timestamp,
     })
 }
-

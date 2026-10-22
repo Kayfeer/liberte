@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { Download, File, RefreshCw } from "lucide-react";
-import { acceptFile, saveReceivedFile, type FileTransferDto } from "@/lib/tauri";
+import { Download, File, RefreshCw, X } from "lucide-react";
+import { acceptFile, dismissFile, saveReceivedFile, type FileTransferDto } from "@/lib/tauri";
 import { useFileStore } from "@/stores/fileStore";
 import { useIdentityStore } from "@/stores/identityStore";
 
@@ -19,12 +19,15 @@ export default function FileTransfers({ channelId }: { channelId: string }) {
   const files = Object.values(transfers).filter((file) => file.channelId === channelId);
 
   useEffect(() => { void useFileStore.getState().load(channelId); }, [channelId]);
-  const act = async (file: FileTransferDto, action: "accept" | "save") => {
+  const act = async (file: FileTransferDto, action: "accept" | "save" | "dismiss") => {
     setError(null);
     setBusy((state) => ({ ...state, [file.fileId]: true }));
     try {
       if (action === "accept") await acceptFile(file.fileId);
-      else {
+      else if (action === "dismiss") {
+        await dismissFile(file.fileId);
+        useFileStore.getState().remove(file.fileId);
+      } else {
         const safeName = file.fileName.split(/[/\\]/).pop()?.replace(/[\x00-\x1f]/g, "") || "fichier";
         const path = await save({ defaultPath: safeName, title: "Enregistrer le fichier reçu" });
         if (path) await saveReceivedFile(file.fileId, path);
@@ -55,6 +58,11 @@ export default function FileTransfers({ channelId }: { channelId: string }) {
           <button disabled={busy[file.fileId]} onClick={() => void act(file, "save")} className="btn-secondary flex items-center gap-1">
             <Download className="w-3 h-3" />Enregistrer
           </button>}
+        <button disabled={busy[file.fileId]} onClick={() => void act(file, "dismiss")}
+          aria-label={`Retirer ${file.fileName}`} title="Retirer et libérer la copie temporaire"
+          className="p-1 text-liberte-muted hover:text-red-300">
+          <X className="w-4 h-4" />
+        </button>
       </div>)}
     </section>
   );

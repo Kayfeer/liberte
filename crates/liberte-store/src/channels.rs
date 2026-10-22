@@ -55,13 +55,18 @@ impl Database {
     pub fn store_channel_key(&self, channel_id: Uuid, key_hex: &str) -> Result<()> {
         let key_hex = hex::encode(crate::backup::decode_key(key_hex)?);
         let transaction = self.conn().unchecked_transaction()?;
-        let existing: Option<String> = transaction.query_row(
-            "SELECT key_hex FROM channel_keys WHERE channel_id = ?1",
-            params![channel_id.to_string()], |row| row.get(0),
-        ).optional()?;
+        let existing: Option<String> = transaction
+            .query_row(
+                "SELECT key_hex FROM channel_keys WHERE channel_id = ?1",
+                params![channel_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
         if let Some(existing) = existing {
             if crate::backup::decode_key(&existing)? != crate::backup::decode_key(&key_hex)? {
-                return Err(StoreError::InvalidBackup("Refusing to replace an existing channel encryption key".into()));
+                return Err(StoreError::InvalidBackup(
+                    "Refusing to replace an existing channel encryption key".into(),
+                ));
             }
         }
         transaction.execute(
@@ -141,4 +146,3 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
         created_at,
     })
 }
-

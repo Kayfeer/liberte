@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tauri::State;
 use tracing::info;
-use rusqlite::OptionalExtension;
 
 use liberte_shared::identity::Identity;
 use liberte_store::Database;
@@ -48,7 +48,9 @@ pub async fn create_identity(
     state: State<'_, Arc<Mutex<AppState>>>,
     display_name: Option<String>,
 ) -> Result<IdentityInfoDto, String> {
-    if state.lock().map_err(|e| e.to_string())?.identity.is_some() { return Err("An identity is already loaded".into()); }
+    if state.lock().map_err(|e| e.to_string())?.identity.is_some() {
+        return Err("An identity is already loaded".into());
+    }
     let identity = Identity::generate();
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     let db_key = identity.derive_db_key();
@@ -58,14 +60,26 @@ pub async fn create_identity(
     let display_name = display_name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty());
-    if display_name.as_ref().is_some_and(|n| n.len() > 128) { return Err("Display name exceeds 128 bytes".into()); }
+    if display_name.as_ref().is_some_and(|n| n.len() > 128) {
+        return Err("Display name exceeds 128 bytes".into());
+    }
 
     info!(pubkey = %pubkey_hex, name = ?display_name, "Creating new identity");
 
     let db = Database::new(&db_key).map_err(|e| format!("Failed to open database: {e}"))?;
     db.conn().execute_batch("CREATE TABLE IF NOT EXISTS local_identity (id INTEGER PRIMARY KEY CHECK (id = 1), secret_key TEXT NOT NULL);").map_err(|e| e.to_string())?;
-    let existing: Option<String> = db.conn().query_row("SELECT secret_key FROM local_identity WHERE id = 1", [], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
-    if existing.is_some() { return Err("An identity already exists on this device; load it instead".into()); }
+    let existing: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT secret_key FROM local_identity WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if existing.is_some() {
+        return Err("An identity already exists on this device; load it instead".into());
+    }
 
     let user = liberte_store::User {
         pubkey: identity.public_key_bytes(),
@@ -96,10 +110,12 @@ pub async fn create_identity(
             secret_key TEXT NOT NULL
         );",
     );
-    db.conn().execute(
-        "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
-        rusqlite::params![secret_hex],
-    ).map_err(|e| format!("Could not persist identity: {e}"))?;
+    db.conn()
+        .execute(
+            "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
+            rusqlite::params![secret_hex],
+        )
+        .map_err(|e| format!("Could not persist identity: {e}"))?;
 
     // Also save display name in app_settings
     if display_name.is_some() {
@@ -135,7 +151,9 @@ pub async fn create_identity(
         if let Err(e) =
             crate::swarm_bridge::start_swarm_and_bridge(app, state_arc.clone(), secret_bytes).await
         {
-            if let Ok(mut guard) = state_arc.lock() { guard.network_error = Some(e.clone()); }
+            if let Ok(mut guard) = state_arc.lock() {
+                guard.network_error = Some(e.clone());
+            }
             tracing::error!(error = %e, "Failed to start swarm, continuing without P2P");
         }
     }
@@ -157,14 +175,26 @@ pub async fn load_identity(
                 .as_ref()
                 .and_then(|db| read_profile(db, id))
                 .unwrap_or((None, "online".to_string()));
-            Some((make_identity_dto(id, display_name, bio, status), *id.secret_bytes(), guard.swarm_cmd_tx.is_some(), guard.app_handle.clone()))
-        } else { None }
+            Some((
+                make_identity_dto(id, display_name, bio, status),
+                *id.secret_bytes(),
+                guard.swarm_cmd_tx.is_some(),
+                guard.app_handle.clone(),
+            ))
+        } else {
+            None
+        }
     };
     if let Some((dto, secret, running, app)) = loaded {
         if !running {
             if let Some(app) = app {
-                if let Err(e) = crate::swarm_bridge::start_swarm_and_bridge(app, state.inner().clone(), secret).await {
-                    if let Ok(mut guard) = state.lock() { guard.network_error = Some(e); }
+                if let Err(e) =
+                    crate::swarm_bridge::start_swarm_and_bridge(app, state.inner().clone(), secret)
+                        .await
+                {
+                    if let Ok(mut guard) = state.lock() {
+                        guard.network_error = Some(e);
+                    }
                 }
             }
         }
@@ -217,8 +247,12 @@ pub async fn load_identity(
 
     // Start the libp2p swarm and notification bridge (non-blocking: don't fail identity)
     if let Some(app) = app_handle {
-        if let Err(e) = crate::swarm_bridge::start_swarm_and_bridge(app, state_arc.clone(), key).await {
-            if let Ok(mut guard) = state_arc.lock() { guard.network_error = Some(e.clone()); }
+        if let Err(e) =
+            crate::swarm_bridge::start_swarm_and_bridge(app, state_arc.clone(), key).await
+        {
+            if let Ok(mut guard) = state_arc.lock() {
+                guard.network_error = Some(e.clone());
+            }
             tracing::error!(error = %e, "Failed to start swarm, continuing without P2P");
         }
     }
@@ -282,7 +316,9 @@ pub fn set_display_name(
         .ok_or_else(|| "No identity loaded".to_string())?;
 
     let name = name.trim().to_string();
-    if name.len() > 128 { return Err("Display name exceeds 128 bytes".into()); }
+    if name.len() > 128 {
+        return Err("Display name exceeds 128 bytes".into());
+    }
     let display_name = if name.is_empty() { None } else { Some(name) };
 
     // Update users table
@@ -352,7 +388,9 @@ pub fn set_bio(state: State<'_, Arc<Mutex<AppState>>>, bio: String) -> Result<()
         .ok_or_else(|| "No identity loaded".to_string())?;
 
     let bio_val = bio.trim().to_string();
-    if bio_val.len() > 2000 { return Err("Bio exceeds 2000 bytes".into()); }
+    if bio_val.len() > 2000 {
+        return Err("Bio exceeds 2000 bytes".into());
+    }
     let bio_opt = if bio_val.is_empty() {
         None
     } else {
@@ -401,12 +439,20 @@ pub fn set_status(state: State<'_, Arc<Mutex<AppState>>>, status: String) -> Res
         let broadcast_status = status.clone();
         tauri::async_runtime::spawn(async move {
             for (channel, key_hex) in keys {
-                let Ok(bytes) = hex::decode(&key_hex) else { continue; };
-                let Ok(key): Result<[u8;32], _> = bytes.try_into() else { continue; };
+                let Ok(bytes) = hex::decode(&key_hex) else {
+                    continue;
+                };
+                let Ok(key): Result<[u8; 32], _> = bytes.try_into() else {
+                    continue;
+                };
                 let channel = liberte_shared::types::ChannelId(channel);
-                let message = liberte_shared::protocol::WireMessage::StatusUpdate(liberte_shared::protocol::StatusUpdate {
-                    user_id: identity.user_id(), status: broadcast_status.clone(), timestamp: chrono::Utc::now(),
-                });
+                let message = liberte_shared::protocol::WireMessage::StatusUpdate(
+                    liberte_shared::protocol::StatusUpdate {
+                        user_id: identity.user_id(),
+                        status: broadcast_status.clone(),
+                        timestamp: chrono::Utc::now(),
+                    },
+                );
                 if let Ok(data) = message.seal(channel.clone(), &key, &identity) {
                     let _ = liberte_net::publish_confirmed(&tx, channel.to_topic(), data).await;
                 }
@@ -424,35 +470,77 @@ pub fn spawn_profile_broadcast(state: Arc<Mutex<AppState>>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let context = {
-            let Ok(guard) = state.lock() else { return; };
-            let (Some(identity), Some(db), Some(tx)) = (&guard.identity, &guard.database, &guard.swarm_cmd_tx) else { return; };
+            let Ok(guard) = state.lock() else {
+                return;
+            };
+            let (Some(identity), Some(db), Some(tx)) =
+                (&guard.identity, &guard.database, &guard.swarm_cmd_tx)
+            else {
+                return;
+            };
             let display_name = read_display_name(db);
             let (bio, status) = read_profile(db, identity).unwrap_or((None, "online".into()));
-            let Ok(keys) = db.get_all_channel_keys() else { return; };
-            (identity.clone(), tx.clone(), keys, display_name, bio, status)
+            let Ok(keys) = db.get_all_channel_keys() else {
+                return;
+            };
+            (
+                identity.clone(),
+                tx.clone(),
+                keys,
+                display_name,
+                bio,
+                status,
+            )
         };
         let (identity, tx, keys, display_name, bio, status) = context;
         for (id, key_hex) in keys {
-            let Ok(bytes) = hex::decode(&key_hex) else { continue; };
-            let Ok(key): Result<[u8; 32], _> = bytes.try_into() else { continue; };
+            let Ok(bytes) = hex::decode(&key_hex) else {
+                continue;
+            };
+            let Ok(key): Result<[u8; 32], _> = bytes.try_into() else {
+                continue;
+            };
             let channel = liberte_shared::types::ChannelId(id);
-            let message = liberte_shared::protocol::WireMessage::ProfileUpdate(liberte_shared::protocol::ProfileUpdate {
-                user_id: identity.user_id(), display_name: display_name.clone(), bio: bio.clone(), status: status.clone(), timestamp: chrono::Utc::now(),
-            });
+            let message = liberte_shared::protocol::WireMessage::ProfileUpdate(
+                liberte_shared::protocol::ProfileUpdate {
+                    user_id: identity.user_id(),
+                    display_name: display_name.clone(),
+                    bio: bio.clone(),
+                    status: status.clone(),
+                    timestamp: chrono::Utc::now(),
+                },
+            );
             for attempt in 0..3 {
-                let Ok(data) = message.seal(channel.clone(), &key, &identity) else { break; };
-                if liberte_net::publish_confirmed(&tx, channel.to_topic(), data).await.is_ok() { break; }
-                if attempt < 2 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
+                let Ok(data) = message.seal(channel.clone(), &key, &identity) else {
+                    break;
+                };
+                if liberte_net::publish_confirmed(&tx, channel.to_topic(), data)
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
             }
         }
     });
 }
 
 fn restore_runtime_settings(state: &mut AppState) {
-    state.server_url = state.database.as_ref().and_then(|db| {
-        db.conn().query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| row.get::<_, String>(0)).ok()
-    }).and_then(|json| serde_json::from_str::<crate::commands::settings::AppSettings>(&json).ok())
-        .map(|settings| settings.server_url).unwrap_or_default();
+    state.server_url = state
+        .database
+        .as_ref()
+        .and_then(|db| {
+            db.conn()
+                .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .ok()
+        })
+        .and_then(|json| serde_json::from_str::<crate::commands::settings::AppSettings>(&json).ok())
+        .map(|settings| settings.server_url)
+        .unwrap_or_default();
     crate::commands::premium::restore_status(state);
 }
-

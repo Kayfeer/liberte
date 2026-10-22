@@ -17,6 +17,8 @@ export default function Header() {
   const [searching, setSearching] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [callPending, setCallPending] = useState(false);
+  const [modePending, setModePending] = useState(false);
+  const callGeneration = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeChannel = channels.find((c) => c.id === activeChannelId);
@@ -49,12 +51,20 @@ export default function Header() {
 
   const toggleCall = async () => {
     if (!activeChannelId || callPending) return;
+    const generation = ++callGeneration.current;
     setCallPending(true);
     setCallError(null);
     try {
       if (inCall) await endCall();
       else await startCall(activeChannelId);
-    } catch (error) { setCallError(String(error)); }
+    } catch (error) { if (generation === callGeneration.current) setCallError(String(error)); }
+    finally { if (generation === callGeneration.current) setCallPending(false); }
+  };
+
+  const cancelCall = async () => {
+    ++callGeneration.current;
+    try { await endCall(); }
+    catch (error) { setCallError(String(error)); }
     finally { setCallPending(false); }
   };
 
@@ -99,13 +109,13 @@ export default function Header() {
               aria-label="Transport de l'appel"
               title="Choisissez le transport avant de rejoindre l'appel"
               value={mode}
-              disabled={inCall || busy || callPending}
+              disabled={inCall || busy || callPending || modePending}
               onChange={(event) => {
                 setCallError(null);
-                setCallPending(true);
+                setModePending(true);
                 void setMode(event.target.value as "mesh" | "sfu")
                   .catch((error) => setCallError(String(error)))
-                  .finally(() => setCallPending(false));
+                  .finally(() => setModePending(false));
               }}
               className="bg-liberte-panel text-xs rounded px-2 py-1 disabled:opacity-60"
             >
@@ -114,10 +124,12 @@ export default function Header() {
             </select>
           )}
 
+          {callPending && !inCall && <button onClick={() => void cancelCall()} className="text-xs text-red-300">Annuler la connexion</button>}
+
           {activeChannelId && (
             <button
               onClick={() => void toggleCall()}
-              disabled={callPending || busy}
+              disabled={callPending || busy || modePending}
               aria-label={inCall ? "Quitter l'appel" : "Rejoindre l'appel"}
               className={`p-2 rounded-lg transition-colors ${
                 inCall
@@ -141,14 +153,14 @@ export default function Header() {
       {showSearch && (
         <div className="bg-liberte-surface border-b border-liberte-border px-4 py-2 space-y-2">
           <div className="flex items-center gap-2">
-            <Search className="w-4 h-4 text-liberte-muted flex-shrink-0" />
+            <Search className="w-4 h-4 text-liberte-muted shrink-0" />
             <input
               autoFocus
               type="text"
               placeholder="Rechercher dans les messages…"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
-              className="flex-1 bg-transparent text-sm focus:outline-none placeholder-liberte-muted"
+              className="flex-1 bg-transparent text-sm focus:outline-hidden placeholder-liberte-muted"
             />
             {searching && (
               <span className="text-xs text-liberte-muted">…</span>

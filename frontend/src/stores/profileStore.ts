@@ -22,7 +22,7 @@ export const useProfileStore = create<ProfileState>((set) => ({
   setStatus: (userId, status) => {
     if (!statuses.has(status)) return;
     set((state) => ({ profiles: { ...state.profiles, [userId]: {
-      userId, displayName: null, bio: null, ...state.profiles[userId], status: status as UserStatus,
+      ...(state.profiles[userId] ?? { userId, displayName: null, bio: null }), status: status as UserStatus,
     } } }));
   },
 }));

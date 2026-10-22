@@ -136,7 +136,9 @@ pub async fn send_message(
     content: String,
     channel_key_hex: String,
 ) -> Result<String, String> {
-    if content.trim().is_empty() || content.len() > 65_536 { return Err("Message must contain between 1 and 65536 bytes".into()); }
+    if content.trim().is_empty() || content.len() > 65_536 {
+        return Err("Message must contain between 1 and 65536 bytes".into());
+    }
     let channel_uuid =
         Uuid::parse_str(&channel_id).map_err(|e| format!("Invalid channel_id: {e}"))?;
 
@@ -159,7 +161,9 @@ pub async fn send_message(
             .clone()
             .ok_or_else(|| "Swarm not started".to_string())?;
         let db = guard.database.as_ref().ok_or("Database not opened")?;
-        let stored = db.get_channel_key(channel_uuid).map_err(|e| e.to_string())?;
+        let stored = db
+            .get_channel_key(channel_uuid)
+            .map_err(|e| e.to_string())?;
         if hex::decode(stored).map_err(|e| e.to_string())?.as_slice() != channel_key {
             return Err("Channel key does not match the stored channel".into());
         }
@@ -186,7 +190,8 @@ pub async fn send_message(
         .seal(ChannelId(channel_uuid), &channel_key, &identity)
         .map_err(|e| format!("Serialization failed: {e}"))?;
 
-    liberte_net::publish_confirmed(&cmd_tx, topic, wire_bytes).await
+    liberte_net::publish_confirmed(&cmd_tx, topic, wire_bytes)
+        .await
         .map_err(|e| format!("Message was not published: {e}"))?;
 
     let msg = Message {
@@ -386,12 +391,25 @@ pub async fn add_reaction(
         return Err("Invalid emoji".into());
     }
 
-    publish_reaction(state.inner(), channel_uuid, message_uuid, emoji.clone(), liberte_shared::protocol::ReactionAction::Add).await?;
+    publish_reaction(
+        state.inner(),
+        channel_uuid,
+        message_uuid,
+        emoji.clone(),
+        liberte_shared::protocol::ReactionAction::Add,
+    )
+    .await?;
     {
         let guard = state.lock().map_err(|e| e.to_string())?;
         let db = guard.database.as_ref().ok_or("Database not opened")?;
         let identity = guard.identity.as_ref().ok_or("No identity loaded")?;
-        db.add_reaction(message_uuid, channel_uuid, &hex::encode(identity.public_key_bytes()), &emoji).map_err(|e| e.to_string())?;
+        db.add_reaction(
+            message_uuid,
+            channel_uuid,
+            &hex::encode(identity.public_key_bytes()),
+            &emoji,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     info!(emoji = %emoji, message = %message_id, "Reaction added");
@@ -410,59 +428,117 @@ pub async fn remove_reaction(
     let channel_uuid = {
         let guard = state.lock().map_err(|e| e.to_string())?;
         let db = guard.database.as_ref().ok_or("Database not opened")?;
-        let channel: String = db.conn().query_row("SELECT channel_id FROM messages WHERE id = ?1", [message_uuid.to_string()], |row| row.get(0)).map_err(|e| e.to_string())?;
+        let channel: String = db
+            .conn()
+            .query_row(
+                "SELECT channel_id FROM messages WHERE id = ?1",
+                [message_uuid.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         Uuid::parse_str(&channel).map_err(|e| e.to_string())?
     };
-    publish_reaction(state.inner(), channel_uuid, message_uuid, emoji.clone(), liberte_shared::protocol::ReactionAction::Remove).await?;
+    publish_reaction(
+        state.inner(),
+        channel_uuid,
+        message_uuid,
+        emoji.clone(),
+        liberte_shared::protocol::ReactionAction::Remove,
+    )
+    .await?;
     {
         let guard = state.lock().map_err(|e| e.to_string())?;
         let db = guard.database.as_ref().ok_or("Database not opened")?;
         let identity = guard.identity.as_ref().ok_or("No identity loaded")?;
-        db.remove_reaction(message_uuid, &hex::encode(identity.public_key_bytes()), &emoji).map_err(|e| e.to_string())?;
+        db.remove_reaction(
+            message_uuid,
+            &hex::encode(identity.public_key_bytes()),
+            &emoji,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     info!(emoji = %emoji, message = %message_id, "Reaction removed");
     Ok(())
 }
 
-async fn publish_reaction(state: &Arc<Mutex<AppState>>, channel_id: Uuid, message_id: Uuid, emoji: String, action: liberte_shared::protocol::ReactionAction) -> Result<(), String> {
+async fn publish_reaction(
+    state: &Arc<Mutex<AppState>>,
+    channel_id: Uuid,
+    message_id: Uuid,
+    emoji: String,
+    action: liberte_shared::protocol::ReactionAction,
+) -> Result<(), String> {
     {
         let guard = state.lock().map_err(|e| e.to_string())?;
         let db = guard.database.as_ref().ok_or("Database not opened")?;
-        if !db.get_message_by_id(message_id).is_ok_and(|message| message.channel_id == channel_id) { return Err("Message is not in this channel".into()); }
+        if !db
+            .get_message_by_id(message_id)
+            .is_ok_and(|message| message.channel_id == channel_id)
+        {
+            return Err("Message is not in this channel".into());
+        }
     }
     let (identity, key, tx) = channel_context(state, channel_id)?;
     let msg = WireMessage::MessageReaction(liberte_shared::protocol::MessageReactionMsg {
-        sender: identity.user_id(), channel_id: ChannelId(channel_id), message_id, emoji, action, timestamp: Utc::now(),
+        sender: identity.user_id(),
+        channel_id: ChannelId(channel_id),
+        message_id,
+        emoji,
+        action,
+        timestamp: Utc::now(),
     });
     let bytes = msg.seal(ChannelId(channel_id), &key, &identity)?;
     liberte_net::publish_confirmed(&tx, ChannelId(channel_id).to_topic(), bytes).await
 }
 
-type ChannelContext = (liberte_shared::identity::Identity, [u8; 32], tokio::sync::mpsc::Sender<SwarmCommand>);
+type ChannelContext = (
+    liberte_shared::identity::Identity,
+    [u8; 32],
+    tokio::sync::mpsc::Sender<SwarmCommand>,
+);
 
-fn channel_context(state: &Arc<Mutex<AppState>>, channel_id: Uuid) -> Result<ChannelContext, String> {
+fn channel_context(
+    state: &Arc<Mutex<AppState>>,
+    channel_id: Uuid,
+) -> Result<ChannelContext, String> {
     let guard = state.lock().map_err(|e| e.to_string())?;
     let identity = guard.identity.clone().ok_or("No identity loaded")?;
     let tx = guard.swarm_cmd_tx.clone().ok_or("Network not started")?;
     let db = guard.database.as_ref().ok_or("Database not opened")?;
-    let key = hex::decode(db.get_channel_key(channel_id).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let key = hex::decode(db.get_channel_key(channel_id).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     let key: [u8; 32] = key.try_into().map_err(|_| "Invalid channel key")?;
     Ok((identity, key, tx))
 }
 
 #[tauri::command]
-pub async fn send_typing(state: State<'_, Arc<Mutex<AppState>>>, channel_id: String) -> Result<(), String> {
+pub async fn send_typing(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    channel_id: String,
+) -> Result<(), String> {
     let channel_id = Uuid::parse_str(&channel_id).map_err(|e| e.to_string())?;
     let (identity, key, tx) = channel_context(state.inner(), channel_id)?;
     let display_name = {
         let guard = state.lock().map_err(|e| e.to_string())?;
-        guard.database.as_ref().and_then(|db| load_display_names(db).get(&identity.user_id().to_hex()).cloned())
+        guard.database.as_ref().and_then(|db| {
+            load_display_names(db)
+                .get(&identity.user_id().to_hex())
+                .cloned()
+        })
     };
     let message = WireMessage::TypingIndicator(liberte_shared::protocol::TypingIndicator {
-        sender: identity.user_id(), channel_id: ChannelId(channel_id), sender_display_name: display_name, timestamp: Utc::now(),
+        sender: identity.user_id(),
+        channel_id: ChannelId(channel_id),
+        sender_display_name: display_name,
+        timestamp: Utc::now(),
     });
-    liberte_net::publish_confirmed(&tx, ChannelId(channel_id).to_topic(), message.seal(ChannelId(channel_id), &key, &identity)?).await
+    liberte_net::publish_confirmed(
+        &tx,
+        ChannelId(channel_id).to_topic(),
+        message.seal(ChannelId(channel_id), &key, &identity)?,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -485,4 +561,3 @@ pub fn get_reactions(
 
     Ok(group_reactions(Some(&reactions)))
 }
-

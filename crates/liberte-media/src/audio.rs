@@ -82,7 +82,9 @@ impl AudioEngine {
             return Err(AudioError::StreamError("Capture already started".into()));
         }
         if self.config.frame_size_samples() == 0 {
-            return Err(AudioError::StreamError("Invalid audio frame configuration".into()));
+            return Err(AudioError::StreamError(
+                "Invalid audio frame configuration".into(),
+            ));
         }
 
         let host = cpal::default_host();
@@ -205,10 +207,12 @@ impl AudioEngine {
         let active_bridge = self.active.clone();
         self.playback_bridge = Some(tokio::spawn(async move {
             while active_bridge.load(Ordering::Relaxed) {
-                let Some(frame) = frame_rx.recv().await else { break; };
+                let Some(frame) = frame_rx.recv().await else {
+                    break;
+                };
                 // Never block a runtime worker or accumulate unbounded audio.
                 match playback_tx.try_send(frame) {
-                    Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => {},
+                    Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => {}
                     Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
                 }
             }
@@ -221,7 +225,9 @@ impl AudioEngine {
         self.active.store(false, Ordering::SeqCst);
         self.input_stream.take();
         self.output_stream.take();
-        if let Some(bridge) = self.playback_bridge.take() { bridge.abort(); }
+        if let Some(bridge) = self.playback_bridge.take() {
+            bridge.abort();
+        }
         self.is_capturing = false;
         // Reset mute state
         self.is_muted.store(false, Ordering::SeqCst);
@@ -243,12 +249,17 @@ impl AudioEngine {
 }
 
 impl Drop for AudioEngine {
-    fn drop(&mut self) { self.stop(); }
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 fn append_bounded(buffer: &mut std::collections::VecDeque<f32>, frame: &[f32], max_samples: usize) {
     let frame = &frame[frame.len().saturating_sub(max_samples)..];
-    let excess = buffer.len().saturating_add(frame.len()).saturating_sub(max_samples);
+    let excess = buffer
+        .len()
+        .saturating_add(frame.len())
+        .saturating_sub(max_samples);
     buffer.drain(..excess.min(buffer.len()));
     buffer.extend(frame.iter().copied());
 }
@@ -260,14 +271,23 @@ mod tests {
     fn playback_drops_old_audio_instead_of_growing_latency() {
         let mut buffer = std::collections::VecDeque::from(vec![1.0, 2.0, 3.0]);
         append_bounded(&mut buffer, &[4.0, 5.0, 6.0], 4);
-        assert_eq!(buffer.into_iter().collect::<Vec<_>>(), vec![3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(
+            buffer.into_iter().collect::<Vec<_>>(),
+            vec![3.0, 4.0, 5.0, 6.0]
+        );
         let mut buffer = std::collections::VecDeque::new();
         append_bounded(&mut buffer, &[1.0, 2.0, 3.0], 2);
         assert_eq!(buffer.into_iter().collect::<Vec<_>>(), vec![2.0, 3.0]);
     }
     #[test]
     fn stereo_frames_include_both_channels() {
-        assert_eq!(AudioConfig { channels: 2, ..AudioConfig::default() }.frame_size_samples(), 1920);
+        assert_eq!(
+            AudioConfig {
+                channels: 2,
+                ..AudioConfig::default()
+            }
+            .frame_size_samples(),
+            1920
+        );
     }
 }
-

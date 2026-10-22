@@ -12,7 +12,9 @@ impl UserId {
 
     pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
         let bytes = hex::decode(s)?;
-        let arr = bytes.try_into().map_err(|_| hex::FromHexError::InvalidStringLength)?;
+        let arr = bytes
+            .try_into()
+            .map_err(|_| hex::FromHexError::InvalidStringLength)?;
         Ok(Self(arr))
     }
 
@@ -96,4 +98,3 @@ mod tests {
         assert_eq!(UserId::from_hex(&"ab".repeat(32)).unwrap().0, [0xab; 32]);
     }
 }
-

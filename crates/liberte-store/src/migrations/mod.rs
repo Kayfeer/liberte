@@ -11,7 +11,9 @@ const CURRENT_VERSION: u32 = 3;
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if current > CURRENT_VERSION {
-        return Err(StoreError::Migration("Database was created by a newer version of Liberté".into()));
+        return Err(StoreError::Migration(
+            "Database was created by a newer version of Liberté".into(),
+        ));
     }
     let transaction = conn.unchecked_transaction()?;
 
@@ -55,22 +57,33 @@ mod tests {
         connection.pragma_update(None, "user_version", 2).unwrap();
         // An incompatible existing table causes the later v3 index creation to
         // fail after both ALTER TABLE statements would otherwise have committed.
-        connection.execute_batch("CREATE TABLE reactions (id TEXT PRIMARY KEY);").unwrap();
+        connection
+            .execute_batch("CREATE TABLE reactions (id TEXT PRIMARY KEY);")
+            .unwrap();
         assert!(run_migrations(&connection).is_err());
-        let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
         assert_eq!(version, 2);
         let mut statement = connection.prepare("PRAGMA table_info(users)").unwrap();
-        let names = statement.query_map([], |row| row.get::<_, String>(1)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
         assert!(!names.iter().any(|name| name == "bio" || name == "status"));
     }
 
     #[test]
     fn future_database_version_is_not_modified() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", CURRENT_VERSION + 1).unwrap();
+        connection
+            .pragma_update(None, "user_version", CURRENT_VERSION + 1)
+            .unwrap();
         assert!(run_migrations(&connection).is_err());
-        let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
         assert_eq!(version, CURRENT_VERSION + 1);
     }
 }
-

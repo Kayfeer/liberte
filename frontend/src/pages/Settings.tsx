@@ -64,10 +64,12 @@ function VolumeSlider({
   label,
   value,
   onChange,
+  max = 200,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
+  max?: number;
 }) {
   return (
     <div className="space-y-1.5">
@@ -78,7 +80,7 @@ function VolumeSlider({
       <input
         type="range"
         min={0}
-        max={200}
+        max={max}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full h-1.5 bg-liberte-border rounded-full appearance-none cursor-pointer
@@ -116,7 +118,7 @@ function Toggle({
           }`}
         >
           <div
-            className={`w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${
+            className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${
               checked ? "translate-x-4" : "translate-x-0"
             }`}
           />
@@ -233,7 +235,7 @@ export default function Settings() {
                     maxLength={32}
                     autoFocus
                     className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1
-                               text-sm text-liberte-text placeholder-liberte-muted outline-none
+                               text-sm text-liberte-text placeholder-liberte-muted outline-hidden
                                focus:border-liberte-accent transition-colors"
                   />
                   <button
@@ -315,7 +317,7 @@ export default function Settings() {
                     rows={3}
                     autoFocus
                     className="w-full bg-liberte-bg border border-liberte-border rounded px-2 py-1.5
-                               text-sm text-liberte-text placeholder-liberte-muted outline-none
+                               text-sm text-liberte-text placeholder-liberte-muted outline-hidden
                                focus:border-liberte-accent transition-colors resize-none"
                   />
                   <div className="flex items-center justify-between">
@@ -332,7 +334,7 @@ export default function Settings() {
                           await setBio(bioInput.trim());
                           setEditingBio(false);
                         }}
-                        className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-opacity-90"
+                        className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                       >
                         Sauvegarder
                       </button>
@@ -401,7 +403,8 @@ export default function Settings() {
 
         <VolumeSlider
           label="Volume de sortie"
-          value={media.outputVolume}
+          value={Math.min(100, media.outputVolume)}
+          max={100}
           onChange={(v) => media.update({ outputVolume: v })}
         />
 
@@ -515,16 +518,16 @@ function ThemeSection() {
                 {opt.preview.map((c, i) => (
                   <div
                     key={i}
-                    className="w-4 h-4 rounded-sm"
+                    className="w-4 h-4 rounded-xs"
                     style={{ backgroundColor: c }}
                   />
                 ))}
               </div>
             ) : (
               <div className="flex gap-0.5">
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-purple-500 to-pink-500" />
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-blue-500 to-green-500" />
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-br from-yellow-500 to-red-500" />
+                <div className="w-4 h-4 rounded-xs bg-gradient-to-br from-purple-500 to-pink-500" />
+                <div className="w-4 h-4 rounded-xs bg-gradient-to-br from-blue-500 to-green-500" />
+                <div className="w-4 h-4 rounded-xs bg-gradient-to-br from-yellow-500 to-red-500" />
               </div>
             )}
             <span className="text-xs">{opt.label}</span>

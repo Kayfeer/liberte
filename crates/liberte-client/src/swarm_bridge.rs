@@ -41,14 +41,15 @@ pub async fn start_swarm_and_bridge(
         guard.network_error = None;
     }
 
-    // Subscribe to all existing channels
-    subscribe_all_channels(&state, &cmd_tx).await;
-
-    // Spawn notification processing loop
+    // Start draining notifications before queueing subscriptions. Otherwise a
+    // full notification queue can prevent the swarm from accepting commands.
     let state_clone = state.clone();
     tokio::spawn(async move {
         notification_loop(app, state_clone, notif_rx).await;
     });
+
+    // Subscribe to all existing channels
+    subscribe_all_channels(&state, &cmd_tx).await;
 
     Ok(())
 }
@@ -94,13 +95,13 @@ async fn notification_loop(
 ) {
     // Track which channels each peer is associated with (for presence)
     let mut replays = ReplayGuard::default();
+    let mut last_profile_announcement: Option<std::time::Instant> = None;
 
     info!("Swarm notification bridge started");
 
     while let Some(notification) = notif_rx.recv().await {
         match notification {
             SwarmNotification::PeerConnected { peer_id, address } => {
-                crate::commands::identity::spawn_profile_broadcast(state.clone());
                 if let Ok(mut guard) = state.lock() {
                     guard.network_error = None;
                     guard.connection_mode = if address.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit)) {
@@ -115,6 +116,21 @@ async fn notification_loop(
                         peer_id: peer_id.to_string(),
                     },
                 );
+            }
+
+            SwarmNotification::PeerSubscribed { peer_id, topic } => {
+                // A transport connection can predate joining a channel. Announce when the
+                // remote subscription exists so a late joiner also receives our profile.
+                let shared_channel = topic.strip_prefix("channel:")
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                    .is_some_and(|id| state.lock().ok().and_then(|guard| {
+                        guard.database.as_ref().map(|db| db.get_channel_key(id).is_ok())
+                    }).unwrap_or(false));
+                if shared_channel && last_profile_announcement.is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1)) {
+                    debug!(peer = %peer_id, %topic, "Announcing profile to channel subscriber");
+                    last_profile_announcement = Some(std::time::Instant::now());
+                    crate::commands::identity::spawn_profile_broadcast(state.clone());
+                }
             }
 
             SwarmNotification::PeerDisconnected { peer_id } => {

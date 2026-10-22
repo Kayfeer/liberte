@@ -10,12 +10,7 @@ use chrono::Utc;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    api::AppState,
-    auth::AuthenticatedUser,
-    config::LiveKitConfig,
-    error::ServerError,
-};
+use crate::{api::AppState, auth::AuthenticatedUser, config::LiveKitConfig, error::ServerError};
 
 const TOKEN_TTL_SECONDS: i64 = 300;
 
@@ -58,9 +53,15 @@ struct VideoGrant {
     can_publish_sources: Vec<&'static str>,
 }
 
-fn create_token(config: &LiveKitConfig, owner: &[u8; 32], room: &str) -> Result<TokenResponse, ServerError> {
+fn create_token(
+    config: &LiveKitConfig,
+    owner: &[u8; 32],
+    room: &str,
+) -> Result<TokenResponse, ServerError> {
     if !matches!(room.len(), 32 | 64) || !room.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(ServerError::BadRequest("Room must be a 32 or 64 character opaque hex identifier".into()));
+        return Err(ServerError::BadRequest(
+            "Room must be a 32 or 64 character opaque hex identifier".into(),
+        ));
     }
     let room = room.to_ascii_lowercase();
     let now = Utc::now().timestamp();
@@ -84,9 +85,17 @@ fn create_token(config: &LiveKitConfig, owner: &[u8; 32], room: &str) -> Result<
             can_publish_sources: vec!["camera", "microphone", "screen_share", "screen_share_audio"],
         },
     };
-    let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(config.api_secret.as_bytes()))
-        .map_err(|_| ServerError::Internal("Unable to create media token".into()))?;
-    Ok(TokenResponse { url: config.url.clone(), token, room_name: room })
+    let token = encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(config.api_secret.as_bytes()),
+    )
+    .map_err(|_| ServerError::Internal("Unable to create media token".into()))?;
+    Ok(TokenResponse {
+        url: config.url.clone(),
+        token,
+        room_name: room,
+    })
 }
 
 pub async fn issue_token(
@@ -94,8 +103,10 @@ pub async fn issue_token(
     Extension(AuthenticatedUser(owner)): Extension<AuthenticatedUser>,
     Json(request): Json<TokenRequest>,
 ) -> Result<Response, ServerError> {
-    let config = state.config.livekit.as_ref()
-        .ok_or_else(|| ServerError::ServiceUnavailable("Media server is not configured".into()))?;
+    let config =
+        state.config.livekit.as_ref().ok_or_else(|| {
+            ServerError::ServiceUnavailable("Media server is not configured".into())
+        })?;
     let token = create_token(config, &owner, &request.room_name)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(token)).into_response())
 }
@@ -123,19 +134,39 @@ mod tests {
         assert_eq!(header.alg, Algorithm::HS256);
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&[&config.api_key]);
-        let claims = decode::<serde_json::Value>(&response.token, &DecodingKey::from_secret(config.api_secret.as_bytes()), &validation).unwrap().claims;
+        let claims = decode::<serde_json::Value>(
+            &response.token,
+            &DecodingKey::from_secret(config.api_secret.as_bytes()),
+            &validation,
+        )
+        .unwrap()
+        .claims;
         assert_eq!(claims["sub"], hex::encode(owner));
         assert_eq!(claims["video"]["room"], room);
         assert_eq!(claims["video"]["roomJoin"], true);
         assert_eq!(claims["video"]["roomAdmin"], false);
         assert_eq!(claims["video"]["canPublishData"], false);
-        assert_eq!(claims["exp"].as_i64().unwrap() - claims["nbf"].as_i64().unwrap(), TOKEN_TTL_SECONDS);
-        assert!(decode::<serde_json::Value>(&response.token, &DecodingKey::from_secret(b"wrong-secret"), &validation).is_err());
+        assert_eq!(
+            claims["exp"].as_i64().unwrap() - claims["nbf"].as_i64().unwrap(),
+            TOKEN_TTL_SECONDS
+        );
+        assert!(decode::<serde_json::Value>(
+            &response.token,
+            &DecodingKey::from_secret(b"wrong-secret"),
+            &validation
+        )
+        .is_err());
     }
 
     #[test]
     fn non_opaque_and_unbounded_room_names_are_rejected() {
-        for room in ["", "public-room", "../room", &"a".repeat(65), &"g".repeat(64)] {
+        for room in [
+            "",
+            "public-room",
+            "../room",
+            &"a".repeat(65),
+            &"g".repeat(64),
+        ] {
             assert!(create_token(&config(), &[42; 32], room).is_err());
         }
     }

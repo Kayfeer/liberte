@@ -80,7 +80,7 @@ export default function ProfileModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs">
       <div className="bg-liberte-surface border border-liberte-border rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
         {/* Banner */}
         <div
@@ -130,7 +130,7 @@ export default function ProfileModal({
                   placeholder="Pseudo"
                   maxLength={32}
                   autoFocus
-                  className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-none focus:border-liberte-accent"
+                  className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-hidden focus:border-liberte-accent"
                 />
                 <button onClick={handleSaveName} className="p-1 hover:bg-liberte-panel rounded">
                   <Check className="w-4 h-4 text-liberte-success" />
@@ -217,7 +217,7 @@ export default function ProfileModal({
                   maxLength={190}
                   rows={3}
                   autoFocus
-                  className="w-full bg-liberte-surface border border-liberte-border rounded px-2 py-1.5 text-sm resize-none outline-none focus:border-liberte-accent"
+                  className="w-full bg-liberte-surface border border-liberte-border rounded px-2 py-1.5 text-sm resize-none outline-hidden focus:border-liberte-accent"
                 />
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-liberte-muted">
@@ -232,7 +232,7 @@ export default function ProfileModal({
                     </button>
                     <button
                       onClick={handleSaveBio}
-                      className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-opacity-90"
+                      className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                     >
                       Sauvegarder
                     </button>

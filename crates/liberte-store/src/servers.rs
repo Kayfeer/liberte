@@ -65,8 +65,14 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> rusqlite::Result<Server> {
         rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
     })?;
     let owner_pubkey: [u8; 32] = owner_bytes.try_into().map_err(|_| {
-        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Owner key must be 32 bytes")))
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Owner key must be 32 bytes",
+            )),
+        )
     })?;
     let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_str)
         .map(|dt| dt.with_timezone(&Utc))
@@ -81,4 +87,3 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> rusqlite::Result<Server> {
         created_at,
     })
 }
-

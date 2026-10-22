@@ -28,7 +28,7 @@ export default function MessageBubble({ message, onReactionChange }: Props) {
         {/* Avatar — clickable for profile */}
         <button
           onClick={() => setShowProfile(true)}
-          className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
+          className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
           style={{
             backgroundColor: `hsl(${hashCode(message.senderId) % 360}, 60%, 40%)`,
           }}

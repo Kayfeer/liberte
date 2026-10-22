@@ -22,9 +22,14 @@ pub fn load_bootstrap_peers(path: &Path) -> Vec<Multiaddr> {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('['))
         .map(|line| {
-            if let Some(value) = line.strip_prefix("addr").and_then(|v| v.trim_start().strip_prefix('=')) {
+            if let Some(value) = line
+                .strip_prefix("addr")
+                .and_then(|v| v.trim_start().strip_prefix('='))
+            {
                 value.trim().trim_matches('"')
-            } else { line }
+            } else {
+                line
+            }
         })
         .filter_map(|line| match line.parse::<Multiaddr>() {
             Ok(addr) => {
@@ -102,4 +107,3 @@ mod tests {
         assert_eq!(addrs.len(), 2);
     }
 }
-
