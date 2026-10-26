@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { Message } from "../../lib/types";
 import ReactionBar from "./ReactionBar";
 import ProfileModal from "../identity/ProfileModal";
+import { useIdentityStore } from "../../stores/identityStore";
+import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
   message: Message;
@@ -10,9 +12,12 @@ interface Props {
 
 export default function MessageBubble({ message, onReactionChange }: Props) {
   const shortId = message.senderId.slice(0, 8);
-  const displayLabel = message.senderDisplayName || shortId;
-  const avatarLetters = message.senderDisplayName
-    ? message.senderDisplayName.slice(0, 2).toUpperCase()
+  const profile = useProfileStore((state) => state.profiles[message.senderId]);
+  const ownIdentity = useIdentityStore((state) => state.identity?.publicKey === message.senderId ? state.identity : null);
+  const name = ownIdentity ? ownIdentity.displayName : profile?.displayName !== undefined ? profile.displayName : message.senderDisplayName;
+  const displayLabel = name || shortId;
+  const avatarLetters = name
+    ? name.slice(0, 2).toUpperCase()
     : shortId.slice(0, 2).toUpperCase();
   const time = new Date(message.timestamp).toLocaleTimeString("fr-FR", {
     hour: "2-digit",
@@ -26,7 +31,7 @@ export default function MessageBubble({ message, onReactionChange }: Props) {
         {/* Avatar — clickable for profile */}
         <button
           onClick={() => setShowProfile(true)}
-          className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
+          className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
           style={{
             backgroundColor: `hsl(${hashCode(message.senderId) % 360}, 60%, 40%)`,
           }}
@@ -45,7 +50,7 @@ export default function MessageBubble({ message, onReactionChange }: Props) {
             >
               {displayLabel}
             </button>
-            {message.senderDisplayName && (
+            {name && (
               <span className="text-xs text-liberte-muted font-mono opacity-50">
                 {shortId}
               </span>

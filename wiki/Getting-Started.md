@@ -1,57 +1,54 @@
-# Getting Started
+# Démarrer
 
-## Prérequis
-
-- **Rust** 1.82+ (via `rustup`)
-- **Node.js** 20+ et **pnpm** (ou npm)
-- **Tauri v2 CLI** : `cargo install tauri-cli --version "^2"`
-- Sur Linux : `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`
-
-## Installation
+Installer Rust 1.99.1 avec rustup, Node.js 22 et les dépendances natives Tauri. Le client macOS exige **macOS 13.3 minimum**. Le [README](../README.md) précise les moteurs WebView requis, les paquets Linux et les prérequis Windows.
 
 ```bash
-# Cloner le dépôt
 git clone https://github.com/Kayfeer/liberte.git
 cd liberte
-
-# Installer les dépendances frontend
 cd frontend
-pnpm install  # ou npm install
+npm ci
+npm test
+npm run typecheck
+npm run build
 cd ..
-
-# Lancer en mode développement
-cargo tauri dev
+cargo test --workspace --locked
+cd crates/liberte-client
+node ../../frontend/node_modules/@tauri-apps/cli/tauri.js dev
 ```
 
-## Build de production
-
-```bash
-cargo tauri build
-```
-
-L'installeur se trouvera dans `target/release/bundle/`.
-
-## Serveur (optionnel)
-
-```bash
-# Build du serveur relay/SFU
-cargo build --release -p liberte-server
-
-# Lancer
-./target/release/liberte-server
-```
-
-Ou via Docker :
-
-```bash
-cd docker
-docker compose up -d
-```
+Si `Cargo.lock` est absent pendant la migration, le générer une seule fois avec `python scripts/ci.py lockfile`, examiner le résultat et le versionner. Il ne faut pas ignorer les erreurs `--locked`.
 
 ## Premier lancement
 
-1. L'app affiche la page d'accueil **Welcome**
-2. Choisissez un **pseudo** (optionnel, modifiable dans Paramètres)
-3. Cliquez **Créer mon identité** — une clé Ed25519 est générée localement
-4. Créez un canal ou rejoignez-en un via un code d'invitation
-5. Partagez votre clé publique ou générez un lien d'invitation
+Créer une identité puis un canal. Transmettre une invitation récente par un moyen confidentiel. Les deux appareils doivent utiliser une version de protocole compatible.
+
+Sur un LAN, autoriser le trafic de découverte et le port de transport dans le pare-feu. Sur Internet, vérifier les adresses publiées, le NAT et le relais P2P. Pour les appels, configurer si nécessaire les serveurs ICE dans les paramètres et consulter [TURN](TURN.md).
+
+## Vérifier un échange
+
+1. Utiliser deux appareils ou deux profils réellement séparés.
+2. Rejoindre le même canal et vérifier les deux identités.
+3. Envoyer un message dans chaque sens, redémarrer et vérifier l'historique.
+4. Tester l'envoi d'un fichier, puis une restauration de sauvegarde sur un profil de test.
+5. Tester micro, caméra, mute, sortie d'appel et reconnexion.
+6. Refaire l'essai depuis deux réseaux distincts.
+
+Un affichage local ou un message « envoyé » ne remplace pas la réception vérifiée sur l'autre appareil.
+
+## Connexion et messages après redémarrage
+
+Les paramètres réseau proposent **Adresse d'un pair ou d'un relais** et **Se connecter**. Pour joindre un relais Internet, suivre les étapes de [configuration P2P](Configuration.md#connexion-p2p-et-relais-internet), puis créer l'invitation une fois l'adresse de circuit disponible. **URL du serveur auto-hébergé** configure séparément l'API HTTP.
+
+Après redémarrage, le client restaure ses salons, leurs abonnements et les adresses explicites connues. La reconnexion ne télécharge pas les messages manqués. L'historique affiché provient de la base locale ; la sauvegarde restaure cet historique, sans interroger les autres participants.
+
+L'envoi attend brièvement la propagation d'un abonnement après connexion. Sans pair abonné, il renvoie une erreur ; aucun message n'est conservé dans une file d'envoi différé. Une publication acceptée n'est pas un accusé de réception : si plusieurs participants sont dans le salon, un participant déconnecté peut manquer un message reçu par les autres. Il n'y a pas d'indicateur de lecture. La confirmation de réception des fichiers intervient séparément, après vérification du hash.
+
+## Serveur
+
+```bash
+cargo build --release --locked --bin liberte-server
+python scripts/ci.py smoke --binary target/release/liberte-server
+```
+
+Sous Windows, ajouter `.exe`. Pour Docker, utiliser les instructions du README et un checkout contenant le lockfile.
+

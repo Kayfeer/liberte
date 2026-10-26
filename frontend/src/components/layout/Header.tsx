@@ -1,48 +1,41 @@
 import { useState, useRef } from "react";
-import { Hash, Phone, PhoneOff, Link, Search, X } from "lucide-react";
+import { Hash, Phone, PhoneOff, Link, Search } from "lucide-react";
 import { useMessageStore } from "../../stores/messageStore";
 import { useMediaStore } from "../../stores/mediaStore";
 import ConnectionBadge from "../common/ConnectionBadge";
 import InviteModal from "../channels/InviteModal";
-import * as tauri from "../../lib/tauri";
-import type { Message } from "../../lib/types";
+import MessageSearch from "../chat/MessageSearch";
 
 export default function Header() {
   const { channels, activeChannelId, channelKeys } = useMessageStore();
-  const { inCall, startCall, endCall } = useMediaStore();
+  const { inCall, startCall, endCall, mode, setMode, busy } = useMediaStore();
   const [showInvite, setShowInvite] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Message[]>([]);
-  const [searching, setSearching] = useState(false);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [callPending, setCallPending] = useState(false);
+  const [modePending, setModePending] = useState(false);
+  const callGeneration = useRef(0);
 
   const activeChannel = channels.find((c) => c.id === activeChannelId);
   const activeChannelKey = activeChannelId ? channelKeys[activeChannelId] : undefined;
 
-  const handleSearch = (q: string) => {
-    setSearchQuery(q);
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (q.trim().length < 2) {
-      setSearchResults([]);
-      return;
-    }
-    searchTimer.current = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const results = await tauri.searchMessages(q, activeChannelId ?? undefined);
-        setSearchResults(results);
-      } catch {
-        setSearchResults([]);
-      }
-      setSearching(false);
-    }, 300);
+  const toggleCall = async () => {
+    if (!activeChannelId || callPending) return;
+    const generation = ++callGeneration.current;
+    setCallPending(true);
+    setCallError(null);
+    try {
+      if (inCall) await endCall();
+      else await startCall(activeChannelId);
+    } catch (error) { if (generation === callGeneration.current) setCallError(String(error)); }
+    finally { if (generation === callGeneration.current) setCallPending(false); }
   };
 
-  const closeSearch = () => {
-    setShowSearch(false);
-    setSearchQuery("");
-    setSearchResults([]);
+  const cancelCall = async () => {
+    ++callGeneration.current;
+    try { await endCall(); }
+    catch (error) { setCallError(String(error)); }
+    finally { setCallPending(false); }
   };
 
   return (
@@ -82,10 +75,32 @@ export default function Header() {
           <ConnectionBadge />
 
           {activeChannelId && (
+            <select
+              aria-label="Transport de l'appel"
+              title="Choisissez le transport avant de rejoindre l'appel"
+              value={mode}
+              disabled={inCall || busy || callPending || modePending}
+              onChange={(event) => {
+                setCallError(null);
+                setModePending(true);
+                void setMode(event.target.value as "mesh" | "sfu")
+                  .catch((error) => setCallError(String(error)))
+                  .finally(() => setModePending(false));
+              }}
+              className="bg-liberte-panel text-liberte-text text-xs rounded px-2 py-1 disabled:opacity-60"
+            >
+              <option value="mesh">P2P direct</option>
+              <option value="sfu">SFU chiffré</option>
+            </select>
+          )}
+
+          {callPending && !inCall && <button onClick={() => void cancelCall()} className="text-xs text-red-300">Annuler la connexion</button>}
+
+          {activeChannelId && (
             <button
-              onClick={() =>
-                inCall ? endCall() : startCall(activeChannelId)
-              }
+              onClick={() => void toggleCall()}
+              disabled={callPending || busy || modePending}
+              aria-label={inCall ? "Quitter l'appel" : "Rejoindre l'appel"}
               className={`p-2 rounded-lg transition-colors ${
                 inCall
                   ? "bg-red-600 hover:bg-red-700 text-white"
@@ -102,63 +117,9 @@ export default function Header() {
         </div>
       </div>
 
-      {/* Search panel */}
-      {showSearch && (
-        <div className="bg-liberte-surface border-b border-liberte-border px-4 py-2 space-y-2">
-          <div className="flex items-center gap-2">
-            <Search className="w-4 h-4 text-liberte-muted flex-shrink-0" />
-            <input
-              autoFocus
-              type="text"
-              placeholder="Rechercher dans les messages…"
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
-              className="flex-1 bg-transparent text-sm focus:outline-none placeholder-liberte-muted"
-            />
-            {searching && (
-              <span className="text-xs text-liberte-muted">…</span>
-            )}
-            <button onClick={closeSearch} className="p-1 hover:bg-liberte-panel rounded">
-              <X className="w-3.5 h-3.5 text-liberte-muted" />
-            </button>
-          </div>
+      {callError && <p role="alert" className="text-red-300 text-sm px-4 py-2">{callError}</p>}
 
-          {searchResults.length > 0 && (
-            <div className="max-h-60 overflow-y-auto space-y-1">
-              {searchResults.map((msg) => {
-                const ch = channels.find((c) => c.id === msg.channelId);
-                return (
-                  <div
-                    key={msg.id}
-                    className="text-xs p-2 bg-liberte-bg rounded cursor-pointer hover:bg-liberte-panel transition-colors"
-                    onClick={() => {
-                      useMessageStore.getState().setActiveChannel(msg.channelId);
-                      closeSearch();
-                    }}
-                  >
-                    <div className="flex items-center gap-2 text-liberte-muted mb-0.5">
-                      <span className="font-mono">
-                        {msg.senderId.slice(0, 8)}…
-                      </span>
-                      {ch && (
-                        <span className="text-liberte-accent">#{ch.name}</span>
-                      )}
-                      <span className="ml-auto">
-                        {new Date(msg.timestamp).toLocaleString()}
-                      </span>
-                    </div>
-                    <p className="text-liberte-text truncate">{msg.content}</p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
-            <p className="text-xs text-liberte-muted py-1">Aucun résultat</p>
-          )}
-        </div>
-      )}
+      {showSearch && <MessageSearch channelId={activeChannelId} onClose={() => setShowSearch(false)} />}
 
       {activeChannel && activeChannelKey && (
         <InviteModal

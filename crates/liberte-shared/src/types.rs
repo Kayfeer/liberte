@@ -12,8 +12,9 @@ impl UserId {
 
     pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
         let bytes = hex::decode(s)?;
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
+        let arr = bytes
+            .try_into()
+            .map_err(|_| hex::FromHexError::InvalidStringLength)?;
         Ok(Self(arr))
     }
 
@@ -83,5 +84,17 @@ impl FrameType {
             0x02 => Some(Self::Video),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn identity_parser_rejects_bad_lengths_without_panicking() {
+        for value in ["", "aa", &"aa".repeat(31), &"aa".repeat(33), "zz"] {
+            assert!(UserId::from_hex(value).is_err());
+        }
+        assert_eq!(UserId::from_hex(&"ab".repeat(32)).unwrap().0, [0xab; 32]);
     }
 }

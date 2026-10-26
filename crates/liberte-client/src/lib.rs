@@ -1,10 +1,14 @@
 pub mod commands;
 pub mod events;
+pub mod file_transfer;
+pub mod media_permissions;
+pub mod server_client;
 pub mod state;
 pub mod swarm_bridge;
 
 use std::sync::{Arc, Mutex};
 
+use tauri::Manager;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::state::AppState;
@@ -38,7 +42,11 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(app_state.clone())
         .setup(move |app| {
+            if let Some(window) = app.get_webview_window("main") {
+                media_permissions::configure(&window)?;
+            }
             let handle = app.handle().clone();
+            file_transfer::start_cleanup(Arc::downgrade(&app_state), handle.clone());
             if let Ok(mut guard) = app_state.lock() {
                 guard.app_handle = Some(handle);
             }
@@ -54,7 +62,9 @@ pub fn run() {
             commands::network::connect_peer,
             commands::network::list_peers,
             commands::network::get_connection_mode,
+            commands::network::get_network_status,
             commands::messaging::send_message,
+            commands::messaging::send_typing,
             commands::messaging::get_messages,
             commands::messaging::list_channels,
             commands::messaging::search_messages,
@@ -67,8 +77,17 @@ pub fn run() {
             commands::media::toggle_video,
             commands::media::set_call_mode,
             commands::media::get_call_state,
+            #[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+            media_permissions::qa_media_capture_state,
+            commands::media::send_call_signal,
+            commands::media::announce_call,
+            commands::sfu::get_sfu_connection,
             commands::files::send_file,
             commands::files::upload_premium_blob,
+            commands::files::list_channel_files,
+            commands::files::accept_file,
+            commands::files::save_received_file,
+            commands::files::dismiss_file,
             commands::premium::check_premium,
             commands::premium::activate_premium,
             commands::settings::get_settings,
@@ -83,7 +102,11 @@ pub fn run() {
             commands::backup::auto_backup,
             commands::backup::import_backup,
             commands::backup::list_backups,
+            commands::backup::upload_remote_backup,
+            commands::backup::restore_remote_backup,
+            commands::backup::restore_local_backup,
             commands::profile::export_profile,
+            commands::profile::save_profile_to_file,
             commands::profile::import_profile,
         ])
         .run(tauri::generate_context!())

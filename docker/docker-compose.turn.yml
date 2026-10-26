@@ -1,0 +1,46 @@
+# Optional TURN relay. Supply every required value in docker/.env.
+# docker compose -f docker-compose.yml -f docker-compose.turn.yml up -d
+services:
+  turn:
+    image: coturn/coturn:4.18.0-r0
+    restart: unless-stopped
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+    command:
+      - --log-file=stdout
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --realm=${TURN_REALM:?Set TURN_REALM to your TURN hostname}
+      - --external-ip=${TURN_PUBLIC_IP:?Set TURN_PUBLIC_IP to the public IPv4 address}
+      - --lt-cred-mech
+      - --user=${TURN_USERNAME:?Set TURN_USERNAME}:${TURN_PASSWORD:?Set a long random TURN_PASSWORD}
+      - --fingerprint
+      - --no-multicast-peers
+      - --no-tcp-relay
+      - --no-tls
+      - --no-dtls
+      - --user-quota=8
+      - --total-quota=128
+      - --max-bps=1000000
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=100.64.0.0-100.127.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+      - --denied-peer-ip=224.0.0.0-255.255.255.255
+      - "--denied-peer-ip=::"
+      - "--denied-peer-ip=::1"
+      - "--denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+      - "--denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

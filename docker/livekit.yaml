@@ -1,0 +1,13 @@
+# Single-node deployment. API credentials and advertised node IP come from environment.
+# The public signaling URL must use WSS through a TLS reverse proxy.
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+  stun_servers: []
+logging:
+  level: info

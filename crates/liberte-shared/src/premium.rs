@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 // Token signed by payment server, client presents it to relay/SFU
@@ -36,7 +36,7 @@ pub fn check_premium_status(token: &PremiumToken) -> bool {
 }
 
 pub fn check_premium_status_with_key(token: &PremiumToken, server_pubkey: &[u8; 32]) -> bool {
-    if Utc::now() > token.valid_until {
+    if server_pubkey == &[0; 32] || Utc::now() >= token.valid_until {
         return false;
     }
 
@@ -53,7 +53,7 @@ pub fn check_premium_status_with_key(token: &PremiumToken, server_pubkey: &[u8; 
         return false;
     };
 
-    verifying_key.verify(&payload, &signature).is_ok()
+    verifying_key.verify_strict(&payload, &signature).is_ok()
 }
 
 pub fn create_premium_token(

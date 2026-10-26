@@ -1,0 +1,168 @@
+//! Platform WebView capture settings. Device access still requires user consent.
+
+#[cfg(all(feature = "qa-media-devices", not(debug_assertions)))]
+compile_error!(
+    "qa-media-devices is restricted to debug QA builds; never enable it for distribution"
+);
+
+#[cfg(all(feature = "qa-media-devices", not(target_os = "linux")))]
+compile_error!("qa-media-devices requires the Linux WebKitGTK QA runner");
+
+#[cfg(target_os = "linux")]
+pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use gtk::prelude::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use webkit2gtk::{
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt,
+    };
+
+    window.with_webview(|platform| {
+        let view = platform.inner();
+        if let Some(settings) = WebViewExt::settings(&view) {
+            settings.set_enable_webrtc(true);
+            settings.set_enable_media_stream(true);
+            settings.set_media_playback_requires_user_gesture(false);
+            #[cfg(all(feature = "qa-media-devices", debug_assertions))]
+            {
+                settings.set_enable_mock_capture_devices(true);
+                tracing::warn!(
+                    "QA: synthetic WebKit microphone/camera enabled; WebDriver automation permissions apply; this does not validate physical devices or the consent dialog"
+                );
+            }
+        }
+        let audio_granted = Rc::new(Cell::new(false));
+        let video_granted = Rc::new(Cell::new(false));
+        view.connect_permission_request(move |view, request| {
+            let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
+                return false;
+            };
+            if !view.uri().as_deref().is_some_and(trusted_origin) {
+                request.deny();
+                return true;
+            }
+            let audio = media.is_for_audio_device();
+            let video = media.is_for_video_device();
+            if (!audio || audio_granted.get()) && (!video || video_granted.get()) {
+                request.allow();
+                return true;
+            }
+            let device = match (audio, video) {
+                (true, true) => "le microphone et la caméra",
+                (true, false) => "le microphone",
+                _ => "la caméra",
+            };
+            let parent = view
+                .toplevel()
+                .and_then(|widget| widget.downcast::<gtk::Window>().ok());
+            let dialog = gtk::MessageDialog::new(
+                parent.as_ref(),
+                gtk::DialogFlags::MODAL,
+                gtk::MessageType::Question,
+                gtk::ButtonsType::YesNo,
+                &format!(
+                    "Autoriser Liberté à utiliser {device} pour les appels de cette session ?"
+                ),
+            );
+            let request = request.clone();
+            let audio_granted = audio_granted.clone();
+            let video_granted = video_granted.clone();
+            dialog.connect_response(move |dialog, response| {
+                if response == gtk::ResponseType::Yes {
+                    if audio {
+                        audio_granted.set(true);
+                    }
+                    if video {
+                        video_granted.set(true);
+                    }
+                    request.allow();
+                } else {
+                    request.deny();
+                }
+                dialog.close();
+            });
+            dialog.show_all();
+            true
+        });
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn configure(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn trusted_origin(uri: &str) -> bool {
+    let Ok(url) = tauri::Url::parse(uri) else {
+        return false;
+    };
+    (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || (cfg!(debug_assertions)
+            && url.scheme() == "http"
+            && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))
+            && url.port_or_known_default() == Some(5173))
+}
+
+/// Native engine observation for the separate QA binary. No capture state is
+/// changed here, and this command does not exist in distribution builds.
+#[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaMediaCaptureState {
+    microphone: &'static str,
+    camera: &'static str,
+    mock_capture_devices: bool,
+    automation_controlled: bool,
+}
+
+#[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+fn capture_state_name(state: webkit2gtk::MediaCaptureState) -> &'static str {
+    match state {
+        webkit2gtk::MediaCaptureState::None => "none",
+        webkit2gtk::MediaCaptureState::Active => "active",
+        webkit2gtk::MediaCaptureState::Muted => "muted",
+        _ => "unknown",
+    }
+}
+
+#[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+#[tauri::command]
+pub async fn qa_media_capture_state(
+    window: tauri::WebviewWindow,
+) -> Result<QaMediaCaptureState, String> {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    let (reply, result) = tokio::sync::oneshot::channel();
+    window
+        .with_webview(move |platform| {
+            let view = platform.inner();
+            let snapshot = QaMediaCaptureState {
+                microphone: capture_state_name(WebViewExt::microphone_capture_state(&view)),
+                camera: capture_state_name(WebViewExt::camera_capture_state(&view)),
+                mock_capture_devices: WebViewExt::settings(&view)
+                    .is_some_and(|settings| settings.enables_mock_capture_devices()),
+                automation_controlled: WebViewExt::is_controlled_by_automation(&view),
+            };
+            let _ = reply.send(snapshot);
+        })
+        .map_err(|error| error.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), result)
+        .await
+        .map_err(|_| "Native capture observation timed out".to_string())?
+        .map_err(|_| "Native capture observation unavailable".to_string())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn capture_permission_never_trusts_remote_websites() {
+        assert!(trusted_origin("tauri://localhost/index.html"));
+        assert!(!trusted_origin("https://localhost.example.com"));
+        assert!(!trusted_origin("https://example.com"));
+        assert!(!trusted_origin("http://127.0.0.1:9000"));
+        assert!(!trusted_origin("tauri://example.com"));
+    }
+}

@@ -1,8 +1,23 @@
 use libp2p::identity::Keypair;
-use tracing::info;
+use tracing::{info, warn};
 
 pub fn build_swarm(
     keypair: Keypair,
+) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
+    build_swarm_with_discovery(keypair, true)
+}
+
+pub fn build_swarm_with_discovery(
+    keypair: Keypair,
+    enable_mdns: bool,
+) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
+    build_swarm_with_options(keypair, enable_mdns, true)
+}
+
+pub(crate) fn build_swarm_with_options(
+    keypair: Keypair,
+    enable_mdns: bool,
+    enable_dcutr: bool,
 ) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -19,7 +34,7 @@ pub fn build_swarm(
         .with_quic()
         .with_relay_client(noise::Config::new, libp2p::yamux::Config::default)?
         .with_behaviour(
-            |key,
+            move |key,
              relay_client|
              -> std::result::Result<
                 super::behaviour::LiberteBehaviour,
@@ -40,15 +55,25 @@ pub fn build_swarm(
                     .heartbeat_interval(Duration::from_secs(GOSSIPSUB_HEARTBEAT_SECS))
                     .validation_mode(ValidationMode::Strict)
                     .max_transmit_size(MAX_MESSAGE_SIZE)
+                    // Initial peer handshakes include every subscribed channel.
+                    .max_control_message_size(64 * 1024)
                     .message_id_fn(message_id_fn)
                     .build()
                     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                         format!("GossipSub config: {e}").into()
                     })?;
 
-                let gossipsub = gossipsub::Behaviour::new(
+                // Keep subscription memory bounded while supporting profiles with
+                // more than the new upstream default of 100 channels.
+                let subscription_filter = gossipsub::MaxCountSubscriptionFilter {
+                    filter: gossipsub::AllowAllSubscriptionFilter {},
+                    max_subscribed_topics: 1024,
+                    max_subscriptions_per_request: 1024,
+                };
+                let gossipsub = gossipsub::Behaviour::new_with_subscription_filter(
                     MessageAuthenticity::Signed(key.clone()),
                     gossipsub_config,
+                    subscription_filter,
                 )
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                     format!("GossipSub init: {e}").into()
@@ -60,18 +85,33 @@ pub fn build_swarm(
 
                 let identify_config =
                     identify::Config::new(PROTOCOL_VERSION.to_string(), key.public())
+                        // A process restart keeps its PeerId but loses GossipSub state.
+                        // Identify runs on the authenticated connection and lets peers
+                        // distinguish a fresh session from an additional live link.
+                        .with_agent_version(format!(
+                            "liberte/{}/session/{}",
+                            env!("CARGO_PKG_VERSION"),
+                            libp2p::PeerId::random()
+                        ))
                         .with_push_listen_addr_updates(true)
                         .with_interval(Duration::from_secs(60));
                 let identify = identify::Behaviour::new(identify_config);
 
-                let dcutr = dcutr::Behaviour::new(local_peer_id);
+                let dcutr = enable_dcutr.then(|| dcutr::Behaviour::new(local_peer_id));
+                let mdns = if enable_mdns {
+                    match libp2p::mdns::tokio::Behaviour::new(libp2p::mdns::Config::default(), local_peer_id) {
+                        Ok(discovery) => Some(discovery),
+                        Err(error) => { warn!(%error, "LAN discovery unavailable; explicit connections remain available"); None }
+                    }
+                } else { None };
 
                 Ok(super::behaviour::LiberteBehaviour {
                     gossipsub,
                     kademlia,
                     identify,
                     relay_client,
-                    dcutr,
+                    dcutr: dcutr.into(),
+                    mdns: mdns.into(),
                 })
             },
         )?

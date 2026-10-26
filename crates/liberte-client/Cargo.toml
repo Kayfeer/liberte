@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors = ["Kayfeer"]
 
+[features]
+# Synthetic native capture is for the isolated Linux QA binary only.
+# Release builds reject this feature in media_permissions.rs.
+qa-media-devices = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -18,7 +23,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
-tauri-plugin-updater = "2"
+# Official upstream ZIP 9 security fix, pending the next stable plugin release.
+tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "ba98bfadc4c868c9a7e1a226c83af528e1f11b89" }
 tauri-plugin-process = "2"
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -30,6 +36,7 @@ blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 chrono = { workspace = true }
 directories = "5"
+tempfile = "3"
 uuid = { workspace = true }
 libp2p = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
@@ -37,3 +44,8 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 [lib]
 name = "liberte_client_lib"
 path = "src/lib.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
+

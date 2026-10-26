@@ -10,6 +10,9 @@ use tokio::sync::mpsc;
 use liberte_net::SwarmCommand;
 
 pub struct AppState {
+    pub network_error: Option<String>,
+    pub file_transfers: std::collections::HashMap<uuid::Uuid, crate::file_transfer::TransferRecord>,
+    pub premium_token: Option<liberte_shared::premium::PremiumToken>,
     pub identity: Option<Identity>,
     pub database: Option<Database>,
     pub swarm_cmd_tx: Option<mpsc::Sender<SwarmCommand>>,
@@ -35,6 +38,9 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            network_error: None,
+            file_transfers: std::collections::HashMap::new(),
+            premium_token: None,
             identity: None,
             database: None,
             swarm_cmd_tx: None,

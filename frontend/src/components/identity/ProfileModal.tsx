@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, Copy, Check, Pencil } from "lucide-react";
 import type { UserStatus } from "../../lib/types";
 import { useIdentityStore } from "../../stores/identityStore";
+import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
   isOpen: boolean;
@@ -31,8 +32,11 @@ export default function ProfileModal({
   userId,
   displayName,
 }: Props) {
-  const { identity, setBio, setStatus, setDisplayName } = useIdentityStore();
+  const { identity, error: identityError, setBio, setStatus, setDisplayName } = useIdentityStore();
+  const remoteProfile = useProfileStore((state) => userId ? state.profiles[userId] : undefined);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState("");
   const [editingName, setEditingName] = useState(false);
@@ -44,11 +48,11 @@ export default function ProfileModal({
   const profilePubkey = userId || identity?.publicKey || "";
   const profileName = isOwnProfile
     ? identity?.displayName
-    : displayName;
-  const profileBio = isOwnProfile ? identity?.bio : undefined;
-  const profileStatus: UserStatus = isOwnProfile
+    : remoteProfile?.displayName !== undefined ? remoteProfile.displayName : displayName;
+  const profileBio = isOwnProfile ? identity?.bio : remoteProfile?.bio;
+  const profileStatus: UserStatus | null = isOwnProfile
     ? identity?.status || "online"
-    : "online";
+    : remoteProfile?.status || null;
   const shortId = profilePubkey.length > 16
     ? `${profilePubkey.slice(0, 8)}…${profilePubkey.slice(-8)}`
     : profilePubkey;
@@ -57,20 +61,29 @@ export default function ProfileModal({
     ? profileName.slice(0, 2).toUpperCase()
     : shortId.slice(0, 2).toUpperCase();
 
-  const copyPubkey = () => {
-    navigator.clipboard.writeText(profilePubkey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyPubkey = async () => {
+    setCopyError(null); setCopied(false);
+    try {
+      await navigator.clipboard.writeText(profilePubkey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (cause) { setCopyError(String(cause)); }
   };
 
   const handleSaveBio = async () => {
-    await setBio(bioInput.trim());
-    setEditingBio(false);
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try { await setBio(bioInput.trim()); setEditingBio(false); }
+    catch { /* The store error is displayed in this dialog; keep the draft. */ }
+    finally { setSavingProfile(false); }
   };
 
   const handleSaveName = async () => {
-    await setDisplayName(nameInput.trim());
-    setEditingName(false);
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try { await setDisplayName(nameInput.trim()); setEditingName(false); }
+    catch { /* The store error is displayed in this dialog; keep the draft. */ }
+    finally { setSavingProfile(false); }
   };
 
   const handleStatusChange = async (newStatus: UserStatus) => {
@@ -78,7 +91,7 @@ export default function ProfileModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs">
       <div className="bg-liberte-surface border border-liberte-border rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
         {/* Banner */}
         <div
@@ -108,14 +121,15 @@ export default function ProfileModal({
             </div>
             {/* Status dot */}
             <div
-              className={`absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-liberte-surface ${STATUS_COLORS[profileStatus]}`}
-              title={STATUS_LABELS[profileStatus]}
+              className={`absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-liberte-surface ${STATUS_COLORS[profileStatus || "invisible"]}`}
+              title={(profileStatus ? STATUS_LABELS[profileStatus] : "Statut non observé")}
             />
           </div>
         </div>
 
         {/* Profile info */}
         <div className="px-4 pt-2 pb-4 space-y-4">
+          {(copyError || (isOwnProfile && identityError)) && <p role="alert" className="text-sm text-red-300">{copyError || identityError}</p>}
           {/* Name */}
           <div>
             {isOwnProfile && editingName ? (
@@ -128,9 +142,9 @@ export default function ProfileModal({
                   placeholder="Pseudo"
                   maxLength={32}
                   autoFocus
-                  className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-none focus:border-liberte-accent"
+                  className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-hidden focus:border-liberte-accent"
                 />
-                <button onClick={handleSaveName} className="p-1 hover:bg-liberte-panel rounded">
+                <button aria-label="Enregistrer le pseudo" disabled={savingProfile} onClick={handleSaveName} className="p-1 hover:bg-liberte-panel rounded">
                   <Check className="w-4 h-4 text-liberte-success" />
                 </button>
               </div>
@@ -146,6 +160,7 @@ export default function ProfileModal({
                 )}
                 {isOwnProfile && (
                   <button
+                    aria-label="Modifier le pseudo"
                     onClick={() => {
                       setNameInput(profileName || "");
                       setEditingName(true);
@@ -158,8 +173,8 @@ export default function ProfileModal({
               </div>
             )}
             <p className="text-xs text-liberte-muted flex items-center gap-1 mt-0.5">
-              <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[profileStatus]}`} />
-              {STATUS_LABELS[profileStatus]}
+              <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[profileStatus || "invisible"]}`} />
+              {(profileStatus ? STATUS_LABELS[profileStatus] : "Statut non observé")}
             </p>
           </div>
 
@@ -196,6 +211,7 @@ export default function ProfileModal({
               </label>
               {isOwnProfile && !editingBio && (
                 <button
+                  aria-label="Modifier la bio"
                   onClick={() => {
                     setBioInput(profileBio || "");
                     setEditingBio(true);
@@ -215,7 +231,7 @@ export default function ProfileModal({
                   maxLength={190}
                   rows={3}
                   autoFocus
-                  className="w-full bg-liberte-surface border border-liberte-border rounded px-2 py-1.5 text-sm resize-none outline-none focus:border-liberte-accent"
+                  className="w-full bg-liberte-surface border border-liberte-border rounded px-2 py-1.5 text-sm resize-none outline-hidden focus:border-liberte-accent"
                 />
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-liberte-muted">
@@ -229,8 +245,9 @@ export default function ProfileModal({
                       Annuler
                     </button>
                     <button
+                      disabled={savingProfile}
                       onClick={handleSaveBio}
-                      className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-opacity-90"
+                      className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                     >
                       Sauvegarder
                     </button>
@@ -258,7 +275,8 @@ export default function ProfileModal({
                 {profilePubkey}
               </code>
               <button
-                onClick={copyPubkey}
+                aria-label={copied ? "Clé publique copiée" : "Copier la clé publique"}
+                onClick={() => void copyPubkey()}
                 className="p-2 hover:bg-liberte-panel rounded shrink-0"
               >
                 {copied ? (

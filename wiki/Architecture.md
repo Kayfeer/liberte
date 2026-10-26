@@ -1,84 +1,28 @@
 # Architecture
 
-## Vue d'ensemble
+Le client Tauri relie l'interface React aux commandes Rust. Le bridge réseau traite les événements libp2p, vérifie les enveloppes et met à jour les données locales et l'interface.
 
-Liberté est organisé en **6 crates Rust** + un frontend **React/TypeScript** embarqué via **Tauri v2**.
+| Composant | Responsabilité |
+| --- | --- |
+| shared | Types, identité, enveloppes, invitations et primitives cryptographiques |
+| net | Swarm libp2p, transport QUIC, découverte locale et connexion aux pairs |
+| store | Données SQLite, migrations, fichiers et sauvegardes |
+| client | Commandes Tauri, session utilisateur et bridge événementiel |
+| frontend | Interface React, état utilisateur et flux WebRTC |
+| server | API authentifiée, stockage, relais P2P et jetons d'accès au SFU optionnel |
+| media | Composants média bas niveau ; leur présence ne signifie pas qu'un SFU est déployé |
 
-```
-┌──────────────────────────────────────────────────┐
-│                   Frontend                       │
-│         React 19 + TypeScript 5 + Vite 6         │
-│              Tailwind CSS + Zustand              │
-└─────────────────────┬────────────────────────────┘
-                      │ Tauri IPC (invoke)
-┌─────────────────────▼────────────────────────────┐
-│              liberte-client (Tauri)               │
-│  Commands · Events · State management             │
-├───────────────┬──────────────┬────────────────────┤
-│ liberte-net   │ liberte-media│ liberte-store      │
-│ (libp2p)      │ (WebRTC)     │ (SQLite)           │
-├───────────────┴──────────────┴────────────────────┤
-│              liberte-shared                       │
-│  Crypto · Protocol · Types · Identity             │
-└───────────────────────────────────────────────────┘
+## Frontières
 
-┌───────────────────────────────────────────────────┐
-│           liberte-server (optionnel)              │
-│        Axum 0.7 · Relay · SFU · Blob store       │
-└───────────────────────────────────────────────────┘
-```
+Le réseau est non fiable. Les signatures et le chiffrement de canal sont vérifiés avant la consommation des événements. Une signature de transport libp2p ne remplace pas la signature de l'auteur du message.
 
-## Crates
+Le stockage local n'offre pas de protection contre un appareil compromis. Le serveur de blobs reçoit du contenu déjà chiffré et doit aussi vérifier qui possède le droit de le lire, modifier ou supprimer.
 
-### liberte-shared
-Types partagés, protocole wire (serde bincode), primitives crypto (XChaCha20-Poly1305, BLAKE3, Ed25519), gestion d'identité.
+Le réseau de signalisation et les flux WebRTC sont deux chemins distincts. Se connecter au serveur HTTP ou au serveur TURN ne garantit pas la découverte d'un pair libp2p.
 
-### liberte-net
-Stack réseau basé sur **libp2p** : transport QUIC, protocole de découverte mDNS/DHT, relay pour NAT traversal, pubsub GossipSub pour les messages de canal.
+En mode SFU, LiveKit transporte les flux média chiffrés par le SDK client. L'API Liberté délivre les jetons d'accès de courte durée ; les clés de chiffrement proviennent du canal et ne sont pas confiées au SFU. La connectivité du SFU et la distribution des clés sont des frontières distinctes.
 
-### liberte-media
-Gestion audio/vidéo : WebRTC peer-to-peer (mesh) et SFU (Selective Forwarding Unit) pour les appels de groupe.
+## Exploitation
 
-### liberte-store
-Couche de persistance SQLite (rusqlite, WAL mode) : utilisateurs, canaux, messages chiffrés, clés de canal, blobs. Migrations automatiques.
+L'API HTTP utilise TCP 8080 et le relais QUIC UDP 4001. TURN, s'il est ajouté, utilise ses propres ports et identifiants. Les contrôles CI vérifient la compilation et quelques frontières serveur ; une connexion réelle entre deux appareils reste un test d'acceptation nécessaire.
 
-### liberte-client
-Application Tauri v2 : commandes IPC, gestion d'état, événements temps réel, plugins (shell, dialog, fs, notification, updater, process).
-
-### liberte-server
-Serveur optionnel (Axum 0.7) : relay libp2p, SFU WebRTC, blob store, rate limiting, gestion premium.
-
-## Frontend
-
-| Techno          | Version  |
-|-----------------|----------|
-| React           | 19       |
-| TypeScript      | 5        |
-| Vite            | 6        |
-| Tailwind CSS    | 3        |
-| Zustand         | 5        |
-| Lucide Icons    | latest   |
-
-### Stores Zustand
-- `identityStore` — identité crypto (clé publique, pseudo)
-- `messageStore` — canaux, messages, clés de canal
-- `networkStore` — peers connectés, mode de connexion
-- `navigationStore` — navigation interne
-- `mediaStore` — appels audio/vidéo
-- `themeStore` — thèmes (dark, light, midnight, custom)
-- `backupStore` — sauvegarde automatique
-
-## Chiffrement
-
-```
-Utilisateur A                          Utilisateur B
-     │                                       │
-     │  Ed25519 keypair                      │  Ed25519 keypair
-     │         │                             │         │
-     │  Noise XX handshake ──────────────────┤         │
-     │         │                             │         │
-     │  Channel key (XChaCha20-Poly1305) ────┤         │
-     │         │                             │         │
-     │  encrypt(channel_key, message) ───────┤         │
-     │                                       │  decrypt(channel_key, ciphertext)
-```

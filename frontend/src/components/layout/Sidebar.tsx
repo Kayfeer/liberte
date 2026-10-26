@@ -66,7 +66,7 @@ export default function Sidebar() {
                 : "text-liberte-muted hover:text-liberte-text hover:bg-liberte-bg"
             }`}
           >
-            <Hash className="w-4 h-4 flex-shrink-0" />
+            <Hash className="w-4 h-4 shrink-0" />
             <span className="truncate">{channel.name}</span>
           </button>
         ))}
@@ -90,7 +90,7 @@ export default function Sidebar() {
                 key={peerId}
                 className="flex items-center gap-2 px-2 py-1 rounded text-sm text-liberte-muted"
               >
-                <Circle className="w-2 h-2 fill-liberte-success text-liberte-success flex-shrink-0" />
+                <Circle className="w-2 h-2 fill-liberte-success text-liberte-success shrink-0" />
                 <span className="truncate font-mono text-xs">
                   {peerId.length > 16
                     ? `${peerId.slice(0, 8)}…${peerId.slice(-8)}`
@@ -108,7 +108,7 @@ export default function Sidebar() {
         <div className="p-2 flex items-center gap-2">
           <button
             onClick={() => setShowProfile(true)}
-            className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
+            className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:opacity-80 transition-opacity"
             style={{
               backgroundColor: identity
                 ? `hsl(${hashCode(identity.publicKey) % 360}, 60%, 40%)`
@@ -171,3 +171,4 @@ function hashCode(str: string): number {
   }
   return Math.abs(hash);
 }
+

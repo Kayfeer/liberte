@@ -39,6 +39,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   },
 
   setDisplayName: async (name: string) => {
+    set({ error: null });
     try {
       await tauri.setDisplayName(name);
       const current = get().identity;
@@ -48,11 +49,13 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
         });
       }
     } catch (e) {
-      console.error("Failed to set display name:", e);
+      set({ error: String(e) });
+      throw e;
     }
   },
 
   setBio: async (bio: string) => {
+    set({ error: null });
     try {
       await tauri.setBio(bio);
       const current = get().identity;
@@ -62,11 +65,13 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
         });
       }
     } catch (e) {
-      console.error("Failed to set bio:", e);
+      set({ error: String(e) });
+      throw e;
     }
   },
 
   setStatus: async (status: UserStatus) => {
+    set({ error: null });
     try {
       await tauri.setStatus(status);
       const current = get().identity;
@@ -76,7 +81,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
         });
       }
     } catch (e) {
-      console.error("Failed to set status:", e);
+      set({ error: String(e) });
     }
   },
 }));

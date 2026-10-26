@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
+import { createEventSubscriptions } from "@/lib/eventSubscriptions";
 import { EVENTS, TYPING_TIMEOUT } from "../../lib/constants";
 import type { TypingEvent } from "../../lib/types";
 
@@ -15,10 +15,13 @@ interface TypingUser {
 
 export default function TypingIndicator({ channelId }: Props) {
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unlisten = listen<TypingEvent>(EVENTS.TYPING_INDICATOR, (event) => {
+    setTypingUsers([]);
+    setError(null);
+    const subscriptions = createEventSubscriptions((reason) => setError(String(reason)));
+    subscriptions.add<TypingEvent>(EVENTS.TYPING_INDICATOR, (event) => {
       const { userId, displayName, channelId: evtChannel } = event.payload;
       if (evtChannel !== channelId) return;
 
@@ -32,16 +35,17 @@ export default function TypingIndicator({ channelId }: Props) {
     });
 
     // Cleanup expired typing indicators every second
-    timerRef.current = setInterval(() => {
+    const timer = setInterval(() => {
       setTypingUsers((prev) => prev.filter((u) => u.expiresAt > Date.now()));
     }, 1000);
 
     return () => {
-      unlisten.then((u) => u());
-      if (timerRef.current) clearInterval(timerRef.current);
+      subscriptions.dispose();
+      clearInterval(timer);
     };
   }, [channelId]);
 
+  if (error) return <p role="alert" className="px-4 py-1 text-xs text-red-300">Indicateur de saisie indisponible : {error}</p>;
   if (typingUsers.length === 0) return null;
 
   const names = typingUsers.map(
@@ -69,3 +73,4 @@ export default function TypingIndicator({ channelId }: Props) {
     </div>
   );
 }
+

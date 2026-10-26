@@ -28,7 +28,7 @@ pub async fn request_relay_reservation(
 
     // Reservation happens when the swarm processes listen_on for the circuit addr
     cmd_tx
-        .send(SwarmCommand::Dial(circuit_addr))
+        .send(SwarmCommand::ListenRelay(circuit_addr))
         .await
         .map_err(|_| anyhow::anyhow!("Swarm command channel closed"))?;
 

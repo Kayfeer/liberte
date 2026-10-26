@@ -1,4 +1,4 @@
-pub const PROTOCOL_VERSION: &str = "/liberte/1.0.0";
+pub const PROTOCOL_VERSION: &str = "/liberte/2.0.0";
 pub const APP_NAME: &str = "Liberté";
 
 pub const NONCE_SIZE: usize = 24;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Copy, Check, RefreshCw } from "lucide-react";
 import Modal from "../common/Modal";
 import { generateInvite } from "../../lib/tauri";
@@ -26,45 +26,64 @@ export default function InviteModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const requestVersion = useRef(0);
+  const expiresAt = useRef(0);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const generate = useCallback(async () => {
+    const version = ++requestVersion.current;
+    const startedAt = Date.now();
     setLoading(true);
+    setCode("");
     setError("");
     setCopied(false);
+    expiresAt.current = 0;
     try {
       const inviteCode = await generateInvite(channelId, channelName, channelKeyHex);
+      if (requestVersion.current !== version) return;
+      expiresAt.current = startedAt + INVITE_DURATION_SECS * 1000;
       setCode(inviteCode);
-      setRemaining(INVITE_DURATION_SECS);
-    } catch (e) {
-      setError(String(e));
+      setRemaining(Math.max(0, Math.ceil((expiresAt.current - Date.now()) / 1000)));
+    } catch (reason) {
+      if (requestVersion.current === version) setError(String(reason));
     } finally {
-      setLoading(false);
+      if (requestVersion.current === version) setLoading(false);
     }
   }, [channelId, channelName, channelKeyHex]);
 
   useEffect(() => {
-    if (isOpen) generate();
+    if (isOpen) void generate();
+    return () => {
+      ++requestVersion.current;
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
   }, [isOpen, generate]);
 
   useEffect(() => {
     if (!isOpen || !code) return;
-
     const interval = setInterval(() => {
-      setRemaining((prev) => {
-        if (prev <= 1) {
-          generate();
-          return INVITE_DURATION_SECS;
-        }
-        return prev - 1;
-      });
+      const secondsLeft = Math.max(0, Math.ceil((expiresAt.current - Date.now()) / 1000));
+      setRemaining(secondsLeft);
+      if (secondsLeft === 0) {
+        clearInterval(interval);
+        void generate();
+      }
     }, 1000);
-
     return () => clearInterval(interval);
   }, [isOpen, code, generate]);
 
-  const copyCode = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyCode = async () => {
+    const version = requestVersion.current;
+    try {
+      await navigator.clipboard.writeText(code);
+      if (requestVersion.current !== version) return;
+      setCopied(true);
+      setError("");
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 2000);
+    } catch (reason) {
+      if (requestVersion.current === version) setError(`Copie impossible : ${String(reason)}`);
+    }
   };
 
   const minutes = Math.floor(remaining / 60);
@@ -80,14 +99,15 @@ export default function InviteModal({
           </span>
         </p>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
         {code && (
           <div className="relative">
             <textarea
+              aria-label="Code d'invitation"
               readOnly
               value={code}
-              className="w-full bg-liberte-bg border border-liberte-panel rounded px-3 py-2 text-xs font-mono resize-none h-24 focus:outline-none"
+              className="w-full bg-liberte-bg border border-liberte-panel rounded px-3 py-2 text-xs font-mono resize-none h-24 focus:outline-hidden"
             />
             <div className="flex gap-2 mt-2">
               <button
@@ -118,6 +138,8 @@ export default function InviteModal({
           </div>
         )}
 
+        {!loading && !code && <button className="btn-primary" onClick={() => void generate()}>Réessayer</button>}
+
         {loading && !code && (
           <p className="text-sm text-liberte-muted text-center py-4">
             Génération du code...
@@ -127,3 +149,4 @@ export default function InviteModal({
     </Modal>
   );
 }
+

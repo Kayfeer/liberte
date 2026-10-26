@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { applyMediaPreferences } from "@/lib/mediaSession";
 
 export interface MediaDeviceInfo {
   deviceId: string;
@@ -19,6 +20,7 @@ export interface MediaDevicesState {
   echoCancellation: boolean;
   autoGainControl: boolean;
   voiceIsolation: boolean;
+  iceServers: RTCIceServer[];
   loading: boolean;
   error: string | null;
 }
@@ -35,26 +37,19 @@ function loadSaved(): Partial<MediaDevicesState> {
 }
 
 function savePersistent(state: Partial<MediaDevicesState>) {
-  try {
-    const current = loadSaved();
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        ...current,
-        selectedAudioInput: state.selectedAudioInput,
-        selectedAudioOutput: state.selectedAudioOutput,
-        selectedVideoInput: state.selectedVideoInput,
-        inputVolume: state.inputVolume,
-        outputVolume: state.outputVolume,
-        noiseSuppression: state.noiseSuppression,
-        echoCancellation: state.echoCancellation,
-        autoGainControl: state.autoGainControl,
-        voiceIsolation: state.voiceIsolation,
-      })
-    );
-  } catch {
-    // ignore
-  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    ...loadSaved(),
+    selectedAudioInput: state.selectedAudioInput,
+    selectedAudioOutput: state.selectedAudioOutput,
+    selectedVideoInput: state.selectedVideoInput,
+    inputVolume: state.inputVolume,
+    outputVolume: state.outputVolume,
+    noiseSuppression: state.noiseSuppression,
+    echoCancellation: state.echoCancellation,
+    autoGainControl: state.autoGainControl,
+    voiceIsolation: state.voiceIsolation,
+    iceServers: state.iceServers,
+  }));
 }
 
 export function useMediaDevices() {
@@ -73,14 +68,19 @@ export function useMediaDevices() {
     echoCancellation: saved.echoCancellation ?? true,
     autoGainControl: saved.autoGainControl ?? true,
     voiceIsolation: saved.voiceIsolation ?? false,
+    iceServers: Array.isArray(saved.iceServers) ? saved.iceServers : [],
     loading: true,
     error: null,
   });
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const mounted = useRef(false);
 
   const enumerateDevices = useCallback(async () => {
+    let stream: MediaStream | null = null;
     try {
       // Request permission first so labels are available
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: true,
       }).catch(() =>
@@ -105,11 +105,7 @@ export function useMediaDevices() {
         else if (d.kind === "videoinput") videoInputs.push(info);
       }
 
-      // Stop the temporary stream
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
-
+      if (!mounted.current) return;
       setState((prev) => ({
         ...prev,
         audioInputs,
@@ -119,30 +115,42 @@ export function useMediaDevices() {
         error: null,
       }));
     } catch (err) {
+      if (!mounted.current) return;
       setState((prev) => ({
         ...prev,
         loading: false,
         error: err instanceof Error ? err.message : "Impossible d'accéder aux périphériques",
       }));
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop());
     }
   }, []);
 
   useEffect(() => {
-    enumerateDevices();
+    mounted.current = true;
+    void enumerateDevices();
 
     // Listen for device changes (plug/unplug)
     navigator.mediaDevices.addEventListener("devicechange", enumerateDevices);
     return () => {
+      mounted.current = false;
       navigator.mediaDevices.removeEventListener("devicechange", enumerateDevices);
     };
   }, [enumerateDevices]);
 
-  const update = useCallback((patch: Partial<MediaDevicesState>) => {
-    setState((prev) => {
-      const next = { ...prev, ...patch };
-      savePersistent(next);
-      return next;
-    });
+  const update = useCallback(async (patch: Partial<MediaDevicesState>): Promise<boolean> => {
+    const next = { ...stateRef.current, ...patch, error: null };
+    try { savePersistent(next); }
+    catch (cause) { setState((previous) => ({ ...previous, error: String(cause) })); return false; }
+    stateRef.current = next;
+    setState(next);
+    try {
+      await applyMediaPreferences();
+      return true;
+    } catch (cause) {
+      if (mounted.current) setState((previous) => ({ ...previous, error: String(cause) }));
+      return false;
+    }
   }, []);
 
   return { ...state, update, refresh: enumerateDevices };
