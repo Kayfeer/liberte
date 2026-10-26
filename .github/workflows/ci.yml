@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main, 'codex/**', '!codex/liberte-cef']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -21,6 +21,7 @@ env:
 
 jobs:
   lockfile:
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef'
     name: Resolve and preserve Cargo.lock
     runs-on: ubuntu-24.04
     steps:
@@ -45,6 +46,7 @@ jobs:
           git diff --exit-code -- Cargo.lock
 
   tooling:
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef'
     name: Release tooling regression tests
     runs-on: ubuntu-24.04
     steps:
@@ -57,6 +59,7 @@ jobs:
       - run: python scripts/ci.py versions
 
   rust-audit:
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef'
     name: RustSec dependency audit
     needs: lockfile
     runs-on: ubuntu-24.04
@@ -107,6 +110,7 @@ jobs:
         run: python scripts/ci.py rust-audit-gate --report .ci-output/cargo-audit.json --status .ci-output/cargo-audit-exit.txt
 
   frontend:
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef'
     name: Frontend tests, types and build
     runs-on: ubuntu-24.04
     outputs:
@@ -184,7 +188,7 @@ jobs:
   desktop:
     name: Desktop package (${{ matrix.label }})
     needs: [lockfile, frontend]
-    if: always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success'
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef' && (always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -339,7 +343,7 @@ jobs:
   media:
     name: Browser media integration
     needs: frontend
-    if: always() && needs.frontend.outputs.build == 'success'
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef' && (always() && needs.frontend.outputs.build == 'success')
     runs-on: ubuntu-24.04
     env:
       LIBERTE_SFU_TEST_URL: ws://127.0.0.1:7880
@@ -389,6 +393,7 @@ jobs:
           docker rm --force liberte-ci-livekit || true
 
   rust:
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef'
     name: Rust format, check, tests and Clippy
     needs: lockfile
     runs-on: ubuntu-24.04
@@ -450,6 +455,7 @@ jobs:
           done
 
   docker:
+    if: github.ref != 'refs/heads/codex/liberte-cef' && github.head_ref != 'codex/liberte-cef'
     name: Docker build, export, load and API smoke
     needs: lockfile
     runs-on: ubuntu-24.04

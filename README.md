@@ -1,5 +1,7 @@
 # Liberté
 
+Cette branche contient le [prototype isolé Tauri 3 / Chromium pour Linux](wiki/CEF-Prototype.md). Ses prérequis, limites et critères de validation sont décrits dans ce document. La migration reste à qualifier avant publication.
+
 Application de communication décentralisée : client de bureau Tauri, interface React et réseau Rust/libp2p.
 
 La branche 2.4.0 est une version de stabilisation avec un protocole incompatible avec 2.3. Lire [la migration](wiki/Migration-2.4.md) avant de mettre à jour plusieurs appareils. Les résultats de CI et les essais sur deux appareils doivent être consultés avant toute utilisation sensible. Ce dépôt ne constitue pas une certification de sécurité.
@@ -12,7 +14,7 @@ La branche 2.4.0 est une version de stabilisation avec un protocole incompatible
 | Messagerie | Enveloppe chiffrée XChaCha20-Poly1305, auteur signé, contrôle du canal, de la date et des rejeux. La clé de canal reste partagée et durable. |
 | Découverte | Réseau local et adresses de pairs dans les invitations. Les réseaux distants peuvent nécessiter un relais et une configuration réseau. |
 | Invitations | Codes signés contenant un secret d'accès, limités dans le temps. Ils ne sont pas chiffrés pour leur destinataire et doivent être transmis confidentiellement. |
-| Audio et vidéo | WebRTC entre pairs ou SFU LiveKit auto-hébergé optionnel avec chiffrement côté client. Permissions micro/caméra et connectivité ICE nécessaires. Le SFU chiffré est refusé dans le client Linux tant que son moteur ne garantit pas les transformations E2EE. Voir les limites et essais de validation dans [LiveKit](wiki/LiveKit.md). |
+| Audio et vidéo | WebRTC entre pairs ou SFU LiveKit auto-hébergé optionnel avec chiffrement côté client. Permissions micro/caméra et connectivité ICE nécessaires. Le prototype CEF réouvre le parcours SFU Linux sous réserve de validation native du chiffrement ; les contrôles E2EE restent obligatoires. Voir les limites et essais de validation dans [LiveKit](wiki/LiveKit.md). |
 | Fichiers et sauvegardes | Stockage local et API de relais. Les opérations serveur sont authentifiées ; une sauvegarde doit être testée par une restauration avant d'être considérée comme fiable. |
 | Serveur | API HTTP, relais P2P et stockage. Utiliser un proxy HTTPS pour l'accès distant. |
 | Mise à jour | Installateurs manuels. Les mises à jour automatiques exigent une paire de clés de signature configurée et les artefacts signés vérifiés par la release. |
@@ -39,7 +41,7 @@ Le client macOS exige **macOS 13.3 minimum**, conformément à la configuration 
 
 L'interface utilise Tailwind CSS 4, dont les [prérequis de navigateur](https://tailwindcss.com/docs/compatibility) comprennent Safari 16.4 et Chromium 111. Sur Windows, utiliser WebView2 à jour. Sur Linux, utiliser WebKitGTK récent ; son numéro d'API `4.1` ne désigne pas la version du moteur WebKit.
 
-Sous Linux, les appels P2P exigent aussi un moteur compilé avec WebRTC. La série [WebKitGTK 2.54 désactive ce support](https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html) pendant sa transition vers LibWebRTC ; le numéro de version seul ne garantit donc pas la disponibilité des appels. Le parcours natif Ubuntu 22.04 avec WebKitGTK 2.50.4 échoue actuellement avant capture, car `RTCPeerConnection` est absent, malgré un contexte sécurisé et `getUserMedia` disponible. Les appels Linux ne sont pas validés ; les résultats natifs identifient le moteur effectivement testé et bloquent la livraison tant que ce parcours échoue.
+Dans la base Tauri 2, les appels P2P Linux exigent aussi un moteur compilé avec WebRTC. La série [WebKitGTK 2.54 désactive ce support](https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html) pendant sa transition vers LibWebRTC ; le numéro de version seul ne garantit donc pas la disponibilité des appels. Le parcours natif de cette base, sous Ubuntu 22.04 avec WebKitGTK 2.50.4, échoue avant capture, car `RTCPeerConnection` est absent, malgré un contexte sécurisé et `getUserMedia` disponible. La branche prototype remplace ce moteur par CEF ; les appels restent à valider dans le nouveau binaire et bloquent sa livraison tant que le parcours échoue.
 
 Une compilation du paquet ne valide pas le rendu, les permissions micro/caméra ou l'E2EE dans la WebView native. Ces essais restent nécessaires sur chaque plateforme.
 

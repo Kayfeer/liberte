@@ -34,11 +34,13 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "theme": "Dark"
+        "theme": "Dark",
+        "label": "main",
+        "create": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ipc: asset: http://ipc.localhost https: wss: ws://localhost:* ws://127.0.0.1:*"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ipc: asset: http://ipc.localhost https: wss: ws://localhost:* ws://127.0.0.1:*; frame-src 'none'; object-src 'none'"
     },
     "trayIcon": {
       "iconPath": "icons/icon.png",
@@ -64,18 +66,11 @@
       }
     },
     "linux": {
-      "appimage": {
-        "bundleMediaFramework": true
-      },
       "deb": {
         "depends": [
-          "libwebkit2gtk-4.1-0",
-          "libgtk-3-0",
-          "gstreamer1.0-plugins-base",
-          "gstreamer1.0-plugins-good",
-          "gstreamer1.0-plugins-bad",
-          "gstreamer1.0-libav",
-          "gstreamer1.0-nice"
+          "libgtk-4-1 (>= 4.14)",
+          "libasound2t64",
+          "libnss3"
         ]
       }
     },

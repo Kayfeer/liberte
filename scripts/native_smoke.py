@@ -1,4 +1,4 @@
-"""Exercise the real Linux Tauri/WebKit client through external W3C WebDriver.
+"""Exercise the real Linux Tauri client through WebDriver or a CEF CDP adapter.
 
 No frontend/IPC mocks, application hooks, or production permission changes.
 The generated identity lives only in a temporary XDG profile, never in artifacts.
@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import re
+import secrets
 from pathlib import Path
 import shutil
 import signal
@@ -51,8 +52,25 @@ def decode_response(status, body):
 
 def require_bundled_origin(url):
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "tauri" or parsed.netloc != "localhost":
+    valid = ((parsed.scheme == "tauri" and parsed.netloc == "localhost")
+             or (parsed.scheme in {"http", "https"} and parsed.netloc == "tauri.localhost"))
+    if not valid:
         raise RuntimeError(f"Expected the bundled Linux Tauri frontend, received {url!r}")
+
+
+def resolve_driver(driver):
+    if driver in {"cef", "cdp"}:
+        if not shutil.which("node"):
+            raise RuntimeError("The CEF CDP adapter requires Node.js and frontend npm ci")
+        return "cef"
+    resolved = shutil.which(driver)
+    if not resolved:
+        raise RuntimeError("Native WebDriver executable was not found")
+    return resolved
+
+
+def native_runtime(driver):
+    return "Tauri Linux/CEF via CDP" if driver == "cef" else "Tauri Linux/WebKitGTK"
 
 
 def until(action, description, timeout=30):
@@ -123,6 +141,8 @@ class NativeSession:
         self.artifacts = artifacts
         self.label = label
         self.process = None
+        self.application_process = None
+        self.bridge_token = secrets.token_urlsafe(32) if driver == "cef" else None
         self.log = None
         self.session = None
         self.port, self.native_port = free_ports()
@@ -132,7 +152,8 @@ class NativeSession:
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}", method=method,
             data=json.dumps(data).encode() if data is not None else None,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **(
+                {"Authorization": f"Bearer {self.bridge_token}"} if self.bridge_token else {})},
         )
         try:
             with self.opener.open(request, timeout=timeout) as response:
@@ -163,7 +184,18 @@ class NativeSession:
         try:
             native = Path(self.driver).name == "WebKitWebDriver"
             environment = self.env.copy()
-            if native:
+            if self.driver == "cef":
+                environment["LIBERTE_QA_CDP_PORT"] = str(self.native_port)
+                self.application_process = subprocess.Popen(
+                    [str(self.application)], env=environment, cwd=self.application.parent,
+                    stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
+                )
+                # The bridge owns no browser: it attaches only to this native process.
+                environment["LIBERTE_QA_BRIDGE_TOKEN"] = self.bridge_token
+                command = [shutil.which("node"), str(Path(__file__).with_name("cdp_driver.mjs")),
+                           str(self.port), str(self.native_port)]
+                options = {}
+            elif native:
                 # Exact Linux mapping used by tauri-driver 2.1.0, without its HTTP proxy.
                 environment.update(TAURI_AUTOMATION="true", TAURI_WEBVIEW_AUTOMATION="true")
                 command = [self.driver, f"--port={self.port}", "--host=127.0.0.1"]
@@ -188,9 +220,25 @@ class NativeSession:
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Native WebDriver did not become ready")
                 time.sleep(0.2)
+            if self.driver == "cef":
+                deadline = time.monotonic() + 45
+                while True:
+                    if self.application_process.poll() is not None:
+                        raise RuntimeError(f"Native CEF application exited with status {self.application_process.returncode}")
+                    try:
+                        with self.opener.open(f"http://127.0.0.1:{self.native_port}/json/version", timeout=2) as response:
+                            version = json.load(response)
+                        endpoint = urllib.parse.urlsplit(version.get("webSocketDebuggerUrl", ""))
+                        if endpoint.scheme != "ws" or endpoint.hostname not in {"localhost", "127.0.0.1"} or endpoint.port != self.native_port:
+                            raise RuntimeError("CEF advertised an unexpected CDP endpoint")
+                        break
+                    except (OSError, urllib.error.URLError):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Native CEF did not expose its QA CDP endpoint")
+                        time.sleep(0.2)
             created = self.request("POST", "/session", {"capabilities": {"alwaysMatch": {
-                "browserName": "wry", **options,
-            }}}, timeout=45)
+                "browserName": "cef" if self.driver == "cef" else "wry", **options,
+            }}}, timeout=50)
             if not isinstance(created, dict) or not created.get("sessionId"):
                 raise RuntimeError("WebDriver did not return a native session identifier")
             self.session = created["sessionId"]
@@ -248,6 +296,16 @@ class NativeSession:
                 print(f"Native IPC read transport interrupted; retry {attempt + 1}/2 ({name})", flush=True)
                 time.sleep(0.15 * (attempt + 1))
 
+    def set_media_permissions(self, state):
+        if self.driver != "cef":
+            raise RuntimeError("Explicit CDP media permissions require CEF")
+        return self.command("POST", "/liberte/permissions", {"state": state})
+
+    def capture_state(self):
+        if self.driver != "cef":
+            return self.invoke("qa_media_capture_state")
+        return self.command("POST", "/liberte/capture-state", {})
+
     def assert_no_alert(self):
         elements = self.command("POST", "/elements", {"using": "css selector", "value": '[role="alert"]'})
         if not isinstance(elements, list):
@@ -277,22 +335,25 @@ class NativeSession:
             except Exception as error:
                 print(f"WebDriver session cleanup: {error}", file=sys.stderr)
             self.session = None
-        if self.process:
-            # Only this harness's own process group, started with a new session.
+        for process in (self.process, self.application_process):
+            if not process:
+                continue
+            # Only this harness's own process groups, started with new sessions.
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             try:
-                self.process.wait(timeout=5)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
             try:
-                os.killpg(self.process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            self.process.wait(timeout=5)
-            self.process = None
+            process.wait(timeout=5)
+        self.process = None
+        self.application_process = None
         if self.log:
             path = Path(self.log.name)
             self.log.close()
@@ -320,16 +381,14 @@ def run_smoke(application, driver, artifacts):
     if not application.is_file() or not os.access(application, os.X_OK):
         raise ValueError("The native application must be an executable file")
     if sys.platform != "linux":
-        raise RuntimeError("This smoke test requires the Linux WebKitGTK runtime")
-    driver = shutil.which(driver)
-    if not driver:
-        raise RuntimeError("Pinned tauri-driver executable was not found")
+        raise RuntimeError("This smoke test requires a Linux native runtime")
+    driver = resolve_driver(driver)
     artifacts = Path(artifacts).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
     with application.open("rb") as source:
         binary_sha = hashlib.file_digest(source, "sha256").hexdigest()
     report = {"status": "running", "commit": os.environ.get("GITHUB_SHA"),
-              "application_sha256": binary_sha, "runtime": "Tauri Linux/WebKitGTK", "driver": Path(driver).name,
+              "application_sha256": binary_sha, "runtime": native_runtime(driver), "driver": Path(driver).name,
               "checks": [], "mocks": False}
     try:
         with tempfile.TemporaryDirectory(prefix="liberte-native-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
@@ -363,6 +422,11 @@ def run_smoke(application, driver, artifacts):
                 client.assert_no_alert()
                 client.screenshot("02-restarted.png")
                 report["checks"].append("Identity and channel restored after a fresh process launch")
+                if driver == "cef":
+                    from native_cpu import observe_cpu_tree, assert_idle_cpu
+                    report["idle_cpu"] = observe_cpu_tree(client.application_process.pid, duration=10)
+                    assert_idle_cpu(report["idle_cpu"])
+                    report["checks"].append("Native CEF process tree stayed below the idle CPU limit")
         report["status"] = "passed"
         print("Native Tauri smoke passed: bundled frontend, identity, channel and restart persistence; no IPC mocks")
     except BaseException as error:

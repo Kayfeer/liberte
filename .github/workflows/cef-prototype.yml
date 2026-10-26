@@ -1,0 +1,556 @@
+# Isolated migration prototype. No publication, no host sandbox relaxation.
+# Based on tauri-v3.0.0-alpha.5/.github/workflows/test-cef-e2e.yml;
+# its sysctl workaround is replaced by the packaged Chromium sandbox helper.
+name: CEF prototype
+
+on:
+  push:
+    branches: [codex/liberte-cef]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cef-prototype-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  prototype-scope:
+    if: github.ref == 'refs/heads/codex/liberte-cef' || github.head_ref == 'codex/liberte-cef'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo 'Isolated CEF prototype; stable release workflow is excluded.'
+
+  lockfile:
+    name: Resolve and preserve Cargo.lock
+    needs: prototype-scope
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate the lockfile and preserve any required update for review
+        run: python scripts/ci.py lockfile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+
+  tooling:
+    name: Release tooling regression tests
+    needs: prototype-scope
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p 'ci_test.py' -v
+      - run: python -m unittest discover -s scripts -p 'native_*test.py' -v
+      - run: python scripts/ci.py versions
+
+  rust-audit:
+    name: RustSec dependency audit
+    needs: lockfile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the verified official cargo-audit release
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2.tgz \
+            --output "$RUNNER_TEMP/cargo-audit.tgz"
+          printf '%s  %s\n' ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39 "$RUNNER_TEMP/cargo-audit.tgz" | sha256sum --check -
+          tar --extract --gzip --file "$RUNNER_TEMP/cargo-audit.tgz" --directory "$RUNNER_TEMP"
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2/cargo-audit" --version
+      - name: Audit the preserved lockfile against the current RustSec database
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ci-output" "$RUNNER_TEMP/audit-work/.cargo"
+          cd "$RUNNER_TEMP/audit-work"
+          printf '[advisories]\nignore = []\n' > .cargo/audit.toml
+          set +e
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2/cargo-audit" audit \
+            --file "$GITHUB_WORKSPACE/Cargo.lock" \
+            --url https://github.com/RustSec/advisory-db \
+            --db "$RUNNER_TEMP/rustsec-advisory-db" --json \
+            > "$GITHUB_WORKSPACE/.ci-output/cargo-audit.json"
+          result=$?
+          printf '%s\n' "$result" > "$GITHUB_WORKSPACE/.ci-output/cargo-audit-exit.txt"
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit
+          path: |
+            .ci-output/cargo-audit.json
+            .ci-output/cargo-audit-exit.txt
+          if-no-files-found: warn
+      - name: Print the complete RustSec report for review
+        if: always() && hashFiles('.ci-output/cargo-audit.json') != ''
+        run: cat .ci-output/cargo-audit.json
+      - name: Require a complete audit with no known vulnerability
+        if: always()
+        run: python scripts/ci.py rust-audit-gate --report .ci-output/cargo-audit.json --status .ci-output/cargo-audit-exit.txt
+
+  frontend:
+    name: Frontend tests, types and build
+    needs: prototype-scope
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.build.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Bootstrap a changed frontend manifest explicitly
+        run: python3 scripts/ci.py frontend-lock
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-lock
+          path: frontend/package-lock.json
+          if-no-files-found: error
+      - run: npm ci
+        working-directory: frontend
+      - name: Preserve dependency audit diagnostics
+        id: audit
+        continue-on-error: true
+        working-directory: frontend
+        run: |
+          mkdir -p ../.ci-output
+          npm audit --json > ../.ci-output/npm-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit
+          path: .ci-output/npm-audit.json
+          if-no-files-found: warn
+      - name: Print dependency audit for review
+        if: always() && hashFiles('.ci-output/npm-audit.json') != ''
+        run: cat .ci-output/npm-audit.json
+      - id: tests
+        continue-on-error: true
+        run: npm test
+        working-directory: frontend
+      - id: types
+        continue-on-error: true
+        run: npm run typecheck
+        working-directory: frontend
+      - id: build
+        continue-on-error: true
+        run: npm run build
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+      - name: Reject high and critical dependency vulnerabilities
+        id: audit_gate
+        if: always()
+        continue-on-error: true
+        run: python3 scripts/ci.py audit-gate .ci-output/npm-audit.json
+      - name: Require frontend tests, types and build to pass
+        if: always()
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          TYPES: ${{ steps.types.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          AUDIT: ${{ steps.audit_gate.outcome }}
+        run: |
+          for result in "$TESTS" "$TYPES" "$BUILD" "$AUDIT"; do
+            test "$result" = success || exit 1
+          done
+
+  media:
+    name: Browser media integration
+    needs: frontend
+    if: always() && needs.frontend.outputs.build == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      LIBERTE_SFU_TEST_URL: ws://127.0.0.1:7880
+      LIBERTE_SFU_API_KEY: liberte-ci
+      LIBERTE_SFU_API_SECRET: liberte-ci-only-not-a-production-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-lock
+          path: frontend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Start a local LiveKit instance for browser integration
+        run: |
+          docker run --detach --name liberte-ci-livekit --network host \
+            --env "LIVEKIT_KEYS=$LIBERTE_SFU_API_KEY: $LIBERTE_SFU_API_SECRET" \
+            livekit/livekit-server:v1.13.10 \
+            --dev --bind 127.0.0.1 --node-ip 127.0.0.1
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:7880/; then exit 0; fi
+            sleep 1
+          done
+          docker logs liberte-ci-livekit
+          exit 1
+      - run: npm run test:media
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-media-failure
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          if-no-files-found: warn
+      - name: Preserve LiveKit diagnostics and stop the test server
+        if: always()
+        run: |
+          docker logs liberte-ci-livekit || true
+          docker rm --force liberte-ci-livekit || true
+
+  docker:
+    name: Docker build, export, load and API smoke
+    needs: lockfile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+      - uses: docker/setup-buildx-action@v3
+      - name: Build a loadable image
+        run: docker buildx build --platform linux/amd64 --load --tag liberte-ci:${{ github.sha }} --file docker/Dockerfile .
+      - name: Export and reload the actual image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save --output liberte-ci.tar liberte-ci:${{ github.sha }}
+          test -s liberte-ci.tar
+          docker image rm liberte-ci:${{ github.sha }}
+          docker load --input liberte-ci.tar
+          docker image inspect liberte-ci:${{ github.sha }} > /dev/null
+      - name: Check health and authentication after reload
+        run: python3 scripts/ci.py smoke --image liberte-ci:${{ github.sha }}
+
+  linux:
+    name: CEF Linux build, server and real native QA
+    needs: [lockfile, frontend]
+    if: always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CEF_PATH: ${{ runner.temp }}/tauri-cef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-lock
+          path: frontend
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cef-prototype-linux
+          cache-on-failure: true
+      - name: Resolve the pinned CEF distribution version
+        id: cef_version
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          packages = tomllib.loads(pathlib.Path('Cargo.lock').read_text())['package']
+          versions = [item['version'] for item in packages if item['name'] == 'cef']
+          if versions != ['154.5.0']:
+              raise SystemExit(f'Unexpected CEF version: {versions}; review the runtime/cache pin')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={versions[0]}\n')
+          PY
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.CEF_PATH }}
+          key: cef-prototype-linux-${{ steps.cef_version.outputs.version }}
+      - name: Install GTK4, Chromium runtime and headless desktop dependencies
+        run: |
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y libgtk-3-dev libgtk-4-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libssl-dev libnss3-dev libxss1 libxkbcommon-dev libgbm-dev libdrm-dev libxtst-dev libxrandr-dev libx11-dev libxcomposite-dev libxcursor-dev libxi-dev libxdamage-dev libxext-dev pkg-config patchelf binutils perl xvfb xauth x11-utils fluxbox dbus-x11 pulseaudio pulseaudio-utils
+          pkg-config --atleast-version=4.14 gtk4
+          mkdir -p .ci-output/cef-runtime
+          pkg-config --modversion gtk4 > .ci-output/cef-runtime/gtk4-version.txt
+          if test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns > .ci-output/cef-runtime/apparmor-userns.txt
+          fi
+      - run: npm ci
+        working-directory: frontend
+      - name: Test the CDP transport and capture observation helpers
+        id: cdp_helpers
+        continue-on-error: true
+        run: node --test scripts/cdp_driver_test.mjs scripts/cdp_media_probe.test.mjs
+      - name: Check formatting and preserve the exact correction patch
+        id: format
+        continue-on-error: true
+        run: python scripts/ci.py format-patch
+      - uses: actions/upload-artifact@v4
+        if: steps.format.outcome == 'failure'
+        with:
+          name: cef-rustfmt-patch
+          path: .ci-output/rustfmt.patch
+          if-no-files-found: warn
+      - name: Compile the migrated workspace
+        id: check
+        continue-on-error: true
+        run: |
+          df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          cargo check --workspace --all-targets --locked
+      - name: Test the migrated workspace
+        id: tests
+        continue-on-error: true
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug:${LD_LIBRARY_PATH:-}"
+          cargo test --workspace --locked
+      - name: Check migrated Rust code with Clippy
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build the real server
+        id: server_build
+        continue-on-error: true
+        run: cargo build --release --locked --bin liberte-server
+      - name: Exercise server authentication and persistence API
+        id: server_smoke
+        if: steps.server_build.outcome == 'success'
+        continue-on-error: true
+        run: python scripts/ci.py smoke --binary target/release/liberte-server
+      - name: Disable release updating in this unsigned prototype
+        run: python scripts/ci.py prepare-updater
+      - name: Build the production CEF Debian package
+        id: production
+        continue-on-error: true
+        working-directory: crates/liberte-client
+        run: |
+          df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --bundles deb --config tauri-ci.conf.json -- --locked
+      - name: Install the packaged Chromium sandbox without changing host policy
+        id: sandbox
+        if: steps.production.outcome == 'success'
+        run: |
+          mapfile -t packages < <(find target/release/bundle/deb -maxdepth 1 -type f -name '*.deb')
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          package_name=$(dpkg-deb --field "$package" Package)
+          sudo dpkg --install "$package"
+          mapfile -t helpers < <(dpkg-query --listfiles "$package_name" | sed -n '\|/chrome-sandbox$|p')
+          test "${#helpers[@]}" -eq 1
+          helper="${helpers[0]}"
+          test -f "$helper"
+          test "$(stat -c '%u:%g:%a' "$helper")" = '0:0:4755'
+          printf 'CHROME_DEVEL_SANDBOX=%s\n' "$helper" >> "$GITHUB_ENV"
+          stat -c '%n owner=%u group=%g mode=%a' "$helper" > .ci-output/cef-runtime/sandbox.txt
+          sha256sum "$helper" >> .ci-output/cef-runtime/sandbox.txt
+          sha256sum "$package" > .ci-output/cef-runtime/production-package.sha256
+      - name: Build the separate CEF QA binary with CDP and synthetic capture
+        id: qa_build
+        continue-on-error: true
+        working-directory: crates/liberte-client
+        run: |
+          df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --debug --no-bundle --features qa-media-devices,tauri/custom-protocol --config tauri-ci.conf.json -- --locked
+      - name: Verify the QA runtime uses the packaged sandbox helper
+        id: qa_sandbox
+        if: steps.qa_build.outcome == 'success' && steps.sandbox.outcome == 'success'
+        run: |
+          test -n "$CHROME_DEVEL_SANDBOX"
+          test "$(stat -c '%u:%g:%a' "$CHROME_DEVEL_SANDBOX")" = '0:0:4755'
+          test -f target/debug/chrome-sandbox
+          cmp target/debug/chrome-sandbox "$CHROME_DEVEL_SANDBOX"
+          sha256sum target/debug/liberte-client > .ci-output/cef-runtime/qa-client.sha256
+          sha256sum target/debug/libcef.so > .ci-output/cef-runtime/qa-runtime.sha256
+      - name: Configure an isolated audio output for the native media test
+        id: pulse
+        if: steps.qa_build.outcome == 'success' && steps.qa_sandbox.outcome == 'success'
+        run: |
+          if ! pulseaudio --check; then
+            pulseaudio --daemonize=yes --exit-idle-time=-1
+            touch .ci-output/cef-runtime/pulse-started
+          fi
+          pactl load-module module-null-sink sink_name=liberte_ci > .ci-output/cef-runtime/pulse-module.txt
+          pactl set-default-sink liberte_ci
+          socket=$(LANG=C pactl info | sed -n 's/^Server String: //p')
+          case "$socket" in
+            unix:*) ;;
+            /*) socket="unix:$socket" ;;
+            *) echo 'PulseAudio did not expose a local Unix socket'; exit 1 ;;
+          esac
+          cookie="${XDG_CONFIG_HOME:-$HOME/.config}/pulse/cookie"
+          test -f "$cookie"
+          printf 'PULSE_SERVER=%s\nPULSE_COOKIE=%s\n' "$socket" "$cookie" >> "$GITHUB_ENV"
+      - name: Exercise native identity, channel and persistence through CEF
+        id: native_smoke
+        if: steps.qa_build.outcome == 'success' && steps.qa_sandbox.outcome == 'success'
+        continue-on-error: true
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug:${LD_LIBRARY_PATH:-}"
+          dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" bash -euc '
+            fluxbox > .ci-output/cef-runtime/fluxbox-smoke.log 2>&1 &
+            wm_pid=$!
+            trap "kill $wm_pid 2>/dev/null || true" EXIT
+            for attempt in $(seq 1 30); do
+              if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; then break; fi
+              sleep 0.1
+            done
+            xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
+            python scripts/native_smoke.py --driver cef --application target/debug/liberte-client
+          '
+      - name: Exercise two real CEF clients, file transfer and server backup
+        id: native_integration
+        if: steps.qa_build.outcome == 'success' && steps.qa_sandbox.outcome == 'success' && steps.server_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug:${LD_LIBRARY_PATH:-}"
+          dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" bash -euc '
+            fluxbox > .ci-output/cef-runtime/fluxbox-integration.log 2>&1 &
+            wm_pid=$!
+            trap "kill $wm_pid 2>/dev/null || true" EXIT
+            for attempt in $(seq 1 30); do
+              if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; then break; fi
+              sleep 0.1
+            done
+            xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
+            python scripts/native_integration.py --driver cef --application target/debug/liberte-client --server target/release/liberte-server
+          '
+      - name: Measure bidirectional native CEF media with synthetic capture
+        id: native_media
+        if: steps.qa_build.outcome == 'success' && steps.qa_sandbox.outcome == 'success' && steps.pulse.outcome == 'success'
+        continue-on-error: true
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug:${LD_LIBRARY_PATH:-}"
+          dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" bash -euc '
+            fluxbox > .ci-output/cef-runtime/fluxbox-media.log 2>&1 &
+            wm_pid=$!
+            trap "kill $wm_pid 2>/dev/null || true" EXIT
+            for attempt in $(seq 1 30); do
+              if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; then break; fi
+              sleep 0.1
+            done
+            xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
+            python scripts/native_media.py --driver cef --application target/debug/liberte-client
+          '
+      - name: Stop the test audio output
+        if: always()
+        run: |
+          if test -f .ci-output/cef-runtime/pulse-module.txt; then
+            pactl unload-module "$(cat .ci-output/cef-runtime/pulse-module.txt)" || true
+          fi
+          if test -f .ci-output/cef-runtime/pulse-started; then pulseaudio --kill || true; fi
+      - name: Record final disk use
+        if: always()
+        run: df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+      - name: Preserve native reports, screenshots and runtime diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cef-native-diagnostics-${{ github.sha }}
+          path: |
+            .ci-output/native-smoke
+            .ci-output/native-integration
+            .ci-output/native-media
+            .ci-output/cef-runtime
+          if-no-files-found: warn
+      - name: Require every compilation, server and native verification
+        if: always()
+        env:
+          FORMAT: ${{ steps.format.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          CLIPPY: ${{ steps.clippy.outcome }}
+          CDP_HELPERS: ${{ steps.cdp_helpers.outcome }}
+          SERVER_BUILD: ${{ steps.server_build.outcome }}
+          SERVER_SMOKE: ${{ steps.server_smoke.outcome }}
+          PRODUCTION: ${{ steps.production.outcome }}
+          SANDBOX: ${{ steps.sandbox.outcome }}
+          QA_BUILD: ${{ steps.qa_build.outcome }}
+          QA_SANDBOX: ${{ steps.qa_sandbox.outcome }}
+          NATIVE_SMOKE: ${{ steps.native_smoke.outcome }}
+          NATIVE_INTEGRATION: ${{ steps.native_integration.outcome }}
+          NATIVE_MEDIA: ${{ steps.native_media.outcome }}
+        run: |
+          python - <<'PY'
+          import os
+          names = ('FORMAT', 'CHECK', 'TESTS', 'CLIPPY', 'CDP_HELPERS', 'SERVER_BUILD', 'SERVER_SMOKE', 'PRODUCTION', 'SANDBOX', 'QA_BUILD', 'QA_SANDBOX', 'NATIVE_SMOKE', 'NATIVE_INTEGRATION', 'NATIVE_MEDIA')
+          failures = {name: os.environ.get(name, 'missing') for name in names if os.environ.get(name) != 'success'}
+          if failures:
+              raise SystemExit(f'CEF prototype verification failed: {failures}')
+          PY
+      - name: Collect the unsigned prototype and exact build provenance
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess, tomllib
+          root = pathlib.Path.cwd()
+          destination = root / '.ci-output/cef-package'
+          destination.mkdir(parents=True, exist_ok=True)
+          packages = list((root / 'target/release/bundle/deb').glob('*.deb'))
+          if len(packages) != 1:
+              raise SystemExit('Expected exactly one production Debian package')
+          for source in [packages[0], root / 'target/release/liberte-server']:
+              shutil.copy2(source, destination / source.name)
+          def sha256(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          hashes = {path.name: sha256(path) for path in destination.iterdir() if path.is_file()}
+          (destination / 'SHA256SUMS').write_text(''.join(f'{digest}  {name}\n' for name, digest in sorted(hashes.items())))
+          lock = tomllib.loads((root / 'Cargo.lock').read_text())['package']
+          versions = {item['name']: item['version'] for item in lock if item['name'] in ('cef', 'cef-dll-sys', 'tauri', 'tauri-runtime-cef')}
+          provenance = {'commit': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'], 'runner': 'ubuntu-24.04', 'rust': subprocess.check_output(['rustc', '--version'], text=True).strip(), 'runtime_versions': versions, 'files': hashes, 'production_client_sha256': sha256(root / 'target/release/liberte-client'), 'qa_client_sha256': sha256(root / 'target/debug/liberte-client'), 'qa_feature': 'qa-media-devices', 'qa_in_artifact': False, 'status': 'experimental unsigned CEF migration prototype; no release publication', 'media_scope': 'synthetic capture and automated permission selection; no physical microphone/camera or manual permission-dialog validation'}
+          (destination / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          print(json.dumps(provenance, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cef-prototype-linux-${{ github.sha }}
+          path: .ci-output/cef-package
+          if-no-files-found: error

@@ -32,6 +32,27 @@ class NativeMediaObservationTests(unittest.TestCase):
                 native_media.capture_state(client)
             client.invoke.assert_called_once_with("qa_media_capture_state")
 
+    def test_cef_preflight_requires_real_debug_configuration_and_matching_port(self):
+        configuration = {"engine": "cef", "syntheticMedia": True, "debugBuild": True,
+                         "remoteDebuggingPort": 9223}
+        native_media.require_cef_qa_configuration(configuration, 9223)
+        for field, invalid in (("engine", "webkit"), ("syntheticMedia", False),
+                               ("debugBuild", False), ("remoteDebuggingPort", 9224)):
+            with self.assertRaises(AssertionError):
+                native_media.require_cef_qa_configuration({**configuration, field: invalid}, 9223)
+        with self.assertRaises(AssertionError):
+            native_media.require_cef_qa_configuration(None, 9223)
+
+    def test_cef_capture_requires_the_dedicated_real_track_observer(self):
+        client = mock.Mock()
+        client.driver = "cef"
+        client.capture_state.return_value = {"source": "cdp-media-stream-tracks", "microphone": "none"}
+        self.assertEqual(native_media.capture_state(client, {"microphone": "none"})["microphone"], "none")
+        client.invoke.assert_not_called()
+        client.capture_state.return_value = {"mockCaptureDevices": True, "automationControlled": True}
+        with self.assertRaisesRegex(AssertionError, "real MediaStreamTrack"):
+            native_media.capture_state(client)
+
     def test_missing_runtime_apis_report_the_exact_cause_before_call(self):
         supported = {"isSecureContext": True, "getUserMedia": "function",
                      "RTCPeerConnection": "function", "AudioContext": "function",

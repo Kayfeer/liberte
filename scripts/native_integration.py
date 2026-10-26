@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from native_smoke import ELEMENT_KEY, NativeSession, NoRedirects, free_ports, isolated_environment, require_bundled_origin, until
+from native_smoke import ELEMENT_KEY, NativeSession, NoRedirects, free_ports, isolated_environment, require_bundled_origin, resolve_driver, native_runtime, until
 
 CHANNEL = "native-integration"
 ALICE = "Native Alice"
@@ -265,17 +265,15 @@ class LocalServer:
 
 def run_integration(application, server_binary, driver, artifacts):
     if sys.platform != "linux":
-        raise RuntimeError("Native integration requires Linux WebKitGTK")
+        raise RuntimeError("Native integration requires Linux")
     application, server_binary = Path(application).resolve(strict=True), Path(server_binary).resolve(strict=True)
     for binary in (application, server_binary):
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise ValueError("Both native client and server must be executable files")
-    driver = shutil.which(driver)
-    if not driver:
-        raise RuntimeError("Pinned tauri-driver executable was not found")
+    driver = resolve_driver(driver)
     artifacts = Path(artifacts).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    report = {"status": "running", "driver": Path(driver).name, "commit": os.environ.get("GITHUB_SHA"), "mocks": False,
+    report = {"status": "running", "driver": Path(driver).name, "runtime": native_runtime(driver), "commit": os.environ.get("GITHUB_SHA"), "mocks": False,
               "checks": [], "ui": ["identity", "channel", "invite", "join", "messages", "file acceptance", "server settings", "backup sync/restore"],
               "ipc": ["read-only status", "reaction", "file send/save paths", "portable profile export/import"]}
     for name, path in (("application", application), ("server", server_binary)):
