@@ -41,6 +41,42 @@ class NativeIntegrationHarnessTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 native_integration.verify_file(source, destination)
 
+    def test_remote_backup_requires_ui_success_and_surfaces_errors(self):
+        self.assertFalse(native_integration.remote_backup_result(
+            {"present": True, "busy": True, "statuses": [], "errors": []}, "restored"))
+        self.assertFalse(native_integration.remote_backup_result(
+            {"present": True, "busy": False, "statuses": [], "errors": []}, "restored"))
+        self.assertTrue(native_integration.remote_backup_result(
+            {"present": True, "statuses": ["4 messages restored"], "errors": []}, "restored"))
+        for state in (None, {"present": False},
+                      {"present": True, "statuses": ["4 messages restored"], "errors": ["decrypt failed"]}):
+            with self.assertRaises(AssertionError):
+                native_integration.remote_backup_result(state, "restored")
+
+    def test_remote_backup_uses_one_native_click_and_waits_for_real_ui_ack(self):
+        client = mock.Mock(label="synthetic")
+        client.wait_element.return_value = "native-button"
+        observations = iter([
+            {"present": True, "busy": True, "statuses": [], "errors": []},
+            {"present": True, "busy": False, "statuses": ["4 messages restored"], "errors": []},
+        ])
+        def command(method, path, data):
+            if path == "/element/native-button/click":
+                return None
+            script = data["script"]
+            if "getBoundingClientRect" in script:
+                return {"x": 200, "y": 300, "ready": True}
+            if "querySelector(" in script:
+                return next(observations)
+            return None
+        client.command.side_effect = command
+        with mock.patch.object(native_integration.time, "sleep"):
+            native_integration.remote_backup_ui(client, "Restore", "messages restored")
+        clicks = [call for call in client.command.call_args_list if call.args[1].endswith("/click")]
+        self.assertEqual(len(clicks), 1)
+        self.assertEqual(clicks[0].args, ("POST", "/element/native-button/click", {}))
+        client.invoke.assert_not_called()
+
     def test_two_profiles_use_distinct_xdg_paths_without_changing_home(self):
         with tempfile.TemporaryDirectory() as directory:
             alice = isolated_environment(Path(directory) / "alice")

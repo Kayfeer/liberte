@@ -39,7 +39,7 @@ Le client macOS exige **macOS 13.3 minimum**, conformément à la configuration 
 
 L'interface utilise Tailwind CSS 4, dont les [prérequis de navigateur](https://tailwindcss.com/docs/compatibility) comprennent Safari 16.4 et Chromium 111. Sur Windows, utiliser WebView2 à jour. Sur Linux, utiliser WebKitGTK récent ; son numéro d'API `4.1` ne désigne pas la version du moteur WebKit.
 
-Sous Linux, les appels P2P exigent aussi un moteur compilé avec WebRTC. La série [WebKitGTK 2.54 désactive ce support](https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html) pendant sa transition vers LibWebRTC ; le numéro de version seul ne garantit donc pas la disponibilité des appels. Les résultats natifs identifient le moteur effectivement testé.
+Sous Linux, les appels P2P exigent aussi un moteur compilé avec WebRTC. La série [WebKitGTK 2.54 désactive ce support](https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html) pendant sa transition vers LibWebRTC ; le numéro de version seul ne garantit donc pas la disponibilité des appels. Le parcours natif Ubuntu 22.04 avec WebKitGTK 2.50.4 échoue actuellement avant capture, avec une API WebRTC indisponible. Les appels Linux ne sont pas validés ; les résultats natifs identifient le moteur effectivement testé et bloquent la livraison tant que ce parcours échoue.
 
 Une compilation du paquet ne valide pas le rendu, les permissions micro/caméra ou l'E2EE dans la WebView native. Ces essais restent nécessaires sur chaque plateforme.
 

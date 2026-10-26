@@ -32,6 +32,29 @@ class NativeMediaObservationTests(unittest.TestCase):
                 native_media.capture_state(client)
             client.invoke.assert_called_once_with("qa_media_capture_state")
 
+    def test_missing_runtime_apis_report_the_exact_cause_before_call(self):
+        supported = {"isSecureContext": True, "getUserMedia": "function",
+                     "RTCPeerConnection": "function", "AudioContext": "function",
+                     "origin": "tauri://localhost", "protocol": "tauri:"}
+        native_media.require_capabilities(supported)
+        for name in ("getUserMedia", "RTCPeerConnection", "AudioContext"):
+            missing = {**supported, name: "undefined"}
+            with self.assertRaisesRegex(RuntimeError, name + " .*undefined"):
+                native_media.require_capabilities(missing)
+        with self.assertRaisesRegex(RuntimeError, "secure context"):
+            native_media.require_capabilities({**supported, "isSecureContext": False})
+        with self.assertRaisesRegex(RuntimeError, "invalid result"):
+            native_media.require_capabilities(None)
+
+    def test_start_call_reports_application_error_without_waiting_for_panel(self):
+        client = mock.Mock(spec=native_media.NativeSession)
+        client.assert_no_alert.side_effect = AssertionError("WebRTC missing in this browser")
+        with self.assertRaisesRegex(AssertionError, "WebRTC missing"):
+            native_media.start_call(client)
+        client.find.assert_not_called()
+        client.invoke.assert_not_called()
+        client.click.assert_called_once()
+
     def test_empty_or_live_tracks_cannot_count_as_cleanup(self):
         self.assertFalse(native_media.tracks_ended([]))
         self.assertFalse(native_media.tracks_ended([{"readyState": "ended"}, {"readyState": "live"}]))

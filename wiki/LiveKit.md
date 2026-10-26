@@ -4,7 +4,7 @@ Le mode LiveKit complète les appels WebRTC entre pairs. Il nécessite un serveu
 
 ## Compatibilité native
 
-Le client natif Linux refuse le mode SFU avant toute demande de jeton, connexion LiveKit ou capture. Dans WebKitGTK 2.50.4, `RTCRtpScriptTransform` est exposé, mais les transformations de trames du backend GStreamer ne sont pas implémentées. Le contrôle `isE2EESupported()` du SDK, fondé sur la présence de l'API, ne suffit donc pas à garantir le chiffrement. Ce constat ne démontre pas qu'un flux a été transmis en clair ; il impose de refuser ce parcours non vérifié. Utiliser **P2P direct** sous Linux.
+Le client natif Linux refuse le mode SFU avant toute demande de jeton, connexion LiveKit ou capture. Dans les sources WebKitGTK 2.50.4, l'API `RTCRtpScriptTransform` peut être activée, mais les transformations de trames du backend GStreamer ne sont pas implémentées. Sa disponibilité effective dépend aussi des options de compilation du moteur. Le contrôle `isE2EESupported()` du SDK, fondé sur la présence de l'API, ne suffit donc pas à garantir le chiffrement. Ce constat ne démontre pas qu'un flux a été transmis en clair ; il impose de refuser ce parcours non vérifié. Le mode **P2P direct** exige lui aussi un moteur exposant réellement WebRTC. Dans le parcours natif Ubuntu 22.04 testé avec WebKitGTK 2.50.4, le démarrage d'appel échoue avant capture ; les appels Linux ne sont donc pas validés. La présence des plugins GStreamer ne suffit pas.
 
 Ce refus reste actif pour les versions suivantes du moteur jusqu'à une validation native démontrant le chiffrement et le refus d'une mauvaise clé. Les appels SFU restent proposés sur Windows et macOS, sous réserve du support E2EE du moteur installé. Les tests Chromium ne certifient pas ces WebViews.
 

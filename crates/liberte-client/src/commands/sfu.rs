@@ -31,12 +31,12 @@ fn room_material(channel: Uuid, key: &[u8; 32]) -> (String, String) {
 }
 
 fn ensure_platform_support() -> Result<(), String> {
-    // WebKitGTK 2.50.4 exposes RTCRtpScriptTransform but its GStreamer frame
+    // WebKitGTK 2.50.4 can expose RTCRtpScriptTransform, but its GStreamer frame
     // transform backend is not implemented. API presence cannot prove E2EE.
     // Keep Linux closed until a native encrypted-media test verifies its engine.
     // Source: WebKit/webkitgtk-2.50.4 GStreamerRtpTransformBackend.cpp.
     if cfg!(target_os = "linux") {
-        return Err("Les appels SFU chiffrés sont indisponibles sous Linux : le moteur WebKitGTK ne garantit pas leur chiffrement. Choisissez P2P direct pour appeler.".into());
+        return Err("Les appels SFU chiffrés sont indisponibles sous Linux : le moteur WebKitGTK ne garantit pas leur chiffrement. Le mode P2P direct nécessite un moteur compatible WebRTC.".into());
     }
     Ok(())
 }

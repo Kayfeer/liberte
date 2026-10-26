@@ -214,8 +214,14 @@ export class MediaSession implements CallSession {
 
   async start(): Promise<void> {
     if (this.started || this.closed) throw new Error("Session déjà démarrée ou terminée.");
-    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
-      throw new Error("Les appels WebRTC ne sont pas disponibles dans ce navigateur.");
+    if (globalThis.isSecureContext === false) {
+      throw new Error("Les appels nécessitent un contexte sécurisé. Ouvrez l'application installée ou une page HTTPS.");
+    }
+    if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
+      throw new Error("Le moteur installé ne fournit pas l'accès au microphone et à la caméra (getUserMedia). Les appels sont indisponibles sur cette installation.");
+    }
+    if (typeof RTCPeerConnection !== "function") {
+      throw new Error("Le moteur installé ne fournit pas WebRTC (RTCPeerConnection). Les appels sont indisponibles sur cette installation.");
     }
     this.started = true;
     const capture = await captureAudio(this.settings, this.captureAbort.signal);

@@ -28,7 +28,7 @@ export default function RemoteBackupControls() {
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(null); }
   };
-  return <div className="border-t border-liberte-border pt-4 space-y-2">
+  return <section aria-label="Sauvegarde distante" aria-busy={busy !== null} className="border-t border-liberte-border pt-4 space-y-2">
     <h4 className="text-sm font-medium">Sauvegarde sur mon serveur</h4>
     <p className="text-xs text-liberte-muted">Votre historique est chiffré avec votre identité avant l'envoi au serveur configuré. La restauration nécessite la même identité : conservez aussi votre export de profil portable. Les fichiers joints ne sont pas inclus.</p>
     <p className="text-xs text-liberte-muted">La synchronisation remplace la sauvegarde distante précédente. La restauration fusionne les données sans écraser votre historique local. Le serveur peut demander un accès premium.</p>
@@ -38,5 +38,5 @@ export default function RemoteBackupControls() {
     </div>
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
     {notice && <p role="status" className="text-sm text-liberte-success">{notice}</p>}
-  </div>;
+  </section>;
 }

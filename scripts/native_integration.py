@@ -18,9 +18,10 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-from native_smoke import NativeSession, NoRedirects, free_ports, isolated_environment, require_bundled_origin, until
+from native_smoke import ELEMENT_KEY, NativeSession, NoRedirects, free_ports, isolated_environment, require_bundled_origin, until
 
 CHANNEL = "native-integration"
 ALICE = "Native Alice"
@@ -141,6 +142,77 @@ def configure_server_ui(client, base):
     if client.invoke("get_settings").get("serverUrl") != base:
         raise AssertionError("The server origin selected through the UI was not persisted")
     leave_settings_ui(client)
+
+
+def remote_backup_result(state, success_text):
+    """Success requires the real UI acknowledgement; errors fail immediately."""
+    if not isinstance(state, dict) or not state.get("present"):
+        raise AssertionError("The remote backup controls disappeared during the operation")
+    errors = [str(error).strip() for error in state.get("errors", []) if str(error).strip()]
+    if errors:
+        raise AssertionError("Remote backup UI reported: " + "; ".join(errors))
+    return any(success_text in str(status) for status in state.get("statuses", []))
+
+
+def remote_backup_ui(client, label, success_text):
+    # Observe/scroll the shipped DOM, then perform exactly one native click.
+    # Device enumeration can change the settings layout after the section mounts.
+    selector = xpath_text("button", label)
+    element = client.wait_element(selector, "xpath")
+    client.command("POST", "/execute/sync", {
+        "script": "arguments[0].scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}); return null;",
+        "args": [{ELEMENT_KEY: urllib.parse.unquote(element)}],
+    })
+    previous = None
+    stable = 0
+    def positioned():
+        nonlocal previous, stable
+        position = client.command("POST", "/execute/sync", {
+            "script": """
+                const button = arguments[0], box = button.getBoundingClientRect();
+                const x = box.left + box.width / 2, y = box.top + box.height / 2;
+                const hit = document.elementFromPoint(x, y);
+                const ready = !button.disabled && x > 0 && y > 0 && x < innerWidth && y < innerHeight
+                    && !!hit && (hit === button || button.contains(hit));
+                if (!ready) button.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+                return {x: Math.round(x), y: Math.round(y), ready};
+            """,
+            "args": [{ELEMENT_KEY: urllib.parse.unquote(element)}],
+        })
+        stable = stable + 1 if position.get("ready") and position == previous else 0
+        previous = position
+        return stable >= 2
+    until(positioned, "stable visible remote backup action", timeout=10)
+    client.command("POST", f"/element/{element}/click", {})
+
+    latest = {}
+    acknowledged = False
+    started = time.monotonic()
+    def completed():
+        nonlocal latest, acknowledged
+        latest = client.command("POST", "/execute/sync", {
+            "script": """
+                const root = document.querySelector('section[aria-label="Sauvegarde distante"]');
+                if (!root) return {present:false};
+                return {present:true, busy:root.getAttribute('aria-busy') === 'true',
+                    buttons:[...root.querySelectorAll('button')].map(button => button.textContent.trim()),
+                    statuses:[...root.querySelectorAll('[role="status"]')].map(node => node.textContent.trim()),
+                    errors:[...root.querySelectorAll('[role="alert"]')].map(node => node.textContent.trim())};
+            """,
+            "args": [],
+        })
+        if remote_backup_result(latest, success_text):
+            return True
+        acknowledged = acknowledged or latest.get("busy", False)
+        if not acknowledged and time.monotonic() - started > 5:
+            raise AssertionError(f"Native backup click was not acknowledged; UI state: {latest}")
+        return False
+    try:
+        # Match the production HTTP timeout (90s) plus bounded local import/refresh.
+        until(completed, "remote backup UI acknowledgement", timeout=110)
+    except BaseException:
+        print("CODEX_REMOTE_BACKUP_UI " + json.dumps({"client": client.label, "state": latest}), flush=True)
+        raise
 
 
 class LocalServer:
@@ -289,8 +361,7 @@ def run_integration(application, server_binary, driver, artifacts):
                     wait_message(bob, MESSAGE_REPLY)
                     record("Bob process restart preserved history/reaction and automatically reconnected for new messages")
                     settings_ui(bob)
-                    bob.click(xpath_text("button", "Synchroniser maintenant"), "xpath")
-                    bob.wait_element("//p[@role='status' and starts-with(.,'Sauvegarde chiffr\u00e9e synchronis\u00e9e')]", "xpath")
+                    remote_backup_ui(bob, "Synchroniser maintenant", "Sauvegarde chiffr\u00e9e synchronis\u00e9e")
                     bob.assert_no_alert()
                     stored = list(server.storage.glob("users/*/backup.enc"))
                     if len(stored) != 1 or stored[0].stat().st_size == 0:
@@ -310,8 +381,7 @@ def run_integration(application, server_binary, driver, artifacts):
                     if restored.invoke("search_messages", {"query": MESSAGE_A, "channelId": alice_id}):
                         raise AssertionError("Pre-message portable profile unexpectedly already contained remote history")
                     settings_ui(restored)
-                    restored.click(xpath_text("button", "Restaurer depuis le serveur"), "xpath")
-                    restored.wait_element("//p[@role='status' and contains(.,'messages restaur\u00e9s depuis le serveur')]", "xpath")
+                    remote_backup_ui(restored, "Restaurer depuis le serveur", "messages restaur\u00e9s depuis le serveur")
                     restored.assert_no_alert()
                     leave_settings_ui(restored)
                     for message in (MESSAGE_A, MESSAGE_B, MESSAGE_RESTART, MESSAGE_REPLY):

@@ -121,7 +121,7 @@ describe("SFU mandatory encryption", () => {
   });
 
   it("honors native engine rejection even when the browser exposes encryption APIs", async () => {
-    const reason = "Les appels SFU chiffrés sont indisponibles sous Linux : le moteur WebKitGTK ne garantit pas leur chiffrement. Choisissez P2P direct pour appeler.";
+    const reason = "Les appels SFU chiffrés sont indisponibles sous Linux : le moteur WebKitGTK ne garantit pas leur chiffrement. Le mode P2P direct nécessite un moteur compatible WebRTC.";
     mocks.supported.mockReturnValue(true);
     mocks.invoke.mockRejectedValueOnce(new Error(reason));
     const handlers = options();

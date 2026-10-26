@@ -17,6 +17,18 @@ from native_smoke import NativeSession, isolated_environment, until
 from native_integration import ALICE, BOB, CHANNEL, identity_ui, network_ready, select_channel, xpath_text
 
 VOICE = 'section[aria-label="Appel audio et vid\u00e9o"]'
+CAPABILITY_PROBE = """
+return {
+    isSecureContext: window.isSecureContext,
+    getUserMedia: typeof navigator.mediaDevices?.getUserMedia,
+    RTCPeerConnection: typeof window.RTCPeerConnection,
+    AudioContext: typeof window.AudioContext,
+    origin: window.location.origin,
+    protocol: window.location.protocol,
+    userAgent: navigator.userAgent,
+};
+"""
+
 INSTALL_PROBE = r"""
 const root = document.querySelector('section[aria-label="Appel audio et vidéo"]');
 const videos = root ? [...root.querySelectorAll('video')] : [];
@@ -98,6 +110,20 @@ def execute(client, script):
     return client.command("POST", "/execute/sync", {"script": script, "args": []})
 
 
+def require_capabilities(value):
+    if not isinstance(value, dict):
+        raise RuntimeError("Native WebRTC capability probe returned an invalid result")
+    missing = []
+    if value.get("isSecureContext") is not True:
+        missing.append("secure context (window.isSecureContext is not true)")
+    for name in ("getUserMedia", "RTCPeerConnection", "AudioContext"):
+        if value.get(name) != "function":
+            missing.append(f"{name} (typeof={value.get(name, 'missing')})")
+    if missing:
+        raise RuntimeError("Native WebRTC unavailable: " + "; ".join(missing)
+                           + f"; origin={value.get('origin')}, protocol={value.get('protocol')}")
+
+
 def snapshot(client):
     result = execute(client, "return window.__codexNativeMediaProbe.snapshot();")
     if not isinstance(result, dict):
@@ -141,7 +167,10 @@ def click_voice(client, label):
 
 def start_call(client):
     client.click('button[aria-label="Rejoindre l\'appel"]')
-    client.wait_element(VOICE)
+    def joined():
+        client.assert_no_alert()
+        return client.find(VOICE)
+    until(joined, "native call UI or an explicit application error")
     state = client.invoke("get_call_state")
     if state.get("inCall") is not True or state.get("mode") != "mesh":
         raise AssertionError("The native client did not enter the requested P2P call")
@@ -197,6 +226,9 @@ def run_media(application, driver, artifacts):
                  NativeSession(application, driver, isolated_environment(directory / "bob"), artifacts, "media-bob") as bob:
                 identity_ui(alice, ALICE)
                 identity_ui(bob, BOB)
+                report["runtime_capabilities"] = {"alice": execute(alice, CAPABILITY_PROBE),
+                                                  "bob": execute(bob, CAPABILITY_PROBE)}
+                print("CODEX_NATIVE_MEDIA_RUNTIME " + json.dumps(report["runtime_capabilities"]), flush=True)
                 report["capture_states"] = {"initial": {"alice": capture_state(alice, {"microphone": "none", "camera": "none"}),
                                                        "bob": capture_state(bob, {"microphone": "none", "camera": "none"})}}
                 try:
@@ -208,6 +240,8 @@ def run_media(application, driver, artifacts):
                     raise AssertionError("Native Linux SFU unexpectedly supplied an E2EE connection")
                 capture_state(alice, {"microphone": "none", "camera": "none"})
                 record("Native SFU refuses the unsupported Linux E2EE engine before channel lookup or capture")
+                for capabilities in report["runtime_capabilities"].values():
+                    require_capabilities(capabilities)
                 alice.click('button[title="Cr\u00e9er un canal"]')
                 alice.fill('input[placeholder="ex: general"]', CHANNEL)
                 alice.click(xpath_text("button", "Cr\u00e9er"), "xpath")

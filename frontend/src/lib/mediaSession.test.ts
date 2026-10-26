@@ -94,6 +94,7 @@ beforeEach(() => {
     captures.push(stream);
     return stream;
   });
+  vi.stubGlobal("isSecureContext", true);
   vi.stubGlobal("MediaStream", Stream);
   vi.stubGlobal("AudioContext", Audio);
   vi.stubGlobal("RTCPeerConnection", Connection);
@@ -106,6 +107,21 @@ afterEach(async () => {
 });
 
 describe("WebRTC call lifecycle", () => {
+  it.each([
+    ["an insecure context", () => { vi.stubGlobal("isSecureContext", false); }, "contexte sécurisé"],
+    ["missing capture support", () => { Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined }); }, "getUserMedia"],
+    ["missing peer connection support", () => { vi.stubGlobal("RTCPeerConnection", undefined); }, "RTCPeerConnection"],
+  ] as const)("identifies %s before capture or signaling", async (_name, configure, message) => {
+    configure();
+    const { session, callbacks } = fixture();
+    await expect(session.start()).rejects.toThrow(message);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(Audio.instances).toHaveLength(0);
+    expect(Connection.instances).toHaveLength(0);
+    expect(callbacks.sendSignal).not.toHaveBeenCalled();
+    expect(callbacks.onLocalStream).not.toHaveBeenCalled();
+  });
+
   it("starts audio only, mutes the source and sent track, and releases every resource", async () => {
     const { session, callbacks } = fixture();
     await session.start();
