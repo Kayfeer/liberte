@@ -27,7 +27,9 @@ test("two real WebRTC peers exchange audio/video, mute and release devices", asy
     await alice.evaluate((id) => { window.call.session.ensurePeer(id); }, bobId);
     await expect.poll(() => alice.evaluate((id) => window.call.state().peers[id]?.state, bobId)).toBe("connected");
     await expect.poll(() => bob.evaluate((id) => window.call.state().peers[id]?.state, aliceId)).toBe("connected");
-    await expect.poll(() => bob.evaluate(async () => (await window.call.stats()).some((item) => item.kind === "audio" && item.bytesReceived > 0))).toBe(true);
+    for (const page of [alice, bob]) {
+      await expect.poll(() => page.evaluate(async () => (await window.call.stats()).some((item) => item.kind === "audio" && item.totalSamplesReceived > 0))).toBe(true);
+    }
     await Promise.all([alice.evaluate(() => window.call.session.setVideoEnabled(true)), bob.evaluate(() => window.call.session.setVideoEnabled(true))]);
     await expect.poll(() => alice.evaluate(async () => (await window.call.stats()).some((item) => item.kind === "video" && item.framesDecoded > 0))).toBe(true);
     await expect.poll(() => bob.evaluate(async () => (await window.call.stats()).some((item) => item.kind === "video" && item.framesDecoded > 0))).toBe(true);

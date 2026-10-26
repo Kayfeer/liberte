@@ -51,11 +51,20 @@ def versions(root=ROOT, tag=None):
 
 def lockfile():
     path = ROOT / "Cargo.lock"
-    if not path.is_file():
-        print("::warning::Cargo.lock is missing. Generating a candidate for review; this is not a reproducible release.")
+    valid = False
+    if path.is_file():
+        result = subprocess.run(
+            ["cargo", "metadata", "--locked", "--format-version", "1"],
+            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            check=False)
+        valid = result.returncode == 0
+        if not valid:
+            print(result.stderr)
+    if not valid:
+        print("::warning::Cargo.lock is missing or incompatible with the manifests. Generating a candidate for review; release still requires committing the exact result.")
         run(["cargo", "generate-lockfile"], cwd=ROOT)
         export_file(path, "Cargo.lock")
-    run(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
+    run(["cargo", "metadata", "--locked", "--format-version", "1"],
         cwd=ROOT, stdout=subprocess.DEVNULL)
     if not path.is_file() or path.stat().st_size == 0:
         raise ValueError("Cargo.lock was not created")

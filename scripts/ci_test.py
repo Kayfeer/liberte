@@ -18,6 +18,35 @@ def fake_public_key():
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_changed_cargo_manifest_produces_a_reviewable_lock_candidate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "Cargo.lock"
+            path.write_text("old lock")
+            calls = []
+            def run_command(command, **kwargs):
+                calls.append(command)
+                if command == ["cargo", "generate-lockfile"]:
+                    path.write_text("new lock")
+            result = subprocess.CompletedProcess([], 101, stderr="lock requires update")
+            with mock.patch.object(ci, "ROOT", root), mock.patch.object(ci.subprocess, "run", return_value=result), mock.patch.object(ci, "run", side_effect=run_command), mock.patch.object(ci, "export_file") as export:
+                ci.lockfile()
+            self.assertEqual(path.read_text(), "new lock")
+            self.assertEqual(calls[0], ["cargo", "generate-lockfile"])
+            self.assertIn("--locked", calls[-1])
+            export.assert_called_once_with(path, "Cargo.lock")
+
+    def test_valid_cargo_lock_is_never_regenerated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "Cargo.lock").write_text("valid lock")
+            result = subprocess.CompletedProcess([], 0, stderr="")
+            with mock.patch.object(ci, "ROOT", root), mock.patch.object(ci.subprocess, "run", return_value=result), mock.patch.object(ci, "run") as run_command, mock.patch.object(ci, "export_file") as export:
+                ci.lockfile()
+            self.assertEqual(run_command.call_count, 1)
+            self.assertIn("--locked", run_command.call_args.args[0])
+            export.assert_not_called()
+
     def test_rustsec_gate_keeps_informational_warnings_separate(self):
         report = {"database": {"last-commit": "database-commit"}, "lockfile": {"dependency-count": 1},
                   "settings": {"ignore": [], "severity": None, "target_arch": [], "target_os": []},

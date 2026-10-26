@@ -21,6 +21,8 @@ mockIPC((command, args) => {
     case "list_channel_files": return [];
     case "get_settings": return { serverUrl: "", notificationsEnabled: false };
     case "check_premium": return { isPremium: false, validUntil: null };
+    // Reconcile stale native presence after a WebView reload.
+    case "end_call": return undefined;
     case "plugin:notification|is_permission_granted": return false;
     case "plugin:notification|request_permission": return "denied";
     case "plugin:updater|check": return null;

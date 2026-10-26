@@ -33,12 +33,12 @@ x25519-dalek = { version = "2", features = ["serde", "static_secrets"] }
 snow = "0.9"
 rand = "0.8"
 blake3 = "1"
-libp2p = { version = "0.54", features = [
+libp2p = { version = "0.57.1", features = [
     "tokio", "quic", "noise", "yamux",
     "gossipsub", "kad", "identify", "mdns",
     "relay", "dcutr", "macros", "serde",
 ] }
-hickory-resolver = { version = "0.24", features = ["dns-over-https-rustls", "tokio-runtime"] }
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["https-ring", "tokio", "webpki-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1"

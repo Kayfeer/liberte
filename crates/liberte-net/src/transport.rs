@@ -47,15 +47,25 @@ pub fn build_swarm_with_discovery(
                     .heartbeat_interval(Duration::from_secs(GOSSIPSUB_HEARTBEAT_SECS))
                     .validation_mode(ValidationMode::Strict)
                     .max_transmit_size(MAX_MESSAGE_SIZE)
+                    // Initial peer handshakes include every subscribed channel.
+                    .max_control_message_size(64 * 1024)
                     .message_id_fn(message_id_fn)
                     .build()
                     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                         format!("GossipSub config: {e}").into()
                     })?;
 
-                let gossipsub = gossipsub::Behaviour::new(
+                // Keep subscription memory bounded while supporting profiles with
+                // more than the new upstream default of 100 channels.
+                let subscription_filter = gossipsub::MaxCountSubscriptionFilter {
+                    filter: gossipsub::AllowAllSubscriptionFilter,
+                    max_subscribed_topics: 1024,
+                    max_subscriptions_per_request: 1024,
+                };
+                let gossipsub = gossipsub::Behaviour::new_with_subscription_filter(
                     MessageAuthenticity::Signed(key.clone()),
                     gossipsub_config,
+                    subscription_filter,
                 )
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                     format!("GossipSub init: {e}").into()

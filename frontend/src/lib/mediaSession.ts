@@ -143,8 +143,8 @@ export async function applyMediaPreferences(): Promise<void> {
 
 interface Peer {
   pc: RTCPeerConnection;
-  audio: RTCRtpSender;
-  video: RTCRtpSender;
+  audio: RTCRtpSender | null;
+  video: RTCRtpSender | null;
   data: RTCDataChannel;
   stream: MediaStream;
   polite: boolean;
@@ -175,11 +175,13 @@ export class MediaSession implements CallSession {
   private started = false;
   private audio: AudioCapture | null = null;
   private video: MediaStreamTrack | null = null;
+  private videoGeneration = 0;
   private muted = false;
   private settings = preferences();
   private peers = new Map<string, Peer>();
   private heartbeat?: ReturnType<typeof setInterval>;
   private mutations: Promise<void> = Promise.resolve();
+  private pendingTracks = new Map<"audio" | "video", MediaStreamTrack | null>();
 
   constructor(private options: SessionOptions) {}
 
@@ -224,6 +226,8 @@ export class MediaSession implements CallSession {
     this.muted = muted;
     this.audio?.raw.getAudioTracks().forEach((track) => { track.enabled = !muted; });
     this.audio?.stream.getAudioTracks().forEach((track) => { track.enabled = !muted; });
+    const pendingAudio = this.pendingTracks.get("audio");
+    if (pendingAudio) pendingAudio.enabled = !muted;
     this.broadcastState();
   }
 
@@ -233,36 +237,55 @@ export class MediaSession implements CallSession {
     return result;
   }
 
-  private async replaceTrack(kind: "audio" | "video", next: MediaStreamTrack | null, previous: MediaStreamTrack | null) {
-    const senders = [...this.peers.values()].map((peer) => peer[kind]);
-    const results = await Promise.allSettled(senders.map((sender) => sender.replaceTrack(next)));
-    if (results.some((result) => result.status === "rejected")) {
-      await Promise.allSettled(senders.map((sender) => sender.replaceTrack(previous)));
-      throw new Error("Le changement de périphérique a échoué. Réessayez.");
-    }
+  private outgoingTrack(kind: "audio" | "video"): MediaStreamTrack | null {
+    if (this.pendingTracks.has(kind)) return this.pendingTracks.get(kind) ?? null;
+    return kind === "audio" ? this.audio?.stream.getAudioTracks()[0] ?? null : this.video;
+  }
+
+  private async replaceTrack(kind: "audio" | "video", next: MediaStreamTrack | null, previous: MediaStreamTrack | null, commit: () => void): Promise<boolean> {
+    // New peers and incoming offers must see the replacement while existing
+    // senders are updating, otherwise they retain a track stopped at commit.
+    this.pendingTracks.set(kind, next);
+    const senders = () => [...this.peers.values()].map((peer) => peer[kind]).filter((sender): sender is RTCRtpSender => sender !== null);
+    try {
+      const results = await Promise.allSettled(senders().map((sender) => sender.replaceTrack(next)));
+      if (this.closed || this.pendingTracks.get(kind) !== next) return false;
+      if (results.some((result) => result.status === "rejected")) {
+        this.pendingTracks.set(kind, previous);
+        await Promise.allSettled(senders().map((sender) => sender.replaceTrack(previous)));
+        throw new Error("Le changement de périphérique a échoué. Réessayez.");
+      }
+      if (this.closed) return false;
+      commit();
+      return true;
+    } finally { this.pendingTracks.delete(kind); }
   }
 
   setVideoEnabled(enabled: boolean): Promise<void> {
+    const generation = ++this.videoGeneration;
+    if (!enabled) {
+      // Camera off must not wait behind a device permission request or sender.
+      const previous = this.video;
+      this.video = null;
+      previous?.stop();
+      this.pendingTracks.get("video")?.stop();
+      if (this.pendingTracks.has("video")) this.pendingTracks.set("video", null);
+      this.publishLocalStream();
+      this.broadcastState();
+      return Promise.allSettled([...this.peers.values()].map((peer) => peer.video?.replaceTrack(null))).then(() => {});
+    }
     return this.mutate(async () => {
-      if (enabled === !!this.video) return;
-      if (!enabled) {
-        // Releasing the camera never depends on a peer or network operation.
-        const previous = this.video;
-        this.video = null;
-        previous?.stop();
-        this.publishLocalStream();
-        this.broadcastState();
-        await Promise.allSettled([...this.peers.values()].map((peer) => peer.video.replaceTrack(null)));
-        return;
-      }
+      if (generation !== this.videoGeneration || this.video) return;
       const next = await captureVideo(this.settings);
-      if (this.closed) { next?.stop(); return; }
-      try { await this.replaceTrack("video", next, this.video); }
-      catch (error) { next?.stop(); throw error; }
-      if (this.closed) { next?.stop(); return; }
-      this.video?.stop();
-      this.video = next;
-      this.watchVideo();
+      if (this.closed || generation !== this.videoGeneration) { next.stop(); return; }
+      try {
+        const installed = await this.replaceTrack("video", next, this.video, () => {
+          this.video?.stop();
+          this.video = next;
+          this.watchVideo();
+        });
+        if (!installed) { next.stop(); return; }
+      } catch (error) { next.stop(); throw error; }
       this.publishLocalStream();
       this.broadcastState();
     });
@@ -285,22 +308,29 @@ export class MediaSession implements CallSession {
         if (this.closed) { disposeAudio(next); return; }
         next.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
         next.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
-        try { await this.replaceTrack("audio", next.stream.getAudioTracks()[0], this.audio?.stream.getAudioTracks()[0] ?? null); }
-        catch (error) { disposeAudio(next); throw error; }
-        if (this.closed) { disposeAudio(next); return; }
-        disposeAudio(this.audio);
-        this.audio = next;
+        try {
+          const installed = await this.replaceTrack("audio", next.stream.getAudioTracks()[0], this.audio?.stream.getAudioTracks()[0] ?? null, () => {
+            next.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
+            next.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
+            disposeAudio(this.audio);
+            this.audio = next;
+          });
+          if (!installed) { disposeAudio(next); return; }
+        } catch (error) { disposeAudio(next); throw error; }
       }
       if (this.audio) this.audio.gain.gain.value = Math.max(0, Math.min(2, settings.inputVolume / 100));
       if (this.video && settings.selectedVideoInput !== this.settings.selectedVideoInput) {
+        const generation = this.videoGeneration;
         const next = await captureVideo(settings);
-        if (this.closed) { next.stop(); return; }
-        try { await this.replaceTrack("video", next, this.video); }
-        catch (error) { next.stop(); throw error; }
-        if (this.closed) { next.stop(); return; }
-        this.video.stop();
-        this.video = next;
-        this.watchVideo();
+        if (this.closed || generation !== this.videoGeneration) { next.stop(); return; }
+        try {
+          const installed = await this.replaceTrack("video", next, this.video, () => {
+            this.video?.stop();
+            this.video = next;
+            this.watchVideo();
+          });
+          if (!installed) { next.stop(); return; }
+        } catch (error) { next.stop(); throw error; }
       }
       const iceChanged = JSON.stringify(settings.iceServers) !== JSON.stringify(this.settings.iceServers);
       this.settings = settings;
@@ -319,12 +349,16 @@ export class MediaSession implements CallSession {
     if (this.peers.size >= 7) { this.error("Les appels P2P sont limités à 8 participants."); return; }
     const pc = new RTCPeerConnection({ iceServers: this.settings.iceServers, bundlePolicy: "max-bundle" });
     const stream = new MediaStream();
-    const audioTrack = this.audio.stream.getAudioTracks()[0];
-    const audio = pc.addTransceiver(audioTrack, { direction: "sendrecv", streams: [this.audio.stream] }).sender;
-    const video = pc.addTransceiver(this.video ?? "video", { direction: "sendrecv" }).sender;
+    const polite = this.options.userId > userId;
+    const audioTrack = this.outgoingTrack("audio");
+    // Only the offerer creates m-lines. addTransceiver-created senders cannot
+    // be associated with a remote offer, so the answerer must use its negotiated
+    // transceivers created by setRemoteDescription below.
+    const audio = polite ? null : pc.addTransceiver(audioTrack ?? "audio", { direction: "sendrecv", streams: [this.audio.stream] }).sender;
+    const video = polite ? null : pc.addTransceiver(this.outgoingTrack("video") ?? "video", { direction: "sendrecv" }).sender;
     const data = pc.createDataChannel("liberte-media-state", { negotiated: true, id: 0 });
     const peer: Peer = {
-      pc, audio, video, data, stream, polite: this.options.userId > userId,
+      pc, audio, video, data, stream, polite,
       makingOffer: false, ignoreOffer: false, settingAnswer: false, candidates: [],
       inbox: Promise.resolve(), lastSeen: Date.now(),
     };
@@ -335,7 +369,7 @@ export class MediaSession implements CallSession {
     };
     pc.onnegotiationneeded = async () => {
       // One deterministic initial offer prevents redundant m-lines on initial glare.
-      if (this.closed || (peer.polite && !pc.remoteDescription)) return;
+      if (this.closed || (peer.polite && !pc.currentLocalDescription)) return;
       try {
         peer.makingOffer = true;
         await pc.setLocalDescription();
@@ -420,6 +454,13 @@ export class MediaSession implements CallSession {
       finally { peer.settingAnswer = false; }
       for (const candidate of peer.candidates.splice(0)) await peer.pc.addIceCandidate(candidate);
       if (type === "offer") {
+        for (const kind of ["audio", "video"] as const) {
+          const transceiver = peer.pc.getTransceivers().find((item) => item.direction !== "stopped" && item.mid !== null && item.receiver.track.kind === kind);
+          if (!transceiver) throw new Error(`L'offre média ne contient pas de piste ${kind}.`);
+          peer[kind] = transceiver.sender;
+          transceiver.direction = "sendrecv";
+          await transceiver.sender.replaceTrack(this.outgoingTrack(kind));
+        }
         await peer.pc.setLocalDescription();
         if (peer.pc.localDescription) await this.options.sendSignal(event.sender, { Answer: peer.pc.localDescription.sdp });
       }

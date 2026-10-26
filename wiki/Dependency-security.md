@@ -1,4 +1,4 @@
-# Frontend dependency security
+# Dependency security
 
 Reviewed on 2026-10-22. The first integration build reported 18 npm findings
 (2 critical, 12 high); that count alone does not identify the affected dependency

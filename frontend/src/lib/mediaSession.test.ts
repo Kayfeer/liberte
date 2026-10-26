@@ -32,16 +32,36 @@ class Connection {
   signalingState = "stable";
   remoteDescription: unknown = null;
   localDescription = { type: "answer", sdp: "answer-sdp" };
-  senders: { replaceTrack: ReturnType<typeof vi.fn> }[] = [];
+  senders: { track: Track | null; replaceTrack: ReturnType<typeof vi.fn> }[] = [];
+  transceivers: { sender: { track: Track | null; replaceTrack: ReturnType<typeof vi.fn> }; receiver: { track: Track }; mid: string | null; stopped: boolean; direction: string }[] = [];
   data = { readyState: "open", send: vi.fn(), close: vi.fn(), onopen: null, onmessage: null };
   close = vi.fn();
   addIceCandidate = vi.fn().mockResolvedValue(undefined);
   restartIce = vi.fn();
   setConfiguration = vi.fn();
   setLocalDescription = vi.fn().mockResolvedValue(undefined);
-  setRemoteDescription = vi.fn(async (description: unknown) => { this.remoteDescription = description; });
+  setRemoteDescription = vi.fn(async (description: { type: string }) => {
+    this.remoteDescription = description;
+    if (description.type === "offer") {
+      // Explicit addTransceiver-created entries are not adopted by an offer.
+      // This models the browser association rule that caused one-way media.
+      for (const [index, kind] of ["audio", "video"].entries()) {
+        const transceiver = this.addTransceiver(kind);
+        transceiver.mid = String(index);
+        transceiver.direction = "recvonly";
+      }
+    }
+  });
   constructor() { Connection.instances.push(this); }
-  addTransceiver() { const sender = { replaceTrack: vi.fn().mockResolvedValue(undefined) }; this.senders.push(sender); return { sender }; }
+  addTransceiver(track: Track | string) {
+    const sender: { track: Track | null; replaceTrack: ReturnType<typeof vi.fn> } = { track: typeof track === "string" ? null : track, replaceTrack: vi.fn() };
+    sender.replaceTrack.mockImplementation(async (next: Track | null) => { sender.track = next; });
+    const transceiver = { sender, receiver: { track: new Track(typeof track === "string" ? track : track.kind) }, mid: null as string | null, stopped: false, direction: "sendrecv" };
+    this.senders.push(sender);
+    this.transceivers.push(transceiver);
+    return transceiver;
+  }
+  getTransceivers() { return this.transceivers; }
   createDataChannel() { return this.data; }
 }
 
@@ -52,9 +72,9 @@ let captures: Stream[];
 let getUserMedia: ReturnType<typeof vi.fn>;
 let sessions: MediaSession[];
 
-function fixture() {
+function fixture(localUserId = userId) {
   const callbacks = {
-    userId, channelId, sendSignal: vi.fn().mockResolvedValue(undefined), announce: vi.fn().mockResolvedValue(undefined),
+    userId: localUserId, channelId, sendSignal: vi.fn().mockResolvedValue(undefined), announce: vi.fn().mockResolvedValue(undefined),
     onLocalStream: vi.fn(), onRemoteStream: vi.fn(), onPeer: vi.fn(), onError: vi.fn(), onCameraEnded: vi.fn(),
   };
   const session = new MediaSession(callbacks);
@@ -153,6 +173,65 @@ describe("WebRTC call lifecycle", () => {
     expect(Connection.instances[0].senders[0].replaceTrack).toHaveBeenCalledWith(Audio.instances[1].destination.getTracks()[0]);
   });
 
+  it("gives a participant joining during a microphone change the live replacement", async () => {
+    const { session } = fixture();
+    await session.start();
+    session.ensurePeer(remoteId);
+    let finish!: () => void;
+    Connection.instances[0].senders[0].replaceTrack.mockImplementationOnce(async () => new Promise<void>((resolve) => { finish = resolve; }));
+    localStorage.setItem("liberte-media-settings", JSON.stringify({ selectedAudioInput: "usb-mic" }));
+    const changing = session.applyPreferences();
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    session.ensurePeer("c".repeat(64));
+    session.setMuted(true);
+    const replacement = Audio.instances[1].destination.getAudioTracks()[0];
+    expect(Connection.instances[1].senders[0].track).toBe(replacement);
+    expect(replacement.enabled).toBe(false);
+    finish();
+    await changing;
+    expect(replacement.readyState).toBe("live");
+    expect(replacement.enabled).toBe(false);
+    expect(captures[1].getAudioTracks()[0].enabled).toBe(false);
+    expect(Audio.instances[0].destination.getAudioTracks()[0].readyState).toBe("ended");
+  });
+
+  it("gives a participant joining while the camera starts the pending video track", async () => {
+    const { session } = fixture();
+    await session.start();
+    session.ensurePeer(remoteId);
+    let finish!: () => void;
+    Connection.instances[0].senders[1].replaceTrack.mockImplementationOnce(async () => new Promise<void>((resolve) => { finish = resolve; }));
+    const enabling = session.setVideoEnabled(true);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    session.ensurePeer("c".repeat(64));
+    const camera = captures[1].getVideoTracks()[0];
+    expect(Connection.instances[1].senders[1].track).toBe(camera);
+    finish();
+    await enabling;
+    expect(camera.readyState).toBe("live");
+  });
+
+  it("stops the camera immediately during a pending device permission and discards its late result", async () => {
+    const { session } = fixture();
+    await session.start();
+    await session.setVideoEnabled(true);
+    const previous = captures[1].getVideoTracks()[0];
+    let finish!: (stream: Stream) => void;
+    getUserMedia.mockImplementationOnce(() => new Promise<Stream>((resolve) => { finish = resolve; }));
+    localStorage.setItem("liberte-media-settings", JSON.stringify({ selectedVideoInput: "new-camera" }));
+    const changing = session.applyPreferences();
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    const disabling = session.setVideoEnabled(false);
+    expect(previous.readyState).toBe("ended");
+    await disabling;
+    const lateCamera = new Track("video");
+    finish(new Stream([lateCamera]));
+    await changing;
+    expect(lateCamera.readyState).toBe("ended");
+    session.ensurePeer(remoteId);
+    expect(Connection.instances[0].senders[1].track).toBeNull();
+  });
+
   it("buffers ICE until SDP arrives and ignores another room or recipient", async () => {
     const { session, callbacks } = fixture();
     await session.start();
@@ -167,6 +246,22 @@ describe("WebRTC call lifecycle", () => {
     expect(callbacks.sendSignal).toHaveBeenCalledWith(remoteId, { Answer: "answer-sdp" });
     await session.receive({ ...base, signalType: "Hangup" });
     expect(Connection.instances[0].close).toHaveBeenCalledOnce();
+  });
+
+  it("attaches answerer audio and camera to the offered m-lines without orphan senders", async () => {
+    const { session, callbacks } = fixture(remoteId);
+    await session.start();
+    session.ensurePeer(userId);
+    const connection = Connection.instances[0];
+    expect(connection.getTransceivers()).toHaveLength(0);
+    await session.receive({ channelId, sender: userId, target: remoteId, signalType: { Offer: "v=0\r\n" } });
+    expect(connection.getTransceivers()).toHaveLength(2);
+    expect(connection.senders[0].replaceTrack).toHaveBeenCalledWith(Audio.instances[0].destination.getAudioTracks()[0]);
+    expect(connection.senders[1].replaceTrack).toHaveBeenCalledWith(null);
+    expect(connection.getTransceivers().every((transceiver) => transceiver.direction === "sendrecv")).toBe(true);
+    await session.setVideoEnabled(true);
+    expect(connection.senders[1].replaceTrack).toHaveBeenLastCalledWith(captures[1].getVideoTracks()[0]);
+    expect(callbacks.sendSignal).toHaveBeenCalledWith(userId, { Answer: "answer-sdp" });
   });
 
   it("applies output volume and selected speaker without feeding back the local preview", async () => {

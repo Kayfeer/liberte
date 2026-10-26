@@ -29,6 +29,14 @@ Les adresses IP sont visibles par les pairs directs. Il n'y a pas de confidentia
 - `liberte-server` : API et relais.
 - `frontend` : React, Zustand et WebRTC.
 
+## Prérequis des clients
+
+Le client macOS exige **macOS 13.3 minimum**, conformément à la configuration du bundle. Maintenir macOS et son moteur WebKit à jour.
+
+L'interface utilise Tailwind CSS 4, dont les [prérequis de navigateur](https://tailwindcss.com/docs/compatibility) comprennent Safari 16.4 et Chromium 111. Sur Windows, utiliser WebView2 à jour. Sur Linux, utiliser WebKitGTK récent ; son numéro d'API `4.1` ne désigne pas la version du moteur WebKit.
+
+Une compilation du paquet ne valide pas le rendu, les permissions micro/caméra ou l'E2EE dans la WebView native. Ces essais restent nécessaires sur chaque plateforme.
+
 ## Développement
 
 Prérequis : Rust **1.99.1** via rustup, Node.js **22**, Python **3.12+** pour les outils CI et les dépendances natives Tauri de la plateforme.

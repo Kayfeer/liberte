@@ -55,7 +55,7 @@ function createCall(userId: string) {
     }),
     stats: async () => {
       const reports = await session.getStats();
-      return reports.flatMap((report) => [...report.values()].filter((item) => item.type === "inbound-rtp").map((item) => ({ kind: item.kind, bytesReceived: item.bytesReceived, framesDecoded: item.framesDecoded })));
+      return reports.flatMap((report) => [...report.values()].filter((item) => item.type === "inbound-rtp").map((item) => ({ kind: item.kind, bytesReceived: item.bytesReceived, totalSamplesReceived: item.totalSamplesReceived, framesDecoded: item.framesDecoded })));
     },
   };
 }

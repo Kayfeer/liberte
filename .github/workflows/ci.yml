@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Resolve only when bootstrapping the missing lockfile
+      - name: Validate the lockfile and preserve any required update for review
         run: python scripts/ci.py lockfile
       - uses: actions/upload-artifact@v4
         with:
@@ -40,7 +40,9 @@ jobs:
           if-no-files-found: error
       - name: Require a versioned lockfile for release
         if: inputs.require-committed-lock
-        run: git ls-files --error-unmatch Cargo.lock
+        run: |
+          git ls-files --error-unmatch Cargo.lock
+          git diff --exit-code -- Cargo.lock
 
   tooling:
     name: Release tooling regression tests

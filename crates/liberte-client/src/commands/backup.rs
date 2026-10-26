@@ -438,7 +438,7 @@ async fn cleanup_old_backups(dir: &Path, keep: usize) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
         ));
     }
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|a| std::cmp::Reverse(a.1));
     for (path, _) in files.into_iter().skip(keep) {
         tokio::fs::remove_file(path)
             .await

@@ -1,6 +1,6 @@
 # Démarrer
 
-Installer Rust 1.99.1 avec rustup, Node.js 22 et les dépendances natives Tauri. Le [README](../README.md) précise les paquets Linux et les prérequis Windows.
+Installer Rust 1.99.1 avec rustup, Node.js 22 et les dépendances natives Tauri. Le client macOS exige **macOS 13.3 minimum**. Le [README](../README.md) précise les moteurs WebView requis, les paquets Linux et les prérequis Windows.
 
 ```bash
 git clone https://github.com/Kayfeer/liberte.git

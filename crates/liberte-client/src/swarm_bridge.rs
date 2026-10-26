@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use liberte_net::{SwarmCommand, SwarmNotification};
 use liberte_shared::crypto;
-use liberte_shared::protocol::{WireMessage, ReplayGuard};
+use liberte_shared::protocol::{ReplayGuard, WireMessage};
 use liberte_shared::types::ChannelId;
 use liberte_store::Message;
 
@@ -104,9 +104,14 @@ async fn notification_loop(
             SwarmNotification::PeerConnected { peer_id, address } => {
                 if let Ok(mut guard) = state.lock() {
                     guard.network_error = None;
-                    guard.connection_mode = if address.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit)) {
+                    guard.connection_mode = if address
+                        .iter()
+                        .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+                    {
                         liberte_shared::types::ConnectionMode::Relayed
-                    } else { liberte_shared::types::ConnectionMode::Direct };
+                    } else {
+                        liberte_shared::types::ConnectionMode::Direct
+                    };
                 }
                 info!(peer = %peer_id, addr = %address, "Peer connected (bridge)");
                 emit_event(
@@ -121,12 +126,25 @@ async fn notification_loop(
             SwarmNotification::PeerSubscribed { peer_id, topic } => {
                 // A transport connection can predate joining a channel. Announce when the
                 // remote subscription exists so a late joiner also receives our profile.
-                let shared_channel = topic.strip_prefix("channel:")
+                let shared_channel = topic
+                    .strip_prefix("channel:")
                     .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                    .is_some_and(|id| state.lock().ok().and_then(|guard| {
-                        guard.database.as_ref().map(|db| db.get_channel_key(id).is_ok())
-                    }).unwrap_or(false));
-                if shared_channel && last_profile_announcement.is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1)) {
+                    .is_some_and(|id| {
+                        state
+                            .lock()
+                            .ok()
+                            .and_then(|guard| {
+                                guard
+                                    .database
+                                    .as_ref()
+                                    .map(|db| db.get_channel_key(id).is_ok())
+                            })
+                            .unwrap_or(false)
+                    });
+                if shared_channel
+                    && last_profile_announcement
+                        .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1))
+                {
                     debug!(peer = %peer_id, %topic, "Announcing profile to channel subscriber");
                     last_profile_announcement = Some(std::time::Instant::now());
                     crate::commands::identity::spawn_profile_broadcast(state.clone());
@@ -244,17 +262,25 @@ fn handle_incoming_message(
         (key_bytes, own_pk)
     };
 
-    let verified = match WireMessage::open_authenticated(data, ChannelId(channel_uuid), &channel_key) {
-        Ok(message) => message,
-        Err(e) => { debug!(error = %e, "Rejected unauthenticated network message"); return; }
-    };
-    if !replays.accept(&verified) || own_pubkey == Some(verified.author.0) { return; }
+    let verified =
+        match WireMessage::open_authenticated(data, ChannelId(channel_uuid), &channel_key) {
+            Ok(message) => message,
+            Err(e) => {
+                debug!(error = %e, "Rejected unauthenticated network message");
+                return;
+            }
+        };
+    if !replays.accept(&verified) || own_pubkey == Some(verified.author.0) {
+        return;
+    }
     let author = verified.author;
     let wire_msg = verified.message;
 
     match wire_msg {
         WireMessage::ChatMessage(chat) => {
-            if crypto::decrypt(&channel_key, &chat.encrypted_content).is_err() { return; }
+            if crypto::decrypt(&channel_key, &chat.encrypted_content).is_err() {
+                return;
+            }
             // Skip our own messages (already stored locally)
             if let Some(own_pk) = own_pubkey {
                 if chat.sender.0 == own_pk {
@@ -340,7 +366,12 @@ fn handle_incoming_message(
                     Err(_) => return,
                 };
                 if let Some(ref db) = guard.database {
-                    if !db.get_message_by_id(reaction.message_id).is_ok_and(|message| message.channel_id == channel_uuid) { return; }
+                    if !db
+                        .get_message_by_id(reaction.message_id)
+                        .is_ok_and(|message| message.channel_id == channel_uuid)
+                    {
+                        return;
+                    }
                     match reaction.action {
                         liberte_shared::protocol::ReactionAction::Add => {
                             let _ = db.add_reaction(
@@ -384,7 +415,15 @@ fn handle_incoming_message(
         }
 
         WireMessage::VoiceFrame(frame) => {
-            if state.lock().ok().and_then(|g| g.call_channel_id.clone()).as_deref() != Some(channel_uuid_str) { return; }
+            if state
+                .lock()
+                .ok()
+                .and_then(|g| g.call_channel_id.clone())
+                .as_deref()
+                != Some(channel_uuid_str)
+            {
+                return;
+            }
             // Skip our own voice frames
             if let Some(own_pk) = own_pubkey {
                 if frame.sender.0 == own_pk {
@@ -395,8 +434,10 @@ fn handle_incoming_message(
             // Convert i16 PCM bytes back to f32 samples and upsample 16kHz → 48kHz
             let i16_samples: Vec<i16> = frame
                 .audio_data
-                .chunks_exact(2)
-                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| i16::from_le_bytes(*c))
                 .collect();
 
             let mut f32_samples = Vec::with_capacity(i16_samples.len() * 3);
@@ -478,33 +519,74 @@ fn handle_incoming_message(
                         "INSERT INTO users (pubkey, display_name, avatar_hash, bio, status, created_at) VALUES (?1, ?2, NULL, ?3, ?4, ?5) ON CONFLICT(pubkey) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, status = excluded.status",
                         rusqlite::params![user_id, profile.display_name, profile.bio, profile.status, profile.timestamp.to_rfc3339()],
                     );
-                    if let Err(error) = result { warn!(%error, "Could not store peer profile"); }
+                    if let Err(error) = result {
+                        warn!(%error, "Could not store peer profile");
+                    }
                 }
             }
             #[derive(serde::Serialize, Clone)]
             #[serde(rename_all = "camelCase")]
-            struct ProfilePayload { user_id: String, display_name: Option<String>, bio: Option<String>, status: String }
-            emit_event(app, "profile-updated", ProfilePayload { user_id, display_name: profile.display_name, bio: profile.bio, status: profile.status });
+            struct ProfilePayload {
+                user_id: String,
+                display_name: Option<String>,
+                bio: Option<String>,
+                status: String,
+            }
+            emit_event(
+                app,
+                "profile-updated",
+                ProfilePayload {
+                    user_id,
+                    display_name: profile.display_name,
+                    bio: profile.bio,
+                    status: profile.status,
+                },
+            );
         }
         WireMessage::Signal(signal) => {
-            let active = state.lock().ok().and_then(|g| if g.call_mode == "mesh" { g.call_channel_id.clone() } else { None });
-            if own_pubkey != Some(signal.target.0) || active.as_deref() != Some(channel_uuid_str) { return; }
+            let active = state.lock().ok().and_then(|g| {
+                if g.call_mode == "mesh" {
+                    g.call_channel_id.clone()
+                } else {
+                    None
+                }
+            });
+            if own_pubkey != Some(signal.target.0) || active.as_deref() != Some(channel_uuid_str) {
+                return;
+            }
             #[derive(serde::Serialize, Clone)]
             #[serde(rename_all = "camelCase")]
             struct SignalPayload {
-                channel_id: String, sender: String, target: String,
+                channel_id: String,
+                sender: String,
+                target: String,
                 signal_type: liberte_shared::protocol::SignalType,
             }
-            emit_event(app, "call-signal", SignalPayload {
-                channel_id: channel_uuid.to_string(), sender: author.to_hex(), target: signal.target.to_hex(), signal_type: signal.signal_type,
-            });
+            emit_event(
+                app,
+                "call-signal",
+                SignalPayload {
+                    channel_id: channel_uuid.to_string(),
+                    sender: author.to_hex(),
+                    target: signal.target.to_hex(),
+                    signal_type: signal.signal_type,
+                },
+            );
         }
-        message @ (WireMessage::FileOffer(_) | WireMessage::FileAccept(_) | WireMessage::FileChunk(_) | WireMessage::FileComplete(_)) => {
-            crate::file_transfer::handle_incoming(app, state, ChannelId(channel_uuid), author, message);
+        message @ (WireMessage::FileOffer(_)
+        | WireMessage::FileAccept(_)
+        | WireMessage::FileChunk(_)
+        | WireMessage::FileComplete(_)) => {
+            crate::file_transfer::handle_incoming(
+                app,
+                state,
+                ChannelId(channel_uuid),
+                author,
+                message,
+            );
         }
         other => {
             debug!(msg = ?other, "Unhandled wire message type on bridge");
         }
     }
 }
-

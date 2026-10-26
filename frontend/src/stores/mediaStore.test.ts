@@ -92,6 +92,24 @@ describe("media store lifecycle", () => {
     expect(mocks.unlisten).toHaveBeenCalledTimes(4);
   });
 
+  it("does not clear a new call's busy state when an old camera request resolves", async () => {
+    await useMediaStore.getState().startCall("first");
+    let finishCamera!: () => void;
+    mocks.camera.mockImplementationOnce(() => new Promise<void>((resolve) => { finishCamera = resolve; }));
+    const camera = useMediaStore.getState().toggleVideo();
+    await useMediaStore.getState().endCall();
+    let finishCapture!: () => void;
+    mocks.start.mockImplementationOnce(() => new Promise<void>((resolve) => { finishCapture = resolve; }));
+    const starting = useMediaStore.getState().startCall("second");
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(2));
+    finishCamera();
+    await camera;
+    expect(useMediaStore.getState().busy).toBe(true);
+    finishCapture();
+    await starting;
+    expect(useMediaStore.getState().inCall).toBe(true);
+  });
+
   it("never restarts the camera when a disable IPC fails", async () => {
     await useMediaStore.getState().startCall("channel");
     await useMediaStore.getState().toggleVideo();

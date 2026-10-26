@@ -141,7 +141,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     } catch (error) {
       if (session === current) { current.setMuted(true); set({ isMuted: true, error: errorText(error) }); }
       throw error;
-    } finally { set({ busy: false }); }
+    } finally { if (session === current) set({ busy: false }); }
   },
 
   toggleVideo: async () => {
@@ -160,7 +160,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         set({ isVideoEnabled: false, error: errorText(error) });
       }
       throw error;
-    } finally { set({ busy: false }); }
+    } finally { if (session === current) set({ busy: false }); }
   },
 
   setParticipants: (participants) => set({ participants }),
