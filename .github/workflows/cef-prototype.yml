@@ -306,7 +306,7 @@ jobs:
           import os, pathlib, tomllib
           packages = tomllib.loads(pathlib.Path('Cargo.lock').read_text())['package']
           versions = [item['version'] for item in packages if item['name'] == 'cef']
-          if versions != ['154.5.0']:
+          if versions != ['154.5.0+154.0.34']:
               raise SystemExit(f'Unexpected CEF version: {versions}; review the runtime/cache pin')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={versions[0]}\n')
