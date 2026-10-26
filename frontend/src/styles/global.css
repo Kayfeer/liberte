@@ -3,6 +3,7 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --liberte-bg: #1a1a2e;
     --liberte-surface: #16213e;
     --liberte-panel: #0f3460;

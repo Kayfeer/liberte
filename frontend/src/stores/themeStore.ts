@@ -93,6 +93,12 @@ function resolveColors(name: ThemeName, custom: ThemeColors): ThemeColors {
 
 function applyToDOM(colors: ThemeColors) {
   const root = document.documentElement;
+  // Native controls must follow the palette too, including custom panel colors.
+  const [red, green, blue] = [1, 3, 5].map((offset) =>
+    Number.parseInt(colors.panel.slice(offset, offset + 2), 16)
+  );
+  const brightness = (red * 299 + green * 587 + blue * 114) / 1000;
+  root.style.colorScheme = brightness >= 128 ? "light" : "dark";
   for (const [key, value] of Object.entries(colors)) {
     root.style.setProperty(`--liberte-${key}`, value);
   }
@@ -127,3 +133,4 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     },
   };
 });
+

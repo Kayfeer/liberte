@@ -87,7 +87,7 @@ export default function Header() {
                   .catch((error) => setCallError(String(error)))
                   .finally(() => setModePending(false));
               }}
-              className="bg-liberte-panel text-xs rounded px-2 py-1 disabled:opacity-60"
+              className="bg-liberte-panel text-liberte-text text-xs rounded px-2 py-1 disabled:opacity-60"
             >
               <option value="mesh">P2P direct</option>
               <option value="sfu">SFU chiffré</option>
