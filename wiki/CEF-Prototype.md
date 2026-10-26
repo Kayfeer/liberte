@@ -28,6 +28,12 @@ Le prototype mesure aussi le CPU au repos : un défaut amont signalé dans l'iss
 
 Tauri 3 reste une préversion. Aucune validation physique, aucun déploiement, aucune signature officielle et aucune complétude de l'application ne sont déclarés par ce document.
 
+## Validation en cours
+
+Le premier passage complet de compilation (`3346824`, exécution `40343741388`) a validé les 88 tests frontend, les six scénarios média navigateur, les outils, les verrous, RustSec et le conteneur serveur. Le binaire CEF n’a pas été produit : la préparation Tauri a refusé l’ancienne permission `shell:allow-open`. Ces résultats ne valident donc aucun parcours natif CEF.
+
+Le harnais SFU préparé lance trois processus de l’application CEF et un service LiveKit local. Les deux premiers utilisent le parcours normal, avec le serveur Rust pour l’admission. Le troisième conserve un jeton réellement délivré et la même salle, mais utilise une clé altérée : le test exige une erreur de chiffrement visible, aucune lecture audio ou vidéo, la poursuite des paquets chiffrés adverses et la fin des captures de l’application. Les identifiants transitoires ne sont pas inscrits dans les rapports. Ce scénario reste à exécuter ; sa préparation ne vaut pas preuve de réussite.
+
 ## Sources
 
 - [Tauri CEF](https://v3.tauri.app/develop/cef/)

@@ -14,7 +14,8 @@ import sys
 import tempfile
 
 from native_smoke import resolve_driver, native_runtime, NativeSession, isolated_environment, until
-from native_integration import ALICE, BOB, CHANNEL, identity_ui, network_ready, select_channel, xpath_text
+from native_integration import (ALICE, BOB, CHANNEL, identity_ui, network_ready, select_channel,
+                                xpath_text, configure_server_ui)
 
 VOICE = 'section[aria-label="Appel audio et vid\u00e9o"]'
 CAPABILITY_PROBE = """
@@ -23,6 +24,10 @@ return {
     getUserMedia: typeof navigator.mediaDevices?.getUserMedia,
     RTCPeerConnection: typeof window.RTCPeerConnection,
     AudioContext: typeof window.AudioContext,
+    RTCRtpScriptTransform: typeof window.RTCRtpScriptTransform,
+    createEncodedStreams: typeof window.RTCRtpSender?.prototype?.createEncodedStreams,
+    Worker: typeof window.Worker,
+    cryptoSubtle: !!window.crypto?.subtle,
     origin: window.location.origin,
     protocol: window.location.protocol,
     userAgent: navigator.userAgent,
@@ -165,15 +170,41 @@ def click_voice(client, label):
     client.click(f'{VOICE} button[aria-label="{label}"]')
 
 
-def start_call(client):
+def select_call_mode_ui(client, mode):
+    if mode not in ("mesh", "sfu"):
+        raise ValueError("Unsupported media transport")
+    selector = 'select[aria-label="Transport de l\'appel"]'
+    if client.value(selector) != mode:
+        client.click(selector)
+        element = client.wait_element(selector)
+        # Native keyboard input drives the real select and React change handler.
+        key = "\ue015" if mode == "sfu" else "\ue013"
+        client.command("POST", f"/element/{element}/value", {"text": key + "\ue007"})
+    def selected():
+        client.assert_no_alert()
+        return client.value(selector) == mode and client.invoke("get_call_state").get("mode") == mode
+    until(selected, f"UI and native call transport both select {mode}")
+
+
+def require_sfu_capabilities(value):
+    require_capabilities(value)
+    if (value.get("RTCRtpScriptTransform") != "function"
+            and value.get("createEncodedStreams") != "function"):
+        raise RuntimeError("Native SFU requires WebRTC encoded media transforms")
+    if value.get("Worker") != "function" or value.get("cryptoSubtle") is not True:
+        raise RuntimeError("Native SFU requires Worker and WebCrypto support")
+
+
+def start_call(client, mode="mesh"):
+
     client.click('button[aria-label="Rejoindre l\'appel"]')
     def joined():
         client.assert_no_alert()
         return client.find(VOICE)
     until(joined, "native call UI or an explicit application error")
     state = client.invoke("get_call_state")
-    if state.get("inCall") is not True or state.get("mode") != "mesh":
-        raise AssertionError("The native client did not enter the requested P2P call")
+    if state.get("inCall") is not True or state.get("mode") != mode:
+        raise AssertionError(f"The native client did not enter the requested {mode} call")
 
 
 def require_cef_qa_configuration(configuration, port):
@@ -211,9 +242,13 @@ def stop_probe(client):
         print(f"Native media diagnostic cleanup: {type(error).__name__}", file=sys.stderr)
 
 
-def run_media(application, driver, artifacts):
+def run_media(application, driver, artifacts, *, server_url=None, mode="mesh", after_call=None):
     if sys.platform != "linux":
         raise RuntimeError("Native media QA requires Linux")
+    if mode not in ("mesh", "sfu"):
+        raise ValueError("Unsupported media transport")
+    if mode == "sfu" and not server_url:
+        raise ValueError("Native SFU QA requires the real configured admission server")
     application = Path(application).resolve(strict=True)
     if not application.is_file() or not os.access(application, os.X_OK):
         raise ValueError("The separate QA client binary must be executable")
@@ -226,7 +261,10 @@ def run_media(application, driver, artifacts):
               "consent": "origin-scoped CDP permission decision" if driver == "cef" else "WebDriver engine automation",
               "capture_observation": "CDP MediaStreamTrack objects; not a hardware capture-state API" if driver == "cef" else "WebKit capture-state API",
               "not_validated": ["physical microphone/camera/speakers", "native consent dialog", "release media runtime", "native SFU transport (separate test required)"],
-              "ipc_mocked": False, "signaling_mocked": False, "webrtc_mocked": False}
+              "ipc_mocked": False, "signaling_mocked": False, "webrtc_mocked": False,
+              "mode": mode}
+    if mode == "sfu":
+        report["not_validated"].remove("native SFU transport (separate test required)")
     with application.open("rb") as stream:
         report["qa_application_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
     def record(check):
@@ -262,7 +300,10 @@ def run_media(application, driver, artifacts):
                     capture_state(alice, {"microphone": "none", "camera": "none"})
                     record("Native SFU refuses the unsupported Linux E2EE engine before channel lookup or capture")
                 for capabilities in report["runtime_capabilities"].values():
-                    require_capabilities(capabilities)
+                    if mode == "sfu":
+                        require_sfu_capabilities(capabilities)
+                    else:
+                        require_capabilities(capabilities)
                 alice.click('button[title="Cr\u00e9er un canal"]')
                 alice.fill('input[placeholder="ex: general"]', CHANNEL)
                 alice.click(xpath_text("button", "Cr\u00e9er"), "xpath")
@@ -275,6 +316,12 @@ def run_media(application, driver, artifacts):
                 bob.click(xpath_text("button", "Rejoindre"), "xpath")
                 select_channel(bob)
                 network_ready(alice, bob)
+                if server_url:
+                    for client in (alice, bob):
+                        configure_server_ui(client, server_url)
+                    record("Both clients saved the real admission server through Settings UI")
+                for client in (alice, bob):
+                    select_call_mode_ui(client, mode)
                 if driver == "cef":
                     alice.set_media_permissions("denied")
                     alice.click('button[aria-label="Rejoindre l\'appel"]')
@@ -289,11 +336,12 @@ def run_media(application, driver, artifacts):
                     record("Chromium permission denial produced a visible UI error without starting capture or a call")
                     for client in (alice, bob):
                         client.set_media_permissions("granted")
-                start_call(alice)
-                start_call(bob)
+                start_call(alice, mode)
+                start_call(bob, mode)
                 report["capture_states"]["audio_call"] = {"alice": capture_state(alice, {"microphone": "active"}),
                                                          "bob": capture_state(bob, {"microphone": "active"})}
-                record("Both clients joined through UI and production Rust IPC/signaling")
+                record("Both clients joined through UI, production Rust admission and LiveKit E2EE"
+                       if mode == "sfu" else "Both clients joined through UI and production Rust IPC/signaling")
                 try:
                     for client in (alice, bob):
                         until(lambda: execute(client, INSTALL_PROBE), "remote audio stream for native observation", timeout=45)
@@ -359,6 +407,8 @@ def run_media(application, driver, artifacts):
                 finally:
                     for client in (alice, bob):
                         stop_probe(client)
+                if after_call is not None:
+                    after_call(alice, bob, report, record)
         report["status"] = "passed"
     except BaseException as error:
         report["status"] = "failed"
@@ -367,6 +417,7 @@ def run_media(application, driver, artifacts):
     finally:
         (artifacts / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print("CODEX_NATIVE_MEDIA_RESULT " + json.dumps(report), flush=True)
+    return report
 
 
 def main():

@@ -34,9 +34,8 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
     #[cfg(target_os = "linux")]
-    let builder = builder.runtime(
-        media_permissions::cef_runtime().expect("Invalid Chromium runtime configuration"),
-    );
+    let builder = builder
+        .runtime(media_permissions::cef_runtime().expect("Invalid Chromium runtime configuration"));
     #[cfg(not(target_os = "linux"))]
     let builder = builder.runtime(tauri_runtime_wry::Wry::default());
 

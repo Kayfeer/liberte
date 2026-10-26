@@ -107,9 +107,7 @@ fn trusted_origin(uri: &str) -> bool {
     }
     let app_origin = match url.scheme() {
         "tauri" => url.host_str() == Some("localhost") && url.port().is_none(),
-        "http" | "https" => {
-            url.host_str() == Some("tauri.localhost") && url.port().is_none()
-        }
+        "http" | "https" => url.host_str() == Some("tauri.localhost") && url.port().is_none(),
         _ => false,
     };
     app_origin

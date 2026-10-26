@@ -113,6 +113,92 @@ jobs:
         if: always()
         run: python scripts/ci.py rust-audit-gate --report .ci-output/cargo-audit.json --status .ci-output/cargo-audit-exit.txt
 
+  updater-tests:
+    name: Vendored updater upstream library tests
+    needs: prototype-scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - name: Validate the updater test lock or preserve a bootstrap candidate
+        id: updater_lock
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path('scripts').resolve()))
+          import ci
+          directory = pathlib.Path('vendor/tauri-plugin-updater').resolve()
+          manifest, lock = directory / 'Cargo.toml', directory / 'Cargo.lock'
+          metadata = ['cargo', 'metadata', '--manifest-path', str(manifest), '--locked', '--format-version', '1', '--color', 'never']
+          valid = False
+          if lock.is_file():
+              result = subprocess.run(metadata, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+              valid = result.returncode == 0
+              if not valid:
+                  print(result.stderr)
+                  expected = f'cannot update the lock file {lock} because --locked was passed to prevent this'
+                  if expected not in result.stderr:
+                      raise subprocess.CalledProcessError(result.returncode, metadata, stderr=result.stderr)
+          if not valid:
+              print('::warning::Updater test lock is absent or incompatible. Generated candidate is diagnostic only until committed.')
+              ci.run(['cargo', 'generate-lockfile', '--manifest-path', str(manifest)])
+              ci.export_file(lock, 'vendor/tauri-plugin-updater/Cargo.lock')
+          ci.run(metadata, stdout=subprocess.DEVNULL)
+          if not lock.is_file() or not lock.stat().st_size:
+              raise SystemExit('Updater test lock was not created')
+          PY
+      - name: Preserve the updater test lock and digest
+        if: always() && hashFiles('vendor/tauri-plugin-updater/Cargo.lock') != ''
+        run: |
+          mkdir -p .ci-output/updater-tests
+          sha256sum vendor/tauri-plugin-updater/Cargo.lock | tee .ci-output/updater-tests/Cargo.lock.sha256
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('vendor/tauri-plugin-updater/Cargo.lock') != ''
+        with:
+          name: updater-test-lock
+          path: |
+            vendor/tauri-plugin-updater/Cargo.lock
+            .ci-output/updater-tests/Cargo.lock.sha256
+          if-no-files-found: error
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cef-updater-tests
+          workspaces: vendor/tauri-plugin-updater -> target
+          cache-on-failure: true
+      - name: Install the updater test platform dependencies
+        run: |
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y libgtk-3-dev libgtk-4-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config
+          pkg-config --atleast-version=4.14 gtk4
+      - name: Test the exact upstream updater source with its dedicated lock
+        id: updater_tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test --manifest-path vendor/tauri-plugin-updater/Cargo.toml --lib --locked 2>&1 | tee .ci-output/updater-tests/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: updater-test-results
+          path: .ci-output/updater-tests
+          if-no-files-found: warn
+      - name: Require updater tests and an unchanged versioned test lock
+        if: always()
+        env:
+          LOCK: ${{ steps.updater_lock.outcome }}
+          TESTS: ${{ steps.updater_tests.outcome }}
+        run: |
+          test "$LOCK" = success
+          test "$TESTS" = success
+          git ls-files --error-unmatch vendor/tauri-plugin-updater/Cargo.lock
+          git diff --exit-code -- vendor/tauri-plugin-updater/Cargo.lock
+
   frontend:
     name: Frontend tests, types and build
     needs: prototype-scope
@@ -264,10 +350,34 @@ jobs:
 
   linux:
     name: CEF Linux build, server and real native QA
-    needs: [lockfile, frontend]
+    needs: [lockfile, frontend, updater-tests]
     if: always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    services:
+      native-livekit:
+        image: livekit/livekit-server:v1.13.10
+        env:
+          LIVEKIT_CONFIG: |
+            port: 7880
+            bind_addresses: [0.0.0.0]
+            rtc:
+              node_ip: 127.0.0.1
+              udp_port: 7882
+              tcp_port: 7881
+              use_external_ip: false
+              enable_loopback_candidate: true
+              stun_servers: []
+            keys:
+              liberte-native-ci: liberte-native-ci-only-not-a-production-secret
+        ports:
+          - '127.0.0.1:7880:7880/tcp'
+          - '127.0.0.1:7881:7881/tcp'
+          - '127.0.0.1:7882:7882/udp'
+    env:
+      LIBERTE_SFU_TEST_URL: ws://127.0.0.1:7880
+      LIBERTE_SFU_API_KEY: liberte-native-ci
+      LIBERTE_SFU_API_SECRET: liberte-native-ci-only-not-a-production-secret
     steps:
       - name: Configure the CEF distribution directory
         run: printf 'CEF_PATH=%s/tauri-cef\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -480,6 +590,38 @@ jobs:
             xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
             python scripts/native_media.py --driver cef --application target/debug/liberte-client
           '
+      - name: Check the declarative native SFU service
+        id: native_sfu_server
+        if: steps.qa_build.outcome == 'success' && steps.qa_sandbox.outcome == 'success' && steps.server_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:7880/; then exit 0; fi
+            sleep 1
+          done
+          echo 'The GitHub-managed LiveKit service did not respond on loopback.'
+          exit 1
+      - name: Verify native SFU encryption and rejection of an incompatible CEF peer key
+        id: native_sfu
+        if: steps.qa_build.outcome == 'success' && steps.qa_sandbox.outcome == 'success' && steps.pulse.outcome == 'success' && steps.native_sfu_server.outcome == 'success'
+        continue-on-error: true
+        env:
+          LIVEKIT_URL: ${{ env.LIBERTE_SFU_TEST_URL }}
+          LIVEKIT_API_KEY: ${{ env.LIBERTE_SFU_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ env.LIBERTE_SFU_API_SECRET }}
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug:${LD_LIBRARY_PATH:-}"
+          dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" bash -euc '
+            fluxbox > .ci-output/cef-runtime/fluxbox-sfu.log 2>&1 &
+            wm_pid=$!
+            trap "kill $wm_pid 2>/dev/null || true" EXIT
+            for attempt in $(seq 1 30); do
+              if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; then break; fi
+              sleep 0.1
+            done
+            xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
+            python scripts/native_sfu.py --driver cef --application target/debug/liberte-client --server target/release/liberte-server --artifacts .ci-output/native-sfu
+          '
       - name: Stop the test audio output
         if: always()
         run: |
@@ -499,11 +641,13 @@ jobs:
             .ci-output/native-smoke
             .ci-output/native-integration
             .ci-output/native-media
+            .ci-output/native-sfu
             .ci-output/cef-runtime
           if-no-files-found: warn
       - name: Require every compilation, server and native verification
         if: always()
         env:
+          UPDATER_TESTS: ${{ needs.updater-tests.result }}
           FORMAT: ${{ steps.format.outcome }}
           CHECK: ${{ steps.check.outcome }}
           TESTS: ${{ steps.tests.outcome }}
@@ -518,10 +662,12 @@ jobs:
           NATIVE_SMOKE: ${{ steps.native_smoke.outcome }}
           NATIVE_INTEGRATION: ${{ steps.native_integration.outcome }}
           NATIVE_MEDIA: ${{ steps.native_media.outcome }}
+          SFU_SERVER: ${{ steps.native_sfu_server.outcome }}
+          NATIVE_SFU: ${{ steps.native_sfu.outcome }}
         run: |
           python - <<'PY'
           import os
-          names = ('FORMAT', 'CHECK', 'TESTS', 'CLIPPY', 'CDP_HELPERS', 'SERVER_BUILD', 'SERVER_SMOKE', 'PRODUCTION', 'SANDBOX', 'QA_BUILD', 'QA_SANDBOX', 'NATIVE_SMOKE', 'NATIVE_INTEGRATION', 'NATIVE_MEDIA')
+          names = ('UPDATER_TESTS', 'FORMAT', 'CHECK', 'TESTS', 'CLIPPY', 'CDP_HELPERS', 'SERVER_BUILD', 'SERVER_SMOKE', 'PRODUCTION', 'SANDBOX', 'QA_BUILD', 'QA_SANDBOX', 'NATIVE_SMOKE', 'NATIVE_INTEGRATION', 'NATIVE_MEDIA', 'SFU_SERVER', 'NATIVE_SFU')
           failures = {name: os.environ.get(name, 'missing') for name in names if os.environ.get(name) != 'success'}
           if failures:
               raise SystemExit(f'CEF prototype verification failed: {failures}')
@@ -545,7 +691,7 @@ jobs:
           (destination / 'SHA256SUMS').write_text(''.join(f'{digest}  {name}\n' for name, digest in sorted(hashes.items())))
           lock = tomllib.loads((root / 'Cargo.lock').read_text())['package']
           versions = {item['name']: item['version'] for item in lock if item['name'] in ('cef', 'cef-dll-sys', 'tauri', 'tauri-runtime-cef')}
-          provenance = {'commit': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'], 'runner': 'ubuntu-24.04', 'rust': subprocess.check_output(['rustc', '--version'], text=True).strip(), 'runtime_versions': versions, 'files': hashes, 'production_client_sha256': sha256(root / 'target/release/liberte-client'), 'qa_client_sha256': sha256(root / 'target/debug/liberte-client'), 'qa_feature': 'qa-media-devices', 'qa_in_artifact': False, 'status': 'experimental unsigned CEF migration prototype; no release publication', 'media_scope': 'synthetic capture and automated permission selection; no physical microphone/camera or manual permission-dialog validation'}
+          provenance = {'commit': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'], 'runner': 'ubuntu-24.04', 'rust': subprocess.check_output(['rustc', '--version'], text=True).strip(), 'runtime_versions': versions, 'files': hashes, 'production_client_sha256': sha256(root / 'target/release/liberte-client'), 'qa_client_sha256': sha256(root / 'target/debug/liberte-client'), 'qa_feature': 'qa-media-devices', 'qa_in_artifact': False, 'status': 'experimental unsigned CEF migration prototype; no release publication', 'media_scope': 'mesh and encrypted SFU with synthetic capture, independent wrong-key CEF publisher and automated permission selection; no physical microphone/camera or manual permission-dialog validation'}
           (destination / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
           print(json.dumps(provenance, indent=2))
           PY
@@ -554,3 +700,112 @@ jobs:
           name: cef-prototype-linux-${{ github.sha }}
           path: .ci-output/cef-package
           if-no-files-found: error
+
+  wry-desktop:
+    name: Tauri 3 Wry package and server smoke (${{ matrix.label }})
+    needs: [lockfile, frontend, updater-tests, rust-audit]
+    if: always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            label: windows-x86_64
+            bundle: nsis
+            server: target/release/liberte-server.exe
+          - runner: macos-14
+            label: macos-aarch64
+            bundle: app
+            server: target/release/liberte-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-lock
+          path: frontend
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cef-prototype-wry-${{ matrix.label }}
+          cache-on-failure: true
+      - run: npm ci
+        working-directory: frontend
+      - name: Disable release updating in unsigned prototype packages
+        run: python scripts/ci.py prepare-updater
+      - name: Build the Wry desktop package without Linux QA features
+        id: desktop_build
+        continue-on-error: true
+        working-directory: crates/liberte-client
+        run: node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --bundles ${{ matrix.bundle }} --config tauri-ci.conf.json -- --locked
+      - name: Build the platform server
+        id: server_build
+        continue-on-error: true
+        run: cargo build --release --locked --bin liberte-server
+      - name: Exercise the real platform server health and authentication API
+        id: server_smoke
+        if: steps.server_build.outcome == 'success'
+        continue-on-error: true
+        run: python scripts/ci.py smoke --binary ${{ matrix.server }}
+      - name: Require platform builds, server smoke and dependency verification
+        if: always()
+        shell: python
+        env:
+          FRONTEND: ${{ needs.frontend.result }}
+          UPDATER: ${{ needs.updater-tests.result }}
+          RUST_AUDIT: ${{ needs.rust-audit.result }}
+          DESKTOP: ${{ steps.desktop_build.outcome }}
+          SERVER_BUILD: ${{ steps.server_build.outcome }}
+          SERVER_SMOKE: ${{ steps.server_smoke.outcome }}
+        run: |
+          import os
+          names = ('FRONTEND', 'UPDATER', 'RUST_AUDIT', 'DESKTOP', 'SERVER_BUILD', 'SERVER_SMOKE')
+          failures = {name: os.environ.get(name, 'missing') for name in names if os.environ.get(name) != 'success'}
+          if failures:
+              raise SystemExit(f'Wry prototype verification failed: {failures}')
+      - name: Collect the package, server and explicit verification scope
+        shell: python
+        env:
+          PACKAGE_LABEL: ${{ matrix.label }}
+          SERVER_PATH: ${{ matrix.server }}
+        run: |
+          import hashlib, json, os, pathlib, shutil, subprocess, sys, tomllib
+          subprocess.run([sys.executable, 'scripts/ci.py', 'package-desktop', '--label', os.environ['PACKAGE_LABEL']], check=True)
+          destination = pathlib.Path('.ci-output/desktop')
+          server = pathlib.Path(os.environ['SERVER_PATH'])
+          copied = destination / server.name
+          shutil.copy2(server, copied)
+          with copied.open('rb') as stream:
+              server_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+          with (destination / 'SHA256SUMS').open('a', encoding='utf-8') as output:
+              output.write(f'{server_hash}  {copied.name}\n')
+          metadata_path = destination / 'build.json'
+          metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+          lock = tomllib.loads(pathlib.Path('Cargo.lock').read_text(encoding='utf-8'))['package']
+          metadata.update(status='experimental unsigned Tauri 3 Wry migration prototype', run_id=os.environ['GITHUB_RUN_ID'], runtime_packages=[{'name': item['name'], 'version': item['version']} for item in lock if item['name'] in ('tauri', 'tauri-runtime-wry', 'wry')], server={'file': copied.name, 'sha256': server_hash}, verification={'desktop': 'compiled and packaged; native UI and media not exercised on this OS', 'server': 'real loopback health, version, admin credential and unauthenticated API rejection smoke', 'qa_media_devices': False})
+          metadata_path.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(metadata, indent=2))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wry-prototype-${{ matrix.label }}-${{ github.sha }}
+          path: .ci-output/desktop
+          if-no-files-found: error
+          retention-days: 14

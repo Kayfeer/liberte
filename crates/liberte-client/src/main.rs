@@ -5,4 +5,3 @@
 fn main() {
     liberte_client_lib::run();
 }
-
