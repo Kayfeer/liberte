@@ -235,7 +235,8 @@ pub async fn save_received_file(
             .filter(|p| !p.as_os_str().is_empty())
             .ok_or("Destination invalide")?;
         let mut temp = NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-        std::io::copy(&mut { source }, &mut temp).map_err(|e| e.to_string())?;
+        let mut source = source;
+        std::io::copy(&mut source, &mut temp).map_err(|e| e.to_string())?;
         temp.as_file().sync_all().map_err(|e| e.to_string())?;
         temp.persist(destination).map_err(|e| e.to_string())?;
         Ok(())

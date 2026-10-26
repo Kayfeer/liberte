@@ -19,6 +19,10 @@ La branche 2.4.0 est une version de stabilisation avec un protocole incompatible
 
 Les adresses IP sont visibles par les pairs directs. Il n'y a pas de confidentialité persistante au niveau des messages après compromission d'une clé de canal, ni de suppression garantie chez les destinataires.
 
+La messagerie fonctionne entre participants connectés. « Envoyé » signifie que GossipSub a accepté la publication, pas que chaque destinataire l'a reçue ou lue. L'historique est local : il n'y a ni boîte d'envoi hors ligne ni rattrapage automatique des messages manqués. Sans pair abonné, l'envoi renvoie une erreur. Les fichiers disposent, eux, d'une confirmation après vérification de leur contenu.
+
+Pour utiliser un relais Internet, suivre le [parcours de configuration P2P](wiki/Configuration.md#connexion-p2p-et-relais-internet). Renseigner l'URL HTTP du serveur ne connecte pas automatiquement son relais QUIC.
+
 ## Structure
 
 - `liberte-shared` : identité, cryptographie et protocole.
@@ -58,7 +62,7 @@ node ../../frontend/node_modules/@tauri-apps/cli/tauri.js dev
 
 Si `Cargo.lock` manque sur la branche de migration, exécuter `python scripts/ci.py lockfile`, examiner le résultat et versionner le fichier. Le workflow CI peut aussi fournir cet artefact. Les releases restent bloquées tant que le lockfile n'est pas versionné. Ne pas remplacer systématiquement `--locked` par une résolution libre.
 
-Sur Ubuntu, installer notamment `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libglib2.0-dev libasound2-dev patchelf libssl-dev pkg-config`. Pour les médias WebKitGTK, installer aussi `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libnice10` et vérifier le support WebRTC de la distribution. Sur Windows, installer les outils de compilation C++ de Visual Studio et WebView2.
+Sur Ubuntu, installer notamment `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libglib2.0-dev libasound2-dev patchelf libssl-dev pkg-config`. Pour les médias WebKitGTK, installer aussi `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-nice` et vérifier le support WebRTC de la distribution. Sur Windows, installer les outils de compilation C++ de Visual Studio et WebView2.
 
 ## Serveur auto-hébergé
 

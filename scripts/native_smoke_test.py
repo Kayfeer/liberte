@@ -1,5 +1,6 @@
 """Fail-closed checks for the native test harness, without starting any app."""
 import json
+import http.client
 import unittest
 from unittest import mock
 
@@ -28,6 +29,48 @@ class NativeHarnessTests(unittest.TestCase):
         action = mock.Mock(side_effect=native_smoke.WebDriverError("no such element", "missing"))
         with self.assertRaises(TimeoutError):
             native_smoke.until(action, "identity", timeout=0)
+
+    def test_only_idempotent_webdriver_reads_retry_dropped_connections(self):
+        for method, path in (("GET", "/url"), ("POST", "/element"), ("POST", "/elements")):
+            client = native_smoke.NativeSession.__new__(native_smoke.NativeSession)
+            client.session = "synthetic-session"
+            client.request = mock.Mock(side_effect=[http.client.RemoteDisconnected(), "read-result"])
+            with mock.patch.object(native_smoke.time, "sleep"):
+                self.assertEqual(client.command(method, path), "read-result")
+            self.assertEqual(client.request.call_count, 2)
+
+    def test_mutations_and_ipc_are_never_retried_after_transport_failure(self):
+        for method, path in (("POST", "/element/id/click"), ("POST", "/element/id/value"),
+                             ("POST", "/execute/async"), ("POST", "/execute/sync"),
+                             ("POST", "/refresh"), ("DELETE", "")):
+            client = native_smoke.NativeSession.__new__(native_smoke.NativeSession)
+            client.session = "synthetic-session"
+            client.request = mock.Mock(side_effect=http.client.RemoteDisconnected())
+            with self.assertRaises(http.client.RemoteDisconnected):
+                client.command(method, path)
+            client.request.assert_called_once()
+
+    def test_read_retries_are_bounded_and_protocol_errors_remain_failures(self):
+        client = native_smoke.NativeSession.__new__(native_smoke.NativeSession)
+        client.session = "synthetic-session"
+        client.request = mock.Mock(side_effect=http.client.RemoteDisconnected())
+        with mock.patch.object(native_smoke.time, "sleep"), self.assertRaises(http.client.RemoteDisconnected):
+            client.command("GET", "/url")
+        self.assertEqual(client.request.call_count, 3)
+        client.request = mock.Mock(side_effect=native_smoke.WebDriverError("unknown error", "crash"))
+        with self.assertRaises(native_smoke.WebDriverError):
+            client.command("GET", "/url")
+        client.request.assert_called_once()
+
+    def test_diagnostic_tail_redacts_secrets_and_opaque_payloads(self):
+        secret = "a" * 64
+        archive = "Q" * 300
+        raw = f"WebKit warning: connection closed\nsecret_key_hex={secret}\n{archive}\ninvite=short-bearer\nGTK error: no display"
+        tail = native_smoke.sanitize_diagnostic_tail(raw)
+        self.assertIn("connection closed", tail)
+        self.assertIn("GTK error: no display", tail)
+        for sensitive in (secret, archive, "short-bearer"):
+            self.assertNotIn(sensitive, tail)
 
     def test_dev_server_or_external_page_does_not_count_as_native_bundle(self):
         native_smoke.require_bundled_origin("tauri://localhost/index.html")

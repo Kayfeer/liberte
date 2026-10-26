@@ -12,7 +12,7 @@ pub struct LiberteBehaviour {
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
     pub relay_client: relay::client::Behaviour,
-    pub dcutr: dcutr::Behaviour,
+    pub dcutr: libp2p::swarm::behaviour::toggle::Toggle<dcutr::Behaviour>,
     pub mdns: libp2p::swarm::behaviour::toggle::Toggle<mdns::tokio::Behaviour>,
 }
 

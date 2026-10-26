@@ -11,6 +11,14 @@ pub fn build_swarm_with_discovery(
     keypair: Keypair,
     enable_mdns: bool,
 ) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
+    build_swarm_with_options(keypair, enable_mdns, true)
+}
+
+pub(crate) fn build_swarm_with_options(
+    keypair: Keypair,
+    enable_mdns: bool,
+    enable_dcutr: bool,
+) -> anyhow::Result<libp2p::Swarm<super::behaviour::LiberteBehaviour>> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     use std::time::Duration;
@@ -81,7 +89,7 @@ pub fn build_swarm_with_discovery(
                         .with_interval(Duration::from_secs(60));
                 let identify = identify::Behaviour::new(identify_config);
 
-                let dcutr = dcutr::Behaviour::new(local_peer_id);
+                let dcutr = enable_dcutr.then(|| dcutr::Behaviour::new(local_peer_id));
                 let mdns = if enable_mdns {
                     match libp2p::mdns::tokio::Behaviour::new(libp2p::mdns::Config::default(), local_peer_id) {
                         Ok(discovery) => Some(discovery),
@@ -94,7 +102,7 @@ pub fn build_swarm_with_discovery(
                     kademlia,
                     identify,
                     relay_client,
-                    dcutr,
+                    dcutr: dcutr.into(),
                     mdns: mdns.into(),
                 })
             },

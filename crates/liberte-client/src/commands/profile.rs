@@ -316,33 +316,69 @@ mod tests {
         assert_eq!(stored, hex::encode(identity.secret_bytes()));
         // Reopen like a fresh application start: connection configuration survives too.
         drop(db);
-        let reopened = Database::open_at(&dir.path().join("profile.db"), &identity.derive_db_key()).unwrap();
-        let settings: String = reopened.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
-        let settings: crate::commands::settings::AppSettings = serde_json::from_str(&settings).unwrap();
+        let reopened =
+            Database::open_at(&dir.path().join("profile.db"), &identity.derive_db_key()).unwrap();
+        let settings: String = reopened
+            .conn()
+            .query_row("SELECT json FROM app_settings WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let settings: crate::commands::settings::AppSettings =
+            serde_json::from_str(&settings).unwrap();
         assert_eq!(settings.server_url, "https://backup.example.test");
         assert_eq!(settings.display_name.as_deref(), Some("Restored"));
-        assert_eq!(reopened.get_channel_key(channel.id).unwrap(), hex::encode([9; 32]));
+        assert_eq!(
+            reopened.get_channel_key(channel.id).unwrap(),
+            hex::encode([9; 32])
+        );
     }
 
     #[test]
     fn legacy_profile_keeps_existing_settings_and_invalid_server_rolls_back() {
         let dir = tempfile::tempdir().unwrap();
         let identity = Identity::generate();
-        let db = Database::open_at(&dir.path().join("legacy.db"), &identity.derive_db_key()).unwrap();
-        db.conn().execute_batch("CREATE TABLE app_settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL);").unwrap();
-        db.conn().execute("INSERT INTO app_settings VALUES(1,?1)", params![r#"{"serverUrl":"https://existing.example.test","notificationsEnabled":false}"#]).unwrap();
+        let db =
+            Database::open_at(&dir.path().join("legacy.db"), &identity.derive_db_key()).unwrap();
+        db.conn()
+            .execute_batch(
+                "CREATE TABLE app_settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL);",
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO app_settings VALUES(1,?1)",
+                params![
+                    r#"{"serverUrl":"https://existing.example.test","notificationsEnabled":false}"#
+                ],
+            )
+            .unwrap();
         let mut value = serde_json::to_value(payload(&identity)).unwrap();
         value.as_object_mut().unwrap().remove("serverUrl");
         let mut legacy: ProfilePayload = serde_json::from_value(value).unwrap();
         restore_profile(&db, &legacy, &identity).unwrap();
-        let settings: String = db.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
-        let settings: crate::commands::settings::AppSettings = serde_json::from_str(&settings).unwrap();
+        let settings: String = db
+            .conn()
+            .query_row("SELECT json FROM app_settings WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let settings: crate::commands::settings::AppSettings =
+            serde_json::from_str(&settings).unwrap();
         assert_eq!(settings.server_url, "https://existing.example.test");
         assert!(!settings.notifications_enabled);
         legacy.server_url = Some("http://remote.example.test".into());
-        let fresh = Database::open_at(&dir.path().join("invalid.db"), &identity.derive_db_key()).unwrap();
+        let fresh =
+            Database::open_at(&dir.path().join("invalid.db"), &identity.derive_db_key()).unwrap();
         assert!(restore_profile(&fresh, &legacy, &identity).is_err());
-        let identity_table: bool = fresh.conn().query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='local_identity')", [], |row| row.get(0)).unwrap();
+        let identity_table: bool = fresh
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='local_identity')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert!(!identity_table);
         assert!(fresh.list_channels().unwrap().is_empty());
     }

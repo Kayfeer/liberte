@@ -36,22 +36,29 @@ impl Default for AppSettings {
 }
 
 fn ensure_settings_table(db: &liberte_store::Database) -> Result<(), String> {
-    db.conn().execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (
+    db.conn()
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             json TEXT NOT NULL
         );",
-    ).map_err(|e| format!("Cannot open settings: {e}"))
+        )
+        .map_err(|e| format!("Cannot open settings: {e}"))
 }
 
 pub(crate) fn read_settings(db: &liberte_store::Database) -> Result<AppSettings, String> {
     ensure_settings_table(db)?;
-    let json: Option<String> = db.conn()
-        .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| row.get(0))
+    let json: Option<String> = db
+        .conn()
+        .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+            row.get(0)
+        })
         .optional()
         .map_err(|e| format!("Cannot read settings: {e}"))?;
     match json {
-        Some(json) => serde_json::from_str(&json).map_err(|e| format!("Corrupt settings JSON: {e}")),
+        Some(json) => {
+            serde_json::from_str(&json).map_err(|e| format!("Corrupt settings JSON: {e}"))
+        }
         None => Ok(AppSettings::default()),
     }
 }
@@ -72,7 +79,11 @@ fn persist_settings(state: &mut AppState, mut settings: AppSettings) -> Result<(
     if !settings.server_url.is_empty() {
         crate::server_client::endpoint(&settings.server_url, "/info")?;
     }
-    if settings.display_name.as_ref().is_some_and(|name| name.len() > 128) {
+    if settings
+        .display_name
+        .as_ref()
+        .is_some_and(|name| name.len() > 128)
+    {
         return Err("Nom trop long (128 octets maximum)".into());
     }
     let db = state.database.as_ref().ok_or("Database not opened")?;
@@ -150,18 +161,47 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.db");
         let mut state = test_state(&path);
-        persist_settings(&mut state, AppSettings { server_url: " https://one.example.test ".into(), ..Default::default() }).unwrap();
+        persist_settings(
+            &mut state,
+            AppSettings {
+                server_url: " https://one.example.test ".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(state.server_url, "https://one.example.test");
-        assert_eq!(read_settings(state.database.as_ref().unwrap()).unwrap().server_url, state.server_url);
+        assert_eq!(
+            read_settings(state.database.as_ref().unwrap())
+                .unwrap()
+                .server_url,
+            state.server_url
+        );
         state.database.as_ref().unwrap().conn().execute_batch(
             "CREATE TRIGGER reject_settings BEFORE UPDATE ON app_settings BEGIN SELECT RAISE(ABORT,'write failed'); END;"
         ).unwrap();
-        assert!(persist_settings(&mut state, AppSettings { server_url: "https://two.example.test".into(), ..Default::default() }).is_err());
+        assert!(persist_settings(
+            &mut state,
+            AppSettings {
+                server_url: "https://two.example.test".into(),
+                ..Default::default()
+            }
+        )
+        .is_err());
         assert_eq!(state.server_url, "https://one.example.test");
-        assert_eq!(read_settings(state.database.as_ref().unwrap()).unwrap().server_url, state.server_url);
+        assert_eq!(
+            read_settings(state.database.as_ref().unwrap())
+                .unwrap()
+                .server_url,
+            state.server_url
+        );
         drop(state);
         let reopened = test_state(&path);
-        assert_eq!(read_settings(reopened.database.as_ref().unwrap()).unwrap().server_url, "https://one.example.test");
+        assert_eq!(
+            read_settings(reopened.database.as_ref().unwrap())
+                .unwrap()
+                .server_url,
+            "https://one.example.test"
+        );
     }
 
     #[test]
@@ -170,7 +210,9 @@ mod tests {
         let state = test_state(&dir.path().join("corrupt.db"));
         let db = state.database.as_ref().unwrap();
         assert!(read_settings(db).unwrap().server_url.is_empty());
-        db.conn().execute("INSERT INTO app_settings VALUES(1,'broken json')", []).unwrap();
+        db.conn()
+            .execute("INSERT INTO app_settings VALUES(1,'broken json')", [])
+            .unwrap();
         assert!(read_settings(db).is_err());
         db.conn().execute_batch("DROP TABLE app_settings; CREATE TABLE app_settings (id INTEGER PRIMARY KEY, wrong_column TEXT);").unwrap();
         assert!(read_settings(db).is_err());

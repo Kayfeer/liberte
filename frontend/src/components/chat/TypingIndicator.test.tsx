@@ -4,7 +4,7 @@ import TypingIndicator from "./TypingIndicator";
 const mocks = vi.hoisted(() => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => mocks);
 type Callback = (event: { payload: { channelId: string; userId: string; displayName: string } }) => void;
-beforeEach(() => mocks.listen.mockReset());
+beforeEach(() => { mocks.listen.mockReset(); });
 describe("typing subscription", () => {
   it("ignores a late event from the previous channel and disposes its late registration", async () => {
     const callbacks: Callback[] = [];

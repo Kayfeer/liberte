@@ -285,9 +285,13 @@ impl Database {
         // wrong channel key. Detect this before committing an unreadable history.
         let mut message_keys = validated.keys.clone();
         for msg in &validated.messages {
-            if let std::collections::hash_map::Entry::Vacant(entry) = message_keys.entry(msg.channel_id) {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                message_keys.entry(msg.channel_id)
+            {
                 match self.get_channel_key(msg.channel_id) {
-                    Ok(key) => { entry.insert(key); }
+                    Ok(key) => {
+                        entry.insert(key);
+                    }
                     Err(StoreError::NotFound) => {}
                     Err(error) => return Err(error),
                 }

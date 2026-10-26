@@ -25,6 +25,22 @@ async fn request_with_timeout<T>(
     .map_err(|_| "Network operation timed out".to_string())?
 }
 
+/// Publish a background announcement once, without waiting for a remote subscription.
+/// Success confirms local GossipSub acceptance, not remote delivery.
+pub async fn publish_once(
+    cmd_tx: &mpsc::Sender<SwarmCommand>,
+    topic: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    let (reply, receiver) = oneshot::channel();
+    request_with_timeout(
+        cmd_tx,
+        SwarmCommand::PublishConfirmed { topic, data, reply },
+        receiver,
+        std::time::Duration::from_secs(15),
+    ).await?
+}
+
 /// Confirms acceptance by GossipSub, not delivery/read by a remote recipient.
 pub async fn publish_confirmed(
     cmd_tx: &mpsc::Sender<SwarmCommand>,
@@ -39,15 +55,21 @@ pub async fn publish_confirmed(
         let (reply, receiver) = oneshot::channel();
         let result = request_with_timeout(
             cmd_tx,
-            SwarmCommand::PublishConfirmed { topic: topic.clone(), data: data.clone(), reply },
+            SwarmCommand::PublishConfirmed {
+                topic: topic.clone(),
+                data: data.clone(),
+                reply,
+            },
             receiver,
             operation_deadline.saturating_duration_since(tokio::time::Instant::now()),
-        ).await?;
+        )
+        .await?;
         // A transport connection precedes the GossipSub subscription handshake.
         // This particular failure has not entered GossipSub's duplicate cache;
         // retrying the same authenticated envelope cannot duplicate a publication.
         if result.as_ref().is_err_and(|error| error == &no_subscribers)
-            && tokio::time::Instant::now() < subscription_deadline {
+            && tokio::time::Instant::now() < subscription_deadline
+        {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             continue;
         }
@@ -80,7 +102,8 @@ pub async fn dial_addresses_confirmed(
         SwarmCommand::DialAddressesConfirmed { addresses, reply },
         receiver,
         std::time::Duration::from_secs(15),
-    ).await?
+    )
+    .await?
 }
 
 pub async fn network_snapshot(

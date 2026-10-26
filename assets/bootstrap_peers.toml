@@ -1,9 +1,10 @@
-# Bootstrap peers for initial network discovery.
-# Add your relay server's multiaddress here after deployment.
+# Optional bootstrap peers. No public bootstrap is provided by default.
+# Set LIBERTE_BOOTSTRAP_PEERS to this file's absolute path in the client process
+# environment before launching. See wiki/Configuration.md for the manual UI path.
+# Copy the actual PeerId from the relay server logs; keep its data volume.
 
 [[peers]]
-# Example: Your VPS relay server
+# Replace both placeholders before uncommenting. /dns, /dns4 and /dns6 use DoH.
+# addr = "/dns4/relay.your-domain.example/udp/4001/quic-v1/p2p/YOUR_PEER_ID"
+# An IPv4 address is also supported:
 # addr = "/ip4/YOUR_SERVER_IP/udp/4001/quic-v1/p2p/YOUR_PEER_ID"
-
-# Placeholder - replace with actual bootstrap peer
-addr = "/ip4/127.0.0.1/udp/4001/quic-v1"

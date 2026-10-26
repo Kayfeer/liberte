@@ -8,8 +8,10 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -68,6 +70,20 @@ def until(action, description, timeout=30):
         if time.monotonic() >= deadline:
             raise TimeoutError(f"Timed out waiting for {description}; last error: {last_error}")
         time.sleep(0.2)
+
+
+def sanitize_diagnostic_tail(raw):
+    """Keep bounded diagnostics, excluding credentials and opaque payloads."""
+    raw = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw)
+    lines = []
+    for line in raw.splitlines()[-120:]:
+        if re.search(r"secret|password|token|invitation|invite|channel.?key|key_hex|private|ciphertext|encrypted|archive|backup", line, re.IGNORECASE):
+            lines.append("[sensitive diagnostic line omitted]")
+            continue
+        # Includes hexadecimal identities, bearer invites, base64 archives and URLs.
+        line = re.sub(r"[A-Za-z0-9_+/=.-]{32,}", "[opaque value omitted]", line)
+        lines.append(line[:2000])
+    return "\n".join(lines)[-12000:]
 
 
 def decode_ipc_result(name, result):
@@ -130,7 +146,17 @@ class NativeSession:
     def command(self, method, path, data=None, timeout=20):
         if not self.session:
             raise RuntimeError("No native WebDriver session was established")
-        return self.request(method, f"/session/{urllib.parse.quote(self.session, safe='')}{path}", data, timeout=timeout)
+        # A read can safely be repeated after a dropped control connection.
+        # Clicks, typing, scripts/IPC and all other mutations are never retried.
+        read_only = method == "GET" or (method == "POST" and path in {"/element", "/elements"})
+        for attempt in range(3):
+            try:
+                return self.request(method, f"/session/{urllib.parse.quote(self.session, safe='')}{path}", data, timeout=timeout)
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
+                if not read_only or attempt == 2:
+                    raise
+                print(f"Native WebDriver read transport interrupted; retry {attempt + 1}/2 ({method} {path.split('/')[1]})", flush=True)
+                time.sleep(0.15 * (attempt + 1))
 
     def __enter__(self):
         self.log = (self.artifacts / f"{self.label}-driver.log").open("wb")
@@ -162,7 +188,7 @@ class NativeSession:
             self.command("POST", "/timeouts", {"implicit": 0, "pageLoad": 30000, "script": 10000})
             return self
         except BaseException:
-            self.close()
+            self.close(diagnostics=True)
             raise
 
     def find(self, selector, using="css selector"):
@@ -222,7 +248,8 @@ class NativeSession:
             "base64": base64.b64encode(data).decode("ascii"),
         }), flush=True)
 
-    def close(self):
+    def close(self, diagnostics=False):
+        alive = self.process is not None and self.process.poll() is None
         if self.session:
             try:
                 self.command("DELETE", "")
@@ -246,8 +273,17 @@ class NativeSession:
             self.process.wait(timeout=5)
             self.process = None
         if self.log:
+            path = Path(self.log.name)
             self.log.close()
             self.log = None
+            with path.open("rb") as source:
+                source.seek(max(0, path.stat().st_size - 65536))
+                tail = sanitize_diagnostic_tail(source.read().decode("utf-8", errors="replace"))
+            path.write_bytes((tail + "\n").encode("utf-8"))
+            if diagnostics:
+                print("CODEX_NATIVE_DIAGNOSTIC " + json.dumps({
+                    "client": self.label, "driverAliveBeforeCleanup": alive, "tail": tail,
+                }), flush=True)
 
     def __exit__(self, error_type, error, traceback):
         if error is not None and self.session:
@@ -255,7 +291,7 @@ class NativeSession:
                 self.screenshot(f"{self.label}-failure.png")
             except Exception as capture_error:
                 print(f"Could not capture native failure screenshot: {capture_error}", file=sys.stderr)
-        self.close()
+        self.close(diagnostics=error is not None)
 
 
 def run_smoke(application, driver, artifacts):

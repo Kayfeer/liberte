@@ -12,7 +12,8 @@ Terminer une application pleinement fonctionnelle sur `codex/complete-liberte`, 
 - Sauvegardes locales, portables et distantes chiffrées, restauration validée.
 - API serveur authentifiée, propriétaires isolés, quotas et état persistant.
 - Interface vérifiée, sans commande factice ni succès simulé.
-- Client Linux lancé réellement en CI : création d'identité et de canal, puis persistance après redémarrage.
+- Deux clients Linux lancés réellement en CI : invitation avant redémarrage, messages bidirectionnels, réactions, fichier reçu avec intégrité vérifiée, reconnexion après redémarrage, sauvegarde et restauration distante dans un profil neuf.
+- Appels entre deux clients natifs avec moteur WebKit et signalisation Rust réels ; capture synthétique et autorisation WebDriver identifiées séparément des essais matériels.
 - Tests, compilation, formatage, Clippy, audits et smoke Docker validés sur le même commit.
 - Paquets Windows, Linux et macOS construits sur ce commit et conservés en artefacts CI.
 - Documentation de configuration, migration et limites conforme au comportement livré.
@@ -27,4 +28,4 @@ Serveur distant, HTTPS/WSS, TURN et LiveKit nécessitent une configuration opér
 
 La [PR #2](https://github.com/Kayfeer/liberte/pull/2) regroupe l'implémentation et le bilan de validation. Les [exécutions CI de la branche](https://github.com/Kayfeer/liberte/actions?query=branch%3Acodex%2Fcomplete-liberte) fournissent les résultats et les installateurs, identifiés par commit et SHA-256.
 
-La livraison est validée lorsque tous les contrôles du dernier commit passent, y compris le lancement du client Linux. Les vérifications sur des périphériques physiques et des réseaux distincts restent explicitement séparées des preuves automatisées. Le document [Démarrer](wiki/Getting-Started.md) décrit leur parcours.
+La livraison est validée lorsque tous les contrôles du dernier commit passent, y compris les parcours entre deux clients natifs et le serveur réel. Un résultat antérieur ne valide pas un nouveau correctif ; les simples compilations ne valident pas les parcours utilisateur. Les vérifications sur des périphériques physiques et des réseaux distincts restent explicitement séparées des preuves automatisées. Le document [Démarrer](wiki/Getting-Started.md) décrit leur parcours.

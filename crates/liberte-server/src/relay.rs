@@ -145,6 +145,10 @@ pub async fn spawn_relay(config: &ServerConfig) -> anyhow::Result<PeerId> {
 }
 
 #[cfg(test)]
+#[path = "relay_tests.rs"]
+mod integration_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

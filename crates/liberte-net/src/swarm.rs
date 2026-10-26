@@ -2,16 +2,16 @@ use std::{collections::HashMap, path::PathBuf, time::{Duration, Instant}};
 
 use futures::StreamExt;
 use libp2p::{
-    gossipsub, identify, kad, multiaddr::Protocol, relay,
+    core::transport::ListenerId, gossipsub, identify, kad, multiaddr::Protocol, relay,
     swarm::{dial_opts::{DialOpts, PeerCondition}, ConnectionId, SwarmEvent}, Multiaddr, PeerId,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::behaviour::LiberteEvent;
-use crate::discovery::load_bootstrap_peers;
+use crate::discovery::{load_bootstrap_peers, resolve_bootstrap_peers};
 use crate::peers::PeerTracker;
-use crate::transport::build_swarm_with_discovery;
+use crate::transport::build_swarm_with_options;
 
 use liberte_shared::constants::DEFAULT_QUIC_PORT;
 
@@ -26,6 +26,39 @@ struct ReconnectTarget {
     addresses: Vec<Multiaddr>,
     failures: u32,
     next_attempt: Instant,
+}
+
+struct RelayReservationState {
+    address: Multiaddr,
+    listener: Option<ListenerId>,
+    failures: u32,
+    next_attempt: Instant,
+}
+
+impl RelayReservationState {
+    fn retry_later(&mut self) {
+        self.listener = None;
+        self.failures = self.failures.saturating_add(1);
+        self.next_attempt = Instant::now() + Duration::from_secs((1u64 << self.failures.min(6)).min(60));
+    }
+}
+
+fn request_reservation(
+    swarm: &mut libp2p::Swarm<crate::behaviour::LiberteBehaviour>,
+    reservations: &mut HashMap<PeerId, RelayReservationState>,
+    peer: PeerId,
+    address: Multiaddr,
+) {
+    if reservations.contains_key(&peer) || reservations.len() >= 128 { return; }
+    let mut reservation = RelayReservationState { address, listener: None, failures: 0, next_attempt: Instant::now() };
+    match swarm.listen_on(reservation.address.clone()) {
+        Ok(listener) => reservation.listener = Some(listener),
+        Err(error) => {
+            reservation.retry_later();
+            warn!(%peer, %error, "Relay reservation failed; will retry");
+        }
+    }
+    reservations.insert(peer, reservation);
 }
 
 fn remember_target(targets: &mut HashMap<PeerId, ReconnectTarget>, addresses: &[Multiaddr]) {
@@ -114,6 +147,8 @@ pub struct SwarmConfig {
     pub listen_port: u16,
     pub extra_dials: Vec<Multiaddr>,
     pub enable_mdns: bool,
+    /// Upgrade relay circuits to direct connections when hole punching succeeds.
+    pub enable_dcutr: bool,
     pub loopback_only: bool,
 }
 
@@ -124,6 +159,7 @@ impl Default for SwarmConfig {
             listen_port: DEFAULT_QUIC_PORT,
             extra_dials: Vec::new(),
             enable_mdns: true,
+            enable_dcutr: true,
             loopback_only: false,
         }
     }
@@ -137,7 +173,7 @@ pub async fn spawn_swarm(
     mpsc::Receiver<SwarmNotification>,
     PeerId,
 )> {
-    let mut swarm = build_swarm_with_discovery(keypair, config.enable_mdns)?;
+    let mut swarm = build_swarm_with_options(keypair, config.enable_mdns, config.enable_dcutr)?;
     let local_peer_id = *swarm.local_peer_id();
 
     let listen_addr_v4: Multiaddr = format!(
@@ -175,6 +211,7 @@ pub async fn spawn_swarm(
 
     let bootstrap_addrs = config.bootstrap_peers_path.as_ref()
         .map(|path| load_bootstrap_peers(path)).unwrap_or_default();
+    let bootstrap_addrs = resolve_bootstrap_peers(bootstrap_addrs).await;
     let mut reconnect_targets = HashMap::new();
     for address in bootstrap_addrs.iter().chain(&config.extra_dials).take(1024) {
         remember_target(&mut reconnect_targets, std::slice::from_ref(address));
@@ -204,7 +241,7 @@ pub async fn spawn_swarm(
         let mut peer_tracker = PeerTracker::new();
         let mut pending_dials: Vec<PendingDial> = Vec::new();
         let mut maintenance = tokio::time::interval(std::time::Duration::from_secs(1));
-        let mut relay_reservations = std::collections::HashSet::new();
+        let mut relay_reservations: HashMap<PeerId, RelayReservationState> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -227,6 +264,19 @@ pub async fn spawn_swarm(
                         let options = DialOpts::peer_id(*peer).addresses(target.addresses.clone()).build();
                         if let Err(error) = swarm.dial(options) {
                             debug!(%peer, %error, "Reconnect attempt deferred");
+                        }
+                    }
+                    let mut attempts = 0;
+                    for (peer, reservation) in &mut relay_reservations {
+                        if attempts >= 4 { break; }
+                        if reservation.listener.is_some() || reservation.next_attempt > now || !swarm.is_connected(peer) { continue; }
+                        attempts += 1;
+                        match swarm.listen_on(reservation.address.clone()) {
+                            Ok(listener) => reservation.listener = Some(listener),
+                            Err(error) => {
+                                reservation.retry_later();
+                                debug!(%peer, %error, "Relay reservation retry deferred");
+                            }
                         }
                     }
                 }
@@ -278,7 +328,12 @@ pub async fn spawn_swarm(
                             }
                         }
                         Some(SwarmCommand::ListenRelay(address)) => {
-                            if let Err(e) = swarm.listen_on(address) { warn!(error=%e, "Relay reservation failed"); }
+                            let mut relay_address = address.clone();
+                            if matches!(relay_address.pop(), Some(Protocol::P2pCircuit)) {
+                                if let Some(peer) = target_peer_id(&relay_address) {
+                                    request_reservation(&mut swarm, &mut relay_reservations, peer, address);
+                                }
+                            }
                         }
                         Some(SwarmCommand::PublishConfirmed { topic, data, reply }) => {
                             let result = swarm.behaviour_mut().gossipsub.publish(gossipsub::IdentTopic::new(topic), data)
@@ -317,7 +372,7 @@ pub async fn spawn_swarm(
                             };
                             let snapshot = NetworkSnapshot {
                                 peers: peer_tracker.connected_peers().iter().map(ToString::to_string).collect(),
-                                connection_mode: if peer_tracker.direct_count() > 0 { "direct" } else if peer_tracker.relayed_count() > 0 { "relayed" } else { "disconnected" }.into(),
+                                connection_mode: if peer_tracker.relayed_count() > 0 { "relayed" } else if peer_tracker.direct_count() > 0 { "direct" } else { "disconnected" }.into(),
                                 listen_addresses: swarm.listeners().map(append_peer).collect(),
                                 external_addresses: swarm.external_addresses().map(append_peer).collect(),
                                 local_peer_id: local_peer_id.to_string(),
@@ -408,15 +463,12 @@ pub async fn spawn_swarm(
                                 let protocol = p.to_string();
                                 protocol.starts_with("/libp2p/circuit/relay/") && protocol.ends_with("/hop")
                             });
-                            if supports_relay && relay_reservations.insert(peer_id) {
+                            if supports_relay {
                                 if let Some(connection) = peer_tracker.get(&peer_id) {
                                     let mut circuit = connection.address.clone();
                                     if !matches!(circuit.iter().last(), Some(Protocol::P2p(_))) { circuit.push(Protocol::P2p(peer_id)); }
                                     circuit.push(Protocol::P2pCircuit);
-                                    if let Err(e) = swarm.listen_on(circuit) {
-                                        relay_reservations.remove(&peer_id);
-                                        warn!(error=%e, "Could not reserve relay circuit");
-                                    }
+                                    request_reservation(&mut swarm, &mut relay_reservations, peer_id, circuit);
                                 }
                             }
                         }
@@ -431,6 +483,9 @@ pub async fn spawn_swarm(
                                 relay = %relay_peer_id,
                                 "Relay reservation accepted"
                             );
+                            if let Some(reservation) = relay_reservations.get_mut(&relay_peer_id) {
+                                reservation.failures = 0;
+                            }
                             let relay_addr = swarm
                                 .external_addresses()
                                 .next()
@@ -494,7 +549,9 @@ pub async fn spawn_swarm(
                                 if let Some(target) = reconnect_targets.get_mut(&peer_id) {
                                     target.next_attempt = Instant::now() + Duration::from_secs(1);
                                 }
-                                relay_reservations.remove(&peer_id);
+                                if let Some(reservation) = relay_reservations.remove(&peer_id) {
+                                    if let Some(listener) = reservation.listener { swarm.remove_listener(listener); }
+                                }
                                 info!(peer = %peer_id, "Peer disconnected");
                                 let _ = notif_tx
                                     .send(SwarmNotification::PeerDisconnected { peer_id })
@@ -504,6 +561,20 @@ pub async fn spawn_swarm(
 
                         SwarmEvent::NewListenAddr { address, .. } => {
                             info!(addr = %address, "Listening on new address");
+                        }
+
+                        SwarmEvent::ListenerClosed { listener_id, reason, .. } => {
+                            if let Some((peer, reservation)) = relay_reservations.iter_mut()
+                                .find(|(_, reservation)| reservation.listener == Some(listener_id)) {
+                                reservation.retry_later();
+                                warn!(%peer, ?reason, "Relay listener closed; reservation will retry");
+                            }
+                        }
+
+                        SwarmEvent::ListenerError { listener_id, error } => {
+                            // ListenerError is explicitly non-terminal. Creating another
+                            // reservation here would duplicate a still-active listener.
+                            warn!(?listener_id, %error, "Listener reported a recoverable error");
                         }
 
                         SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error } => {

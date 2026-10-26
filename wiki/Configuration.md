@@ -32,6 +32,24 @@ Les noms et validations faisant autorité se trouvent dans `crates/liberte-serve
 
 Une configuration invalide empêche le démarrage. Un jeton administrateur non vide doit contenir au moins 32 caractères. `MAX_PEERS` accepte 1 à 4 096, pas zéro ; `MAX_HTTP_CONCURRENCY` accepte 1 à 64.
 
+## Connexion P2P et relais Internet
+
+Le client découvre les pairs sur le LAN. Sur Internet, fournir une adresse joignable directement ou utiliser un relais P2P. L'API HTTP, le relais QUIC et TURN remplissent des rôles distincts : l'URL du serveur de sauvegarde ne suffit pas à connecter les pairs.
+
+1. Sur le serveur, ouvrir UDP 4001 et configurer `PUBLIC_RELAY_ADDR` avec l'adresse publique réelle. Exemple à adapter : `PUBLIC_RELAY_ADDR=/ip4/203.0.113.10/udp/4001/quic-v1`. L'adresse `203.0.113.10` sert uniquement à la documentation. Le serveur peut écouter sur `LISTEN_ADDR=/ip4/0.0.0.0/udp/4001/quic-v1`, mais une adresse non spécifiée n'est pas une adresse publique.
+2. Démarrer le serveur et relever `peer_id` dans la ligne `Starting relay server` de ses journaux (`docker compose logs liberte-relay`). Conserver le volume de données : `relay-identity.key` maintient cet identifiant après redémarrage.
+3. Dans les paramètres réseau de chaque client, saisir sous **Adresse d'un pair ou d'un relais** une adresse complète telle que `/dns4/relay.votre-domaine.example/udp/4001/quic-v1/p2p/<PEER_ID>`, puis cliquer **Se connecter**. Remplacer le domaine et `<PEER_ID>` ; ne pas utiliser de crochets dans l'adresse réelle. Une adresse `/ip4/...` fonctionne également.
+4. Attendre l'apparition d'une adresse contenant `/p2p-circuit` dans **Vos adresses à partager**. La connexion au serveur et la réservation d'un circuit sont deux étapes distinctes. Sans cette adresse, vérifier l'annonce publique, UDP 4001 et les journaux avant de générer une invitation pour un correspondant derrière un autre NAT.
+5. Créer le canal puis une invitation récente. Les adresses de circuit sont prioritaires dans l'invitation. Après l'adhésion du correspondant, vérifier un message reçu dans chaque sens. Le statut réseau indique « relayé » dès qu'au moins une connexion utilise un circuit, même si le lien vers le serveur relais est direct.
+
+Les adresses explicites des invitations et des connexions manuelles sont enregistrées localement (128 pairs, 8 adresses par pair). Elles sont retentées au démarrage et après une déconnexion, avec un délai progressif plafonné à 60 secondes. Elles ne sont pas exportées dans les sauvegardes. Si les adresses IP ou ports ont changé, utiliser une nouvelle invitation ou reconnecter l'adresse du relais. Plusieurs clients sur une machine peuvent coexister : si le port par défaut 4001 est occupé, le second choisit un port disponible et partage ce port réel.
+
+### Bootstrap optionnel au démarrage
+
+La connexion manuelle ci-dessus suffit ; aucun bootstrap public n'est fourni par défaut. Pour un déploiement administré, copier `assets/bootstrap_peers.toml`, ajouter des lignes `addr = "..."` avec les identifiants des pairs, puis définir `LIBERTE_BOOTSTRAP_PEERS` sur le chemin absolu de ce fichier **dans l'environnement du processus client** avant son lancement. Un exemple commenté est fourni ; le fichier du dépôt n'est pas chargé automatiquement.
+
+Les formes `/dns`, `/dns4` et `/dns6` sont résolues par DNS-over-HTTPS, sans repli sur le DNS système. `/dnsaddr` n'est pas pris en charge. La résolution du bootstrap est bornée à 8 adresses résolues simultanément et 6 secondes au total (5 secondes par adresse). Une adresse non résolue est signalée dans les journaux et n'empêche pas le démarrage local ; la retenter ensuite avec **Se connecter**, ou redémarrer après correction. Les adresses résolues et les adresses IP sont ensuite reconnectées avec backoff. Le nom DNS est relu à chaque démarrage depuis le fichier bootstrap ; les adresses du cache de connexion manuelle sont les IP résolues au moment de leur enregistrement.
+
 ## HTTPS
 
 Le port 8080 est destiné au réseau local de la machine hôte ou à un proxy inverse. Pour accéder à l'API à distance, fournir une URL HTTPS et un certificat valide. Une signature de requête authentifie l'auteur ; elle ne chiffre pas à elle seule les en-têtes et les métadonnées HTTP.

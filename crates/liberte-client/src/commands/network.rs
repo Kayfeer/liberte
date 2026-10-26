@@ -116,8 +116,12 @@ fn store_peer_addresses(db: &liberte_store::Database, addresses: &[libp2p::Multi
     let previous: Option<String> = transaction.query_row(
         "SELECT addresses_json FROM peer_addresses WHERE peer_id = ?1", [&peer], |row| row.get(0),
     ).optional().map_err(|e| e.to_string())?;
-    let mut saved: Vec<String> = addresses.iter().map(ToString::to_string).collect();
-    if let Some(previous) = previous {
+    let mut saved = Vec::new();
+    for address in addresses {
+        let address = address.to_string();
+        if !saved.contains(&address) { saved.push(address); }
+    }
+    if let Some(previous) = previous.filter(|json| json.len() <= 16_384) {
         if let Ok(previous) = serde_json::from_str::<Vec<String>>(&previous) {
             for address in previous {
                 if saved.len() == 8 { break; }

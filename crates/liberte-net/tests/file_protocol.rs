@@ -23,6 +23,7 @@ fn isolated_config() -> SwarmConfig {
         listen_port: 0,
         extra_dials: vec![],
         enable_mdns: false,
+        enable_dcutr: true,
         loopback_only: true,
     }
 }

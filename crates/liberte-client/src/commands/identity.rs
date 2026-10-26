@@ -43,6 +43,63 @@ fn make_identity_dto(
     }
 }
 
+/// Commit the complete local identity together. A failed profile/settings write
+/// must not leave a secret key that prevents the user from retrying creation.
+fn persist_new_identity(
+    db: &mut Database,
+    identity: &Identity,
+    display_name: Option<&str>,
+) -> Result<(), String> {
+    let transaction = db.conn_mut()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| format!("Cannot begin identity creation: {e}"))?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_identity (
+            id INTEGER PRIMARY KEY CHECK (id = 1), secret_key TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL
+        );",
+    ).map_err(|e| format!("Cannot prepare identity storage: {e}"))?;
+    let existing: Option<String> = transaction.query_row(
+        "SELECT secret_key FROM local_identity WHERE id = 1", [], |row| row.get(0),
+    ).optional().map_err(|e| format!("Cannot inspect existing identity: {e}"))?;
+    if existing.is_some() {
+        return Err("An identity already exists on this device; load it instead".into());
+    }
+    let current: Option<String> = transaction.query_row(
+        "SELECT json FROM app_settings WHERE id = 1", [], |row| row.get(0),
+    ).optional().map_err(|e| format!("Cannot read existing settings: {e}"))?;
+    let mut settings = match current {
+        Some(json) => serde_json::from_str::<serde_json::Value>(&json)
+            .map_err(|e| format!("Existing settings are invalid: {e}"))?,
+        None => serde_json::to_value(crate::commands::settings::AppSettings::default())
+            .map_err(|e| format!("Cannot prepare default settings: {e}"))?,
+    };
+    serde_json::from_value::<crate::commands::settings::AppSettings>(settings.clone())
+        .map_err(|e| format!("Existing settings are invalid: {e}"))?;
+    settings.as_object_mut().ok_or("Existing settings are not an object")?
+        .insert("displayName".into(), serde_json::to_value(display_name).map_err(|e| e.to_string())?);
+    let settings_json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+    let public_key = hex::encode(identity.public_key_bytes());
+
+    transaction.execute(
+        "INSERT INTO users (pubkey, display_name, avatar_hash, bio, status, created_at)
+         VALUES (?1, ?2, NULL, NULL, 'online', ?3)",
+        rusqlite::params![public_key, display_name, chrono::Utc::now().to_rfc3339()],
+    ).map_err(|e| format!("Cannot persist identity profile: {e}"))?;
+    transaction.execute(
+        "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
+        [hex::encode(identity.secret_bytes())],
+    ).map_err(|e| format!("Cannot persist identity key: {e}"))?;
+    transaction.execute(
+        "INSERT INTO app_settings (id, json) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET json=excluded.json",
+        [settings_json],
+    ).map_err(|e| format!("Cannot persist identity settings: {e}"))?;
+    transaction.commit().map_err(|e| format!("Cannot commit identity creation: {e}"))
+}
+
 #[tauri::command]
 pub async fn create_identity(
     state: State<'_, Arc<Mutex<AppState>>>,
@@ -66,75 +123,8 @@ pub async fn create_identity(
 
     info!(pubkey = %pubkey_hex, name = ?display_name, "Creating new identity");
 
-    let db = Database::new(&db_key).map_err(|e| format!("Failed to open database: {e}"))?;
-    db.conn().execute_batch("CREATE TABLE IF NOT EXISTS local_identity (id INTEGER PRIMARY KEY CHECK (id = 1), secret_key TEXT NOT NULL);").map_err(|e| e.to_string())?;
-    let existing: Option<String> = db
-        .conn()
-        .query_row(
-            "SELECT secret_key FROM local_identity WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    if existing.is_some() {
-        return Err("An identity already exists on this device; load it instead".into());
-    }
-
-    let user = liberte_store::User {
-        pubkey: identity.public_key_bytes(),
-        display_name: display_name.clone(),
-        avatar_hash: None,
-        bio: None,
-        status: "online".to_string(),
-        created_at: chrono::Utc::now(),
-    };
-
-    let _ = db.conn().execute(
-        "INSERT OR IGNORE INTO users (pubkey, display_name, avatar_hash, created_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![
-            hex::encode(user.pubkey),
-            user.display_name,
-            user.avatar_hash,
-            user.created_at.to_rfc3339(),
-        ],
-    );
-
-    // persist secret key for reload
-    let export = identity.to_export();
-    let secret_hex = hex::encode(export.secret_key);
-    let _ = db.conn().execute_batch(
-        "CREATE TABLE IF NOT EXISTS local_identity (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            secret_key TEXT NOT NULL
-        );",
-    );
-    db.conn()
-        .execute(
-            "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
-            rusqlite::params![secret_hex],
-        )
-        .map_err(|e| format!("Could not persist identity: {e}"))?;
-
-    // Also save display name in app_settings
-    if display_name.is_some() {
-        let settings = crate::commands::settings::AppSettings {
-            display_name: display_name.clone(),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&settings).unwrap_or_default();
-        let _ = db.conn().execute_batch(
-            "CREATE TABLE IF NOT EXISTS app_settings (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                json TEXT NOT NULL
-            );",
-        );
-        let _ = db.conn().execute(
-            "INSERT OR REPLACE INTO app_settings (id, json) VALUES (1, ?1)",
-            rusqlite::params![json],
-        );
-    }
+    let mut db = Database::new(&db_key).map_err(|e| format!("Failed to open database: {e}"))?;
+    persist_new_identity(&mut db, &identity, display_name.as_deref())?;
 
     let dto = make_identity_dto(&identity, display_name, None, "online".to_string());
 
@@ -169,7 +159,10 @@ pub async fn load_identity(
     let loaded = {
         let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
         if let Some(ref id) = guard.identity {
-            let display_name = guard.database.as_ref().and_then(|db| read_display_name(db, id));
+            let display_name = guard
+                .database
+                .as_ref()
+                .and_then(|db| read_display_name(db, id));
             let (bio, status) = guard
                 .database
                 .as_ref()
@@ -473,7 +466,7 @@ pub fn set_status(state: State<'_, Arc<Mutex<AppState>>>, status: String) -> Res
                     },
                 );
                 if let Ok(data) = message.seal(channel.clone(), &key, &identity) {
-                    let _ = liberte_net::publish_confirmed(&tx, channel.to_topic(), data).await;
+                    let _ = liberte_net::publish_once(&tx, channel.to_topic(), data).await;
                 }
             }
         });
@@ -533,7 +526,7 @@ pub fn spawn_profile_broadcast(state: Arc<Mutex<AppState>>) {
                 let Ok(data) = message.seal(channel.clone(), &key, &identity) else {
                     break;
                 };
-                if liberte_net::publish_confirmed(&tx, channel.to_topic(), data)
+                if liberte_net::publish_once(&tx, channel.to_topic(), data)
                     .await
                     .is_ok()
                 {
@@ -569,11 +562,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_identity_profile_or_settings_write_rolls_back_and_can_retry() {
+        for (name, trigger) in [
+            ("users", "CREATE TRIGGER reject_identity BEFORE INSERT ON users BEGIN SELECT RAISE(ABORT, 'profile write failed'); END;"),
+            ("settings", "CREATE TRIGGER reject_identity BEFORE UPDATE ON app_settings BEGIN SELECT RAISE(ABORT, 'settings write failed'); END;"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let identity = Identity::generate();
+            let peer = Identity::generate();
+            let mut db = Database::open_at(&directory.path().join(format!("{name}.db")), &identity.derive_db_key()).unwrap();
+            db.conn().execute_batch(
+                "CREATE TABLE local_identity (id INTEGER PRIMARY KEY CHECK (id=1), secret_key TEXT NOT NULL);
+                 CREATE TABLE app_settings (id INTEGER PRIMARY KEY CHECK (id=1), json TEXT NOT NULL);",
+            ).unwrap();
+            let previous = r#"{"serverUrl":"https://existing.example.test","notificationsEnabled":false,"displayName":"previous","futurePreference":{"level":2}}"#;
+            db.conn().execute("INSERT INTO app_settings VALUES (1,?1)", [previous]).unwrap();
+            db.conn().execute(
+                "INSERT INTO users (pubkey,display_name,created_at) VALUES (?1,'peer',?2)",
+                rusqlite::params![hex::encode(peer.public_key_bytes()), chrono::Utc::now().to_rfc3339()],
+            ).unwrap();
+            db.conn().execute_batch(trigger).unwrap();
+            assert!(persist_new_identity(&mut db, &identity, Some("Created atomically")).is_err());
+            assert!(read_stored_identity(&db).unwrap().is_none());
+            let users: i64 = db.conn().query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).unwrap();
+            assert_eq!(users, 1);
+            let settings: String = db.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
+            assert_eq!(settings, previous);
+
+            db.conn().execute_batch("DROP TRIGGER reject_identity;").unwrap();
+            persist_new_identity(&mut db, &identity, Some("Created atomically")).unwrap();
+            assert_eq!(read_stored_identity(&db).unwrap().unwrap().public_key_bytes(), identity.public_key_bytes());
+            assert_eq!(read_display_name(&db, &identity).as_deref(), Some("Created atomically"));
+            let settings: String = db.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
+            let settings: serde_json::Value = serde_json::from_str(&settings).unwrap();
+            assert_eq!(settings["serverUrl"], "https://existing.example.test");
+            assert_eq!(settings["notificationsEnabled"], false);
+            assert_eq!(settings["futurePreference"]["level"], 2);
+            assert!(persist_new_identity(&mut db, &peer, Some("Must not replace")).is_err());
+            assert_eq!(read_stored_identity(&db).unwrap().unwrap().public_key_bytes(), identity.public_key_bytes());
+        }
+    }
+
+    #[test]
+    fn invalid_existing_settings_do_not_commit_a_partial_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = Identity::generate();
+        let mut db = Database::open_at(&directory.path().join("invalid-settings.db"), &identity.derive_db_key()).unwrap();
+        db.conn().execute_batch("CREATE TABLE app_settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL); INSERT INTO app_settings VALUES (1,'invalid-json');").unwrap();
+        assert!(persist_new_identity(&mut db, &identity, None).is_err());
+        assert!(read_stored_identity(&db).unwrap().is_none());
+        let users: i64 = db.conn().query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).unwrap();
+        assert_eq!(users, 0);
+        let settings: String = db.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
+        assert_eq!(settings, "invalid-json");
+    }
+
+    #[test]
     fn fresh_identity_is_absent_but_corruption_is_not_silenced() {
         let directory = tempfile::tempdir().unwrap();
         let identity = Identity::generate();
-        let db = Database::open_at(&directory.path().join("fresh.db"), &identity.derive_db_key())
-            .unwrap();
+        let db = Database::open_at(
+            &directory.path().join("fresh.db"),
+            &identity.derive_db_key(),
+        )
+        .unwrap();
         assert!(read_stored_identity(&db).unwrap().is_none());
         db.conn()
             .execute_batch(
@@ -588,11 +640,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            read_stored_identity(&db).unwrap().unwrap().public_key_bytes(),
+            read_stored_identity(&db)
+                .unwrap()
+                .unwrap()
+                .public_key_bytes(),
             identity.public_key_bytes()
         );
         db.conn()
-            .execute("UPDATE local_identity SET secret_key = 'invalid' WHERE id = 1", [])
+            .execute(
+                "UPDATE local_identity SET secret_key = 'invalid' WHERE id = 1",
+                [],
+            )
             .unwrap();
         assert!(read_stored_identity(&db).is_err());
     }
@@ -602,8 +660,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let own = Identity::generate();
         let peer = Identity::generate();
-        let db = Database::open_at(&directory.path().join("identity.db"), &own.derive_db_key())
-            .unwrap();
+        let db =
+            Database::open_at(&directory.path().join("identity.db"), &own.derive_db_key()).unwrap();
         for (identity, name) in [(&peer, Some("Remote peer")), (&own, None)] {
             db.conn()
                 .execute(

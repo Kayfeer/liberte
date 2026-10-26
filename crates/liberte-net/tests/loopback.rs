@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use liberte_net::swarm::SwarmConfig;
 use liberte_net::{
-    dial_addresses_confirmed, network_snapshot, publish_confirmed, spawn_swarm, subscribe_topic,
+    dial_addresses_confirmed, network_snapshot, publish_confirmed, publish_once, spawn_swarm, subscribe_topic,
     SwarmCommand, SwarmNotification,
 };
 use liberte_shared::{
@@ -18,6 +18,7 @@ fn isolated_config() -> SwarmConfig {
         listen_port: 0,
         extra_dials: vec![],
         enable_mdns: false,
+        enable_dcutr: true,
         loopback_only: true,
     }
 }
@@ -53,6 +54,8 @@ async fn publication_without_subscribers_returns_an_error() {
     let (tx, _rx, _) = spawn_swarm(key, isolated_config()).await.unwrap();
     let channel = ChannelId::new();
     subscribe_topic(&tx, &channel).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(1), publish_once(&tx, channel.to_topic(), vec![4, 5, 6]))
+        .await.expect("background announcements must not wait for subscribers").is_err());
     assert!(publish_confirmed(&tx, channel.to_topic(), vec![1, 2, 3])
         .await
         .is_err());
@@ -196,6 +199,20 @@ async fn explicit_peer_reconnects_after_the_remote_process_restarts() {
         }
         panic!("local swarm stopped");
     }).await.expect("remote shutdown should be observed");
+    // In one runtime, Quinn's close/draining tasks can briefly outlive the
+    // swarm itself. A real process exit releases its sockets; wait for that
+    // same condition without changing the cached destination port.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+                Ok(socket) => { drop(socket); break; },
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                },
+                Err(error) => panic!("Cannot probe released QUIC port: {error}"),
+            }
+        }
+    }).await.expect("shutdown should release the QUIC listener port");
     let mut config = isolated_config();
     config.listen_port = port;
     let (restarted_tx, mut restarted_rx, restarted_peer) = spawn_swarm(remote_key, config).await.unwrap();

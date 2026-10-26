@@ -533,7 +533,7 @@ pub async fn send_typing(
         sender_display_name: display_name,
         timestamp: Utc::now(),
     });
-    liberte_net::publish_confirmed(
+    liberte_net::publish_once(
         &tx,
         ChannelId(channel_id).to_topic(),
         message.seal(ChannelId(channel_id), &key, &identity)?,

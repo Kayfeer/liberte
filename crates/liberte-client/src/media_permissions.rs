@@ -1,5 +1,13 @@
 //! Platform WebView capture settings. Device access still requires user consent.
 
+#[cfg(all(feature = "qa-media-devices", not(debug_assertions)))]
+compile_error!(
+    "qa-media-devices is restricted to debug QA builds; never enable it for distribution"
+);
+
+#[cfg(all(feature = "qa-media-devices", not(target_os = "linux")))]
+compile_error!("qa-media-devices requires the Linux WebKitGTK QA runner");
+
 #[cfg(target_os = "linux")]
 pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     use gtk::prelude::*;
@@ -16,6 +24,13 @@ pub fn configure(window: &tauri::WebviewWindow) -> tauri::Result<()> {
             settings.set_enable_webrtc(true);
             settings.set_enable_media_stream(true);
             settings.set_media_playback_requires_user_gesture(false);
+            #[cfg(all(feature = "qa-media-devices", debug_assertions))]
+            {
+                settings.set_enable_mock_capture_devices(true);
+                tracing::warn!(
+                    "QA: synthetic WebKit microphone/camera enabled; WebDriver automation permissions apply; this does not validate physical devices or the consent dialog"
+                );
+            }
         }
         let audio_granted = Rc::new(Cell::new(false));
         let video_granted = Rc::new(Cell::new(false));

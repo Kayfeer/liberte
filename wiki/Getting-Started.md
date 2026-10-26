@@ -35,6 +35,14 @@ Sur un LAN, autoriser le trafic de découverte et le port de transport dans le p
 
 Un affichage local ou un message « envoyé » ne remplace pas la réception vérifiée sur l'autre appareil.
 
+## Connexion et messages après redémarrage
+
+Les paramètres réseau proposent **Adresse d'un pair ou d'un relais** et **Se connecter**. Pour joindre un relais Internet, suivre les étapes de [configuration P2P](Configuration.md#connexion-p2p-et-relais-internet), puis créer l'invitation une fois l'adresse de circuit disponible. **URL du serveur auto-hébergé** configure séparément l'API HTTP.
+
+Après redémarrage, le client restaure ses salons, leurs abonnements et les adresses explicites connues. La reconnexion ne télécharge pas les messages manqués. L'historique affiché provient de la base locale ; la sauvegarde restaure cet historique, sans interroger les autres participants.
+
+L'envoi attend brièvement la propagation d'un abonnement après connexion. Sans pair abonné, il renvoie une erreur ; aucun message n'est conservé dans une file d'envoi différé. Une publication acceptée n'est pas un accusé de réception : si plusieurs participants sont dans le salon, un participant déconnecté peut manquer un message reçu par les autres. Il n'y a pas d'indicateur de lecture. La confirmation de réception des fichiers intervient séparément, après vérification du hash.
+
 ## Serveur
 
 ```bash

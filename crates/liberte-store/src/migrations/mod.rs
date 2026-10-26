@@ -92,10 +92,16 @@ mod tests {
         run_migrations(&connection).unwrap();
         connection.execute("INSERT INTO peer_addresses (peer_id,addresses_json,updated_at) VALUES ('peer','[]',1)", []).unwrap();
         run_migrations(&connection).unwrap();
-        let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
         assert_eq!(version, 4);
-        let channels: i64 = connection.query_row("SELECT COUNT(*) FROM channels", [], |row| row.get(0)).unwrap();
-        let peers: i64 = connection.query_row("SELECT COUNT(*) FROM peer_addresses", [], |row| row.get(0)).unwrap();
+        let channels: i64 = connection
+            .query_row("SELECT COUNT(*) FROM channels", [], |row| row.get(0))
+            .unwrap();
+        let peers: i64 = connection
+            .query_row("SELECT COUNT(*) FROM peer_addresses", [], |row| row.get(0))
+            .unwrap();
         assert_eq!((channels, peers), (1, 1));
     }
 

@@ -120,8 +120,10 @@ describe("media store lifecycle", () => {
     let resolve!: (muted: boolean) => void;
     mocks.toggleMute.mockImplementationOnce(() => new Promise<boolean>((done) => { resolve = done; }));
     const muting = useMediaStore.getState().toggleMute();
-    expect(mocks.mute).toHaveBeenCalledWith(true);
-    resolve(true);
+    try {
+      expect(mocks.mute).toHaveBeenCalledWith(true);
+      await vi.waitFor(() => expect(mocks.toggleMute).toHaveBeenCalledOnce());
+    } finally { resolve?.(true); }
     await muting;
     expect(useMediaStore.getState().isMuted).toBe(true);
   });
@@ -131,10 +133,11 @@ describe("media store lifecycle", () => {
     mocks.listen.mockImplementationOnce(() => new Promise<() => void>((resolve) => { release = () => resolve(mocks.unlisten); }));
     const first = useMediaStore.getState().setupListeners();
     const second = useMediaStore.getState().setupListeners();
-    expect(first).toBe(second);
+    expect(mocks.listen).toHaveBeenCalledOnce();
     useMediaStore.getState().cleanup();
     release();
-    await first;
+    await Promise.all([first, second]);
+    expect(mocks.listen).toHaveBeenCalledTimes(4);
     expect(useMediaStore.getState().unlisteners).toHaveLength(0);
     expect(mocks.unlisten).toHaveBeenCalledTimes(4);
   });

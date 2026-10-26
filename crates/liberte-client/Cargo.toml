@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors = ["Kayfeer"]
 
+[features]
+# Synthetic native capture is for the isolated Linux QA binary only.
+# Release builds reject this feature in media_permissions.rs.
+qa-media-devices = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

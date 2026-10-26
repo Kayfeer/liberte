@@ -62,7 +62,8 @@ pub async fn create_channel(
     if let Some(tx) = cmd_tx {
         if let Err(error) = liberte_net::subscribe_topic(&tx, &ChannelId(channel_id)).await {
             if let Ok(mut guard) = state.lock() {
-                guard.network_error = Some(format!("Channel saved, but subscription failed: {error}"));
+                guard.network_error =
+                    Some(format!("Channel saved, but subscription failed: {error}"));
             }
         }
     }
@@ -115,12 +116,19 @@ pub async fn generate_invite(
     let mut addresses = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let snapshot = liberte_net::network_snapshot(&tx).await?;
-            let addresses: Vec<String> = snapshot.external_addresses.into_iter()
-                .chain(snapshot.listen_addresses).collect();
-            if !addresses.is_empty() { return Ok::<_, String>(addresses); }
+            let addresses: Vec<String> = snapshot
+                .external_addresses
+                .into_iter()
+                .chain(snapshot.listen_addresses)
+                .collect();
+            if !addresses.is_empty() {
+                return Ok::<_, String>(addresses);
+            }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-    }).await.map_err(|_| "Network has no listening address yet; try again".to_string())??;
+    })
+    .await
+    .map_err(|_| "Network has no listening address yet; try again".to_string())??;
     let mut seen = std::collections::HashSet::new();
     addresses.retain(|address| seen.insert(address.clone()));
     addresses.sort_by_key(|address| !address.contains("/p2p-circuit"));
@@ -177,8 +185,10 @@ pub async fn accept_invite(
             }
         }
         match db.get_channel(channel_id) {
-            Ok(_) => {},
-            Err(liberte_store::StoreError::NotFound) => db.create_channel(&channel).map_err(|e| e.to_string())?,
+            Ok(_) => {}
+            Err(liberte_store::StoreError::NotFound) => {
+                db.create_channel(&channel).map_err(|e| e.to_string())?
+            }
             Err(error) => return Err(error.to_string()),
         }
 
@@ -192,21 +202,32 @@ pub async fn accept_invite(
     // Network errors remain visible and persisted hints are retried with backoff.
     let network_result: Result<(), String> = async {
         let tx = cmd_tx.ok_or("Network not started")?;
-        liberte_net::subscribe_topic(&tx, &ChannelId(channel_id)).await.map_err(|e| e.to_string())?;
+        liberte_net::subscribe_topic(&tx, &ChannelId(channel_id))
+            .await
+            .map_err(|e| e.to_string())?;
         let mut addresses = Vec::new();
         for raw in &token.payload.addresses {
-            let address = raw.parse::<libp2p::Multiaddr>().map_err(|e| e.to_string())?;
-            let address = liberte_net::dns::resolve_multiaddr(address).await.map_err(|e| e.to_string())?;
-            if !addresses.contains(&address) { addresses.push(address); }
+            let address = raw
+                .parse::<libp2p::Multiaddr>()
+                .map_err(|e| e.to_string())?;
+            let address = liberte_net::dns::resolve_multiaddr(address)
+                .await
+                .map_err(|e| e.to_string())?;
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
         }
         if !addresses.is_empty() {
             crate::commands::network::remember_peer_addresses(state.inner(), &addresses)?;
             liberte_net::dial_addresses_confirmed(&tx, addresses).await?;
         }
         Ok(())
-    }.await;
+    }
+    .await;
     if let Ok(mut guard) = state.lock() {
-        guard.network_error = network_result.err().map(|error| format!("Channel saved, connection pending: {error}"));
+        guard.network_error = network_result
+            .err()
+            .map(|error| format!("Channel saved, connection pending: {error}"));
     }
 
     info!(channel_id = %channel_id, name = %channel_name, "Joined channel via invite");
@@ -247,8 +268,11 @@ mod tests {
     #[test]
     fn channel_result_matches_frontend_camel_case_contract() {
         let value = serde_json::to_value(CreateChannelResult {
-            id: "id".into(), name: "name".into(), channel_key_hex: "ab".into(),
-        }).unwrap();
+            id: "id".into(),
+            name: "name".into(),
+            channel_key_hex: "ab".into(),
+        })
+        .unwrap();
         assert_eq!(value["channelKeyHex"], "ab");
         assert!(value.get("channel_key_hex").is_none());
     }

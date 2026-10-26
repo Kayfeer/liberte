@@ -52,6 +52,42 @@ pub fn load_bootstrap_peers(path: &Path) -> Vec<Multiaddr> {
     addrs
 }
 
+/// Resolve configured bootstrap names through the same authenticated DoH path as
+/// manual connections. Bound both concurrency and total startup delay; a broken
+/// resolver must not prevent the local identity and LAN discovery from starting.
+pub async fn resolve_bootstrap_peers(addresses: Vec<Multiaddr>) -> Vec<Multiaddr> {
+    use futures::StreamExt;
+    use std::time::Duration;
+
+    let pending = futures::stream::iter(addresses.into_iter().take(1024))
+        .map(|address| async move {
+            match tokio::time::timeout(Duration::from_secs(5), crate::dns::resolve_multiaddr(address.clone())).await {
+                Ok(Ok(resolved)) => Some(resolved),
+                Ok(Err(error)) => { warn!(%address, %error, "Bootstrap address could not be resolved"); None },
+                Err(_) => { warn!(%address, "Bootstrap DNS lookup timed out"); None },
+            }
+        })
+        .buffer_unordered(8);
+    tokio::pin!(pending);
+    let deadline = tokio::time::sleep(Duration::from_secs(6));
+    tokio::pin!(deadline);
+    let mut resolved = Vec::new();
+    loop {
+        tokio::select! {
+            result = pending.next() => match result {
+                Some(Some(address)) => resolved.push(address),
+                Some(None) => {},
+                None => break,
+            },
+            _ = &mut deadline => {
+                warn!("Bootstrap resolution deadline reached; unresolved hints require another connection attempt");
+                break;
+            }
+        }
+    }
+    resolved
+}
+
 /// Parse raw multiaddr strings into validated values.
 pub fn parse_multiaddrs(raw: &[String]) -> Vec<Multiaddr> {
     raw.iter()
@@ -94,6 +130,14 @@ mod tests {
 
         let _ = fs::remove_file(&file_path);
         let _ = fs::remove_dir(&dir);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_resolution_preserves_ip_and_rejects_dnsaddr() {
+        let ip: Multiaddr = "/ip4/127.0.0.1/udp/4001/quic-v1".parse().unwrap();
+        let unsupported: Multiaddr = "/dnsaddr/bootstrap.invalid".parse().unwrap();
+        let result = resolve_bootstrap_peers(vec![unsupported, ip.clone()]).await;
+        assert_eq!(result, vec![ip]);
     }
 
     #[test]
