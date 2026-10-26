@@ -8,6 +8,8 @@ Sur la base `5545513`, la CI `40336424290` a fait fonctionner deux applications 
 
 Le contrôle média a ensuite mesuré `isSecureContext=true`, `getUserMedia=function`, `AudioContext=function`, mais `RTCPeerConnection=undefined` dans WebKitGTK 2.50.4. Les scénarios Chromium séparés ne compensent pas cet échec natif. Les sources GStreamer ne permettent pas non plus de garantir les transformations E2EE du SFU.
 
+Le même parcours a repassé sur `643e414` (exécution `40338656672`, commit de fusion `dad9edd` au même arbre). Les captures de l’application confirment le rendu lisible du sélecteur de mode d’appel. Le contrôle média retrouve toujours l’absence de `RTCPeerConnection`.
+
 ## Migration proposée
 
 - Tauri `3.0.0-alpha.5`, build `3.0.0-alpha.4`, API JS `3.0.0-alpha.3` et CLI `3.0.0-alpha.5`.

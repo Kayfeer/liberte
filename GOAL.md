@@ -1,6 +1,6 @@
 # Objectif de livraison Liberté 2.4
 
-Terminer une application pleinement fonctionnelle sur `codex/complete-liberte`, PR #2. Ce document fixe les critères de livraison ; il ne prétend pas activer le mode natif `/goal` de Codex.
+Terminer une application pleinement fonctionnelle sur `codex/complete-liberte`, PR #2. Le prototype `codex/liberte-cef`, PR #3, doit franchir les mêmes critères avant toute adoption. Ce document fixe les critères de livraison ; il ne prétend pas activer le mode natif `/goal` de Codex.
 
 ## Critères de fin
 
@@ -13,7 +13,7 @@ Terminer une application pleinement fonctionnelle sur `codex/complete-liberte`, 
 - API serveur authentifiée, propriétaires isolés, quotas et état persistant.
 - Interface vérifiée, sans commande factice ni succès simulé.
 - Deux clients Linux lancés réellement en CI : invitation avant redémarrage, messages bidirectionnels, réactions, fichier reçu avec intégrité vérifiée, reconnexion après redémarrage, sauvegarde et restauration distante dans un profil neuf.
-- Appels entre deux clients natifs avec moteur WebKit et signalisation Rust réels ; capture synthétique et autorisation WebDriver identifiées séparément des essais matériels.
+- Appels entre deux clients natifs avec le moteur réellement distribué et la signalisation Rust réelle ; capture synthétique et autorisation automatisée identifiées séparément des essais matériels.
 - Tests, compilation, formatage, Clippy, audits et smoke Docker validés sur le même commit.
 - Paquets Windows, Linux et macOS construits sur ce commit et conservés en artefacts CI.
 - Documentation de configuration, migration et limites conforme au comportement livré.

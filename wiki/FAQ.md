@@ -2,7 +2,7 @@
 
 ## Est-ce une version prête à remplacer Discord ?
 
-La branche 2.4.0 vise à corriger les frontières réseau, stockage et distribution. L'état de la CI, les essais entre appareils et les limitations documentées doivent être examinés avant un déploiement. Aucun nombre d'utilisateurs simultanés n'est garanti.
+Cette branche est le [prototype Tauri 3 / CEF](CEF-Prototype.md), pas une version stable publiée. Elle prolonge les corrections réseau, stockage et distribution du protocole 2.4. L'état de la CI, les essais entre appareils et les limitations documentées doivent être examinés avant un déploiement. Aucun nombre d'utilisateurs simultanés n'est garanti.
 
 ## Faut-il un serveur ?
 
@@ -18,7 +18,7 @@ Non pour la nouvelle version de protocole. Mettre à jour les participants et g�
 
 ## Les appels passent-ils par un SFU ?
 
-Le mode par défaut utilise WebRTC entre pairs. Le mode SFU utilise une instance LiveKit configurée par l'opérateur et le chiffrement E2EE du SDK client. Voir [LiveKit](LiveKit.md) pour les prérequis et les essais ; aucun service cloud n'est préconfiguré.
+Le mode par défaut utilise WebRTC entre pairs. Le mode SFU utilise une instance LiveKit configurée par l'opérateur et le chiffrement E2EE du SDK client. Le prototype Linux utilise CEF pour ces parcours ; leur présence dans le code ne vaut pas validation native. Voir [LiveKit](LiveKit.md) pour les prérequis et les essais ; aucun service cloud n'est préconfiguré.
 
 ## Pourquoi les mises à jour automatiques peuvent-elles être absentes ?
 

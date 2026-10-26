@@ -70,7 +70,9 @@
         "depends": [
           "libgtk-4-1 (>= 4.14)",
           "libasound2t64",
-          "libnss3"
+          "libnss3",
+          "xdg-desktop-portal",
+          "xdg-desktop-portal-gtk"
         ]
       }
     },
