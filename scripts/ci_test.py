@@ -28,13 +28,33 @@ class ReleaseTests(unittest.TestCase):
                 calls.append(command)
                 if command == ["cargo", "generate-lockfile"]:
                     path.write_text("new lock")
-            result = subprocess.CompletedProcess([], 101, stderr="lock requires update")
+            result = subprocess.CompletedProcess([], 101, stderr=(
+                f"error: cannot update the lock file {path} because --locked was passed to prevent this\n"
+                "help: to generate the lock file without accessing the network, "
+                "remove the --locked flag and use --offline instead.\n"))
             with mock.patch.object(ci, "ROOT", root), mock.patch.object(ci.subprocess, "run", return_value=result), mock.patch.object(ci, "run", side_effect=run_command), mock.patch.object(ci, "export_file") as export:
                 ci.lockfile()
             self.assertEqual(path.read_text(), "new lock")
             self.assertEqual(calls[0], ["cargo", "generate-lockfile"])
             self.assertIn("--locked", calls[-1])
             export.assert_called_once_with(path, "Cargo.lock")
+
+    def test_cargo_network_failure_preserves_lock_and_propagates_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "Cargo.lock"
+            original = b"unchanged reviewed lock\n"
+            path.write_bytes(original)
+            diagnostic = "error: failed to download from https://index.crates.io/config.json\nCaused by:\n  Could not resolve host: index.crates.io\n"
+            result = subprocess.CompletedProcess([], 101, stderr=diagnostic)
+            with mock.patch.object(ci, "ROOT", root), mock.patch.object(ci.subprocess, "run", return_value=result), mock.patch.object(ci, "run") as run_command, mock.patch.object(ci, "export_file") as export:
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    ci.lockfile()
+            self.assertEqual(failure.exception.returncode, 101)
+            self.assertEqual(failure.exception.stderr, diagnostic)
+            self.assertEqual(path.read_bytes(), original)
+            run_command.assert_not_called()
+            export.assert_not_called()
 
     def test_valid_cargo_lock_is_never_regenerated(self):
         with tempfile.TemporaryDirectory() as folder:

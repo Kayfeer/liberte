@@ -232,6 +232,26 @@ describe("WebRTC call lifecycle", () => {
     expect(Connection.instances[0].senders[1].track).toBeNull();
   });
 
+  it.each(["audio", "video"] as const)("hangup immediately releases a pending %s capture without waiting for the sender", async (kind) => {
+    const { session } = fixture();
+    await session.start();
+    session.ensurePeer(remoteId);
+    let finish!: () => void;
+    Connection.instances[0].senders[kind === "audio" ? 0 : 1].replaceTrack.mockImplementationOnce(async () => new Promise<void>((resolve) => { finish = resolve; }));
+    localStorage.setItem("liberte-media-settings", JSON.stringify({ selectedAudioInput: "usb-mic" }));
+    const changing = kind === "audio" ? session.applyPreferences() : session.setVideoEnabled(true);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    await session.stop();
+    expect(captures.flatMap((stream) => stream.getTracks()).every((track) => track.readyState === "ended")).toBe(true);
+    for (const context of Audio.instances) {
+      expect(context.close).toHaveBeenCalledOnce();
+      expect(context.destination.getTracks()[0].readyState).toBe("ended");
+    }
+    finish();
+    await changing;
+    expect(captures[1].getTracks()[0].stop).toHaveBeenCalledOnce();
+  });
+
   it("buffers ICE until SDP arrives and ignores another room or recipient", async () => {
     const { session, callbacks } = fixture();
     await session.start();

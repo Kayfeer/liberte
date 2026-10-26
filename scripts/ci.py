@@ -51,21 +51,29 @@ def versions(root=ROOT, tag=None):
 
 def lockfile():
     path = ROOT / "Cargo.lock"
+    metadata = ["cargo", "metadata", "--locked", "--format-version", "1", "--color", "never"]
     valid = False
     if path.is_file():
         result = subprocess.run(
-            ["cargo", "metadata", "--locked", "--format-version", "1"],
+            metadata,
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
             check=False)
         valid = result.returncode == 0
         if not valid:
             print(result.stderr)
+            # Cargo bundled with Rust 1.99.1, src/ops/lockfile.rs. Other errors
+            # (network, registry, malformed manifests) must preserve the lock.
+            needs_update = (
+                f"cannot update the lock file {path} "
+                "because --locked was passed to prevent this"
+            )
+            if needs_update not in result.stderr:
+                raise subprocess.CalledProcessError(result.returncode, metadata, stderr=result.stderr)
     if not valid:
         print("::warning::Cargo.lock is missing or incompatible with the manifests. Generating a candidate for review; release still requires committing the exact result.")
         run(["cargo", "generate-lockfile"], cwd=ROOT)
         export_file(path, "Cargo.lock")
-    run(["cargo", "metadata", "--locked", "--format-version", "1"],
-        cwd=ROOT, stdout=subprocess.DEVNULL)
+    run(metadata, cwd=ROOT, stdout=subprocess.DEVNULL)
     if not path.is_file() or path.stat().st_size == 0:
         raise ValueError("Cargo.lock was not created")
 

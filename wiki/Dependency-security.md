@@ -73,3 +73,107 @@ bootstrap step, then commit that exact lockfile. Verify the installed tree with
 the browser media tests. A manifest change alone is not evidence that all audit
 findings are resolved. The final audit and test results must come from the same
 commit and lockfile used for release.
+
+## Native Rust dependencies
+
+Reviewed on 2026-10-26. The RustSec job `119562588188` in integration run
+[`39698753266`](https://github.com/Kayfeer/liberte/actions/runs/39698753266)
+reported 12 known vulnerabilities against the generated Cargo lockfile for
+commit `e364ddc`. Its advisory database revision was
+`4b587f00996ebe5c05a73eaef105ef241e876414` (2026-10-21). The complete JSON report
+is retained as the `cargo-audit` artifact.
+
+The affected versions and dependency paths identify two upstream migrations:
+
+| Affected dependency | Path in the audited lockfile | Patched version floor |
+| --- | --- | --- |
+| `h2 0.3.27` | Hickory 0.24; also the optional libp2p UPnP/IGD/Hyper chain | 0.4.16 |
+| `hickory-proto 0.24.4` | Direct DoH resolver and libp2p mDNS/DNS | 0.26.1 |
+| `ring 0.16.20` | libp2p QUIC/TLS through `rcgen 0.11.3` | 0.17.12 |
+| `rustls 0.21.12` | Hickory 0.24 resolver/protocol | 0.23.46 |
+| `rustls-webpki 0.101.7` | Hickory's Rustls and `libp2p-tls 0.5.0` | 0.103.16 |
+| `zip 4.6.1` | `tauri-plugin-updater 2.14.0` | 9.0.0 |
+
+These are lockfile paths; optional or target-specific packages are not
+necessarily compiled in every build. Rustls 0.23.46 and WebPKI 0.103.16 were
+already present through newer dependency paths. Updating only those copies
+would leave the old vulnerable copies in place.
+
+The workspace now selects **libp2p 0.57.1** and **Hickory resolver 0.26.3**.
+The libp2p release uses Hickory 0.26, RCGen 0.13, ring 0.17, Rustls 0.23 and
+WebPKI 0.103, and replaces the old LRU dependency with Hashlink. The direct DoH
+resolver is migrated to Hickory's current API with `https-ring`, `tokio` and
+`webpki-roots`; system DNS fallback remains disabled. Network API adaptations
+are included with the dependency change.
+
+The updater is pinned to the official `tauri-apps/plugins-workspace` commit
+**`ba98bfadc4c868c9a7e1a226c83af528e1f11b89`**, merged on 2026-10-16 as PR #3698.
+That upstream change upgrades its Windows ZIP dependency from major 4 to major
+9; its own lockfile resolves ZIP 9.0.3. The stable updater 2.14.0 predates this
+fix. The pin preserves automatic updates and the plugin's existing signature
+verification. Replace it with a published plugin release containing the same
+fix once that release is verified. The vulnerable extraction API is used only
+on Windows by this plugin; the narrower application exposure does not justify
+keeping a known vulnerable package in the lockfile.
+
+No advisory is ignored or suppressed. The audit runs with an empty ignore list,
+and its gate continues to reject known vulnerabilities and incomplete reports.
+The original report also contains 9 maintenance warnings and 3 soundness
+warnings, retained separately in its JSON. These include Bincode 1.3.3,
+GLib 0.18.5 and LRU 0.12.5. They must remain visible for review; a clean known-
+vulnerability count alone is not evidence that every maintenance or soundness
+concern has been resolved. There was no blocking finding specific to the
+storage, Argon2 or backup AEAD dependencies in that report.
+
+The RustSec job `121547515357` in run
+[`40315605780`](https://github.com/Kayfeer/liberte/actions/runs/40315605780)
+confirmed that the 12 findings above were removed. Its newer advisory database
+(`115e418ee9a2ff542fee41db641128fa84483383`, 2026-10-26) reported one newly
+published vulnerability: **RUSTSEC-2026-0387**, affecting `crypto-bigint 0.5.5`
+and fixed in 0.7.6. Some operations intended to run in constant time could leak
+secret-dependent information through timing; exploitability depends on the
+algorithm, compiler, CPU and observable side channel.
+
+The only path to that package was `liberte-media` -> `webrtc 0.11` ->
+`webrtc-dtls 0.10` -> `p256`/`p384` -> `elliptic-curve 0.13.8` ->
+`crypto-bigint 0.5.5`. The native `webrtc` dependency was unused: a complete
+search of workspace Rust source and manifests found no imports, calls, aliases
+or re-exports of that crate. The `webrtc_peer` module maintains application
+state without using it. Actual peer transport is implemented with browser
+`RTCPeerConnection` in `frontend/src/lib/mediaSession.ts`; SFU transport uses
+`livekit-client` in `frontend/src/lib/sfuSession.ts`.
+
+The unused `webrtc = "0.11"` manifest entry has therefore been removed, eliminating
+its unused cryptographic dependency chain. This leaves the browser calls,
+LiveKit transport, native CPAL audio and media encryption code intact. No
+cryptographic patch, forced incompatible version or advisory exception is
+introduced. The new report retains 6 maintenance warnings and the GLib
+soundness warning separately; these remain visible for review.
+
+**Validation pending:** a new CI run must regenerate the Cargo lockfile after
+removing the unused dependency, run RustSec against that exact lockfile, and
+pass Rust tests, peer-network integration tests, browser media tests and native
+builds on Windows, macOS and Linux. No clean audit after this removal is claimed
+here. The lockfile must be produced by Cargo rather than edited manually.
+
+### Rust primary references
+
+- [libp2p 0.57.1 release](https://github.com/libp2p/rust-libp2p/releases/tag/v0.57.1)
+- [Released libp2p dependency versions](https://github.com/libp2p/rust-libp2p/blob/v0.57.1/Cargo.toml)
+- [Released libp2p TLS dependency versions](https://github.com/libp2p/rust-libp2p/blob/v0.57.1/transports/tls/Cargo.toml)
+- [Official updater ZIP 9 change](https://github.com/tauri-apps/plugins-workspace/commit/ba98bfadc4c868c9a7e1a226c83af528e1f11b89)
+- [h2 unbounded DATA frames: RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258.html)
+- [Hickory encoding CPU exhaustion: RUSTSEC-2026-0119](https://rustsec.org/advisories/RUSTSEC-2026-0119.html)
+- [ring AES/QUIC panic: RUSTSEC-2025-0009](https://rustsec.org/advisories/RUSTSEC-2025-0009.html)
+- [Rustls session-secret Debug output: RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346.html)
+- [Rustls key-exchange downgrade: RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html)
+- [WebPKI distrusted intermediates: RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html)
+- [WebPKI wildcard constraints: RUSTSEC-2026-0099](https://rustsec.org/advisories/RUSTSEC-2026-0099.html)
+- [WebPKI URI constraints: RUSTSEC-2026-0098](https://rustsec.org/advisories/RUSTSEC-2026-0098.html)
+- [WebPKI CRL parsing panic: RUSTSEC-2026-0104](https://rustsec.org/advisories/RUSTSEC-2026-0104.html)
+- [ZIP privileged permissions: RUSTSEC-2026-0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html)
+- [ZIP symlink escape: RUSTSEC-2026-0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html)
+- [ZIP permissions through symlinks: RUSTSEC-2026-0369](https://rustsec.org/advisories/RUSTSEC-2026-0369.html)
+
+- [crypto-bigint timing variability: RUSTSEC-2026-0387](https://github.com/RustSec/advisory-db/blob/main/crates/crypto-bigint/RUSTSEC-2026-0387.md)
+- [Upstream crypto-bigint 0.7.6 fixes](https://github.com/RustCrypto/crypto-bigint/pull/1365)

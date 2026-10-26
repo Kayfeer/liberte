@@ -15,8 +15,11 @@ fn doh_config() -> ResolverConfig {
     let google_addr: IpAddr = DOH_GOOGLE
         .parse()
         .unwrap_or(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
-    let mut config = ResolverConfig::new();
-    for (ip, name) in [(cloudflare_addr, "cloudflare-dns.com"), (google_addr, "dns.google")] {
+    let mut config = ResolverConfig::from_name_servers(Vec::new());
+    for (ip, name) in [
+        (cloudflare_addr, "cloudflare-dns.com"),
+        (google_addr, "dns.google"),
+    ] {
         let mut server = NameServerConfig::https(ip, name.into(), None);
         server.trust_negative_responses = false;
         config.add_name_server(server);
@@ -86,7 +89,10 @@ mod tests {
             let ProtocolConfig::Https { server_name, path } = &connection.protocol else {
                 panic!("DNS must not fall back to plaintext");
             };
-            assert!(matches!(server_name.as_ref(), "cloudflare-dns.com" | "dns.google"));
+            assert!(matches!(
+                server_name.as_ref(),
+                "cloudflare-dns.com" | "dns.google"
+            ));
             assert_eq!(path.as_ref(), "/dns-query");
         }
         let resolver = build_doh_resolver().unwrap();

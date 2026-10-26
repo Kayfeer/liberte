@@ -174,6 +174,8 @@ export class MediaSession implements CallSession {
   private closed = false;
   private started = false;
   private audio: AudioCapture | null = null;
+  private pendingAudio: AudioCapture | null = null;
+  private pendingVideo: MediaStreamTrack | null = null;
   private video: MediaStreamTrack | null = null;
   private videoGeneration = 0;
   private muted = false;
@@ -226,8 +228,8 @@ export class MediaSession implements CallSession {
     this.muted = muted;
     this.audio?.raw.getAudioTracks().forEach((track) => { track.enabled = !muted; });
     this.audio?.stream.getAudioTracks().forEach((track) => { track.enabled = !muted; });
-    const pendingAudio = this.pendingTracks.get("audio");
-    if (pendingAudio) pendingAudio.enabled = !muted;
+    this.pendingAudio?.raw.getAudioTracks().forEach((track) => { track.enabled = !muted; });
+    this.pendingAudio?.stream.getAudioTracks().forEach((track) => { track.enabled = !muted; });
     this.broadcastState();
   }
 
@@ -235,6 +237,18 @@ export class MediaSession implements CallSession {
     const result = this.mutations.then(async () => { if (!this.closed) await operation(); });
     this.mutations = result.catch(() => {});
     return result;
+  }
+
+  private disposePendingAudio(capture: AudioCapture) {
+    if (this.pendingAudio !== capture) return;
+    this.pendingAudio = null;
+    disposeAudio(capture);
+  }
+
+  private disposePendingVideo(track: MediaStreamTrack) {
+    if (this.pendingVideo !== track) return;
+    this.pendingVideo = null;
+    track.stop();
   }
 
   private outgoingTrack(kind: "audio" | "video"): MediaStreamTrack | null {
@@ -268,7 +282,8 @@ export class MediaSession implements CallSession {
       const previous = this.video;
       this.video = null;
       previous?.stop();
-      this.pendingTracks.get("video")?.stop();
+      this.pendingVideo?.stop();
+      this.pendingVideo = null;
       if (this.pendingTracks.has("video")) this.pendingTracks.set("video", null);
       this.publishLocalStream();
       this.broadcastState();
@@ -278,14 +293,16 @@ export class MediaSession implements CallSession {
       if (generation !== this.videoGeneration || this.video) return;
       const next = await captureVideo(this.settings);
       if (this.closed || generation !== this.videoGeneration) { next.stop(); return; }
+      this.pendingVideo = next;
       try {
         const installed = await this.replaceTrack("video", next, this.video, () => {
           this.video?.stop();
           this.video = next;
+          this.pendingVideo = null;
           this.watchVideo();
         });
-        if (!installed) { next.stop(); return; }
-      } catch (error) { next.stop(); throw error; }
+        if (!installed) { this.disposePendingVideo(next); return; }
+      } catch (error) { this.disposePendingVideo(next); throw error; }
       this.publishLocalStream();
       this.broadcastState();
     });
@@ -308,29 +325,33 @@ export class MediaSession implements CallSession {
         if (this.closed) { disposeAudio(next); return; }
         next.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
         next.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
+        this.pendingAudio = next;
         try {
           const installed = await this.replaceTrack("audio", next.stream.getAudioTracks()[0], this.audio?.stream.getAudioTracks()[0] ?? null, () => {
             next.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
             next.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
             disposeAudio(this.audio);
             this.audio = next;
+            this.pendingAudio = null;
           });
-          if (!installed) { disposeAudio(next); return; }
-        } catch (error) { disposeAudio(next); throw error; }
+          if (!installed) { this.disposePendingAudio(next); return; }
+        } catch (error) { this.disposePendingAudio(next); throw error; }
       }
       if (this.audio) this.audio.gain.gain.value = Math.max(0, Math.min(2, settings.inputVolume / 100));
       if (this.video && settings.selectedVideoInput !== this.settings.selectedVideoInput) {
         const generation = this.videoGeneration;
         const next = await captureVideo(settings);
         if (this.closed || generation !== this.videoGeneration) { next.stop(); return; }
+        this.pendingVideo = next;
         try {
           const installed = await this.replaceTrack("video", next, this.video, () => {
             this.video?.stop();
             this.video = next;
+            this.pendingVideo = null;
             this.watchVideo();
           });
-          if (!installed) { next.stop(); return; }
-        } catch (error) { next.stop(); throw error; }
+          if (!installed) { this.disposePendingVideo(next); return; }
+        } catch (error) { this.disposePendingVideo(next); throw error; }
       }
       const iceChanged = JSON.stringify(settings.iceServers) !== JSON.stringify(this.settings.iceServers);
       this.settings = settings;
@@ -499,6 +520,8 @@ export class MediaSession implements CallSession {
     for (const userId of [...this.peers.keys()]) this.removePeer(userId);
     disposeAudio(this.audio);
     this.audio = null;
+    if (this.pendingAudio) this.disposePendingAudio(this.pendingAudio);
+    if (this.pendingVideo) this.disposePendingVideo(this.pendingVideo);
     this.video?.stop();
     this.video = null;
     this.options.onLocalStream(null);

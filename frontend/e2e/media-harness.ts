@@ -36,7 +36,7 @@ function createCall(userId: string) {
         element.playsInline = true;
         document.getElementById("media")!.appendChild(element);
       }
-      element.srcObject = stream;
+      if (element.srcObject !== stream) element.srcObject = stream;
       void element.play().catch((error) => errors.push(String(error)));
     },
     onPeer: (id, patch) => { if (patch) peers.set(id, { ...peers.get(id), ...patch }); else peers.delete(id); },

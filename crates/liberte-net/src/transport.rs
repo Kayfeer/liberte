@@ -58,7 +58,7 @@ pub fn build_swarm_with_discovery(
                 // Keep subscription memory bounded while supporting profiles with
                 // more than the new upstream default of 100 channels.
                 let subscription_filter = gossipsub::MaxCountSubscriptionFilter {
-                    filter: gossipsub::AllowAllSubscriptionFilter,
+                    filter: gossipsub::AllowAllSubscriptionFilter {},
                     max_subscribed_topics: 1024,
                     max_subscriptions_per_request: 1024,
                 };
