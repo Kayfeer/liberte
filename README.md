@@ -74,7 +74,7 @@ L'API est publiée sur `127.0.0.1:8080` par défaut. Le transport QUIC utilise U
 
 ## Vérification et distribution
 
-La CI exécute les tests frontend, les vérifications Rust, des tests d'authentification HTTP, des échanges média dans Chromium et le chargement/démarrage d'une image Docker réellement exportée. Elle ne remplace pas un appel entre deux appareils derrière des NAT différents, un essai dans chaque WebView native, ni un audit cryptographique indépendant.
+La CI exécute les tests frontend, les vérifications Rust, des tests d'authentification HTTP, des échanges média dans Chromium et le chargement/démarrage d'une image Docker réellement exportée. Elle lance également le vrai client Linux via WebDriver, crée une identité et un canal par l'interface, puis vérifie leur persistance après redémarrage. Les résultats et captures du parcours natif sont conservés dans les artefacts `native-smoke-linux`. Elle ne remplace pas un appel entre deux appareils derrière des NAT différents, un essai des périphériques dans chaque WebView native, ni un audit cryptographique indépendant.
 
 Les jobs desktop produisent des paquets de test Windows, Linux et macOS dans les artefacts de l'exécution GitHub Actions. Leur nom et `build.json` identifient le commit ; vérifier aussi `SHA256SUMS`. Ces paquets CI ne sont pas signés ni publiés comme release et ne proposent pas de mise à jour automatique.
 

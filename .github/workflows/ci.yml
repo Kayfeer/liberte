@@ -53,6 +53,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s scripts -p 'ci_test.py' -v
+      - run: python -m unittest discover -s scripts -p 'native_smoke_test.py' -v
       - run: python scripts/ci.py versions
 
   rust-audit:
@@ -232,7 +233,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev pkg-config perl gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libnice10
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev pkg-config perl gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libnice10 webkit2gtk-driver xvfb xauth dbus-x11
       - run: npm ci
         working-directory: frontend
       - name: Disable release updating for unsigned CI packages
@@ -240,6 +241,21 @@ jobs:
       - name: Build a testable desktop package
         working-directory: crates/liberte-client
         run: node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --bundles ${{ matrix.bundle }} --config tauri-ci.conf.json -- --locked
+      - name: Install pinned native WebDriver
+        if: runner.os == 'Linux'
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Exercise the real Linux client and persisted profile
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_smoke.py --application target/release/liberte-client
+      - name: Preserve native client diagnostics
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-smoke-linux-${{ github.sha }}
+          path: .ci-output/native-smoke
+          if-no-files-found: warn
+          retention-days: 14
       - name: Record package checksum and source commit
         run: python scripts/ci.py package-desktop --label ${{ matrix.label }}
       - uses: actions/upload-artifact@v4
