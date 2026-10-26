@@ -243,7 +243,7 @@ jobs:
         run: node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --bundles ${{ matrix.bundle }} --config tauri-ci.conf.json -- --locked
       - name: Verify the native WebKitGTK driver
         if: runner.os == 'Linux'
-        run: WebKitWebDriver --version
+        run: dpkg-query -W webkit2gtk-driver
       - name: Exercise the real Linux client and persisted profile
         if: runner.os == 'Linux'
         timeout-minutes: 5

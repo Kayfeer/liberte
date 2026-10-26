@@ -20,6 +20,16 @@ Ces paquets permettent les essais sur machine, sans créer de release ni de tag.
 
 Le job RustSec indépendant emploie [cargo-audit 0.22.2](https://github.com/rustsec/rustsec/releases/tag/cargo-audit/v0.22.2), dont l'archive officielle est vérifiée par SHA-256. Il examine le `Cargo.lock` conservé, actualise la base officielle RustSec et conserve le JSON complet, le commit de la base et le statut de l'outil dans les logs et l'artefact `cargo-audit`. Toute vulnérabilité signalée bloque, y compris sans correctif publié ; aucune exception n'est configurée. Les avis de maintenance, notamment `unmaintained`, restent visibles séparément et ne sont pas comptés comme des vulnérabilités. Une base inaccessible ou un rapport incomplet bloque aussi. Toute exception future nécessiterait une justification précise et révisable, sans retirer l'avis du rapport.
 
+## Validation native Linux
+
+Le client de production est lancé avec son frontend embarqué dans deux profils temporaires. Le parcours vérifie une invitation avant tout redémarrage, les messages dans les deux sens, une réaction, un fichier de plusieurs blocs avec SHA-256 et accusé de réception, la reconnexion, puis une sauvegarde et une restauration depuis le vrai serveur. Les rapports indiquent quelles actions passent par l'interface et lesquelles utilisent les commandes IPC de production, notamment pour éviter les sélecteurs de fichiers du système.
+
+Le pilote WebKitGTK est utilisé directement avec les mêmes options d'automatisation que le pilote Tauri. Une interruption de transport peut relancer au plus deux fois une lecture explicitement autorisée ; les envois, clics et autres mutations ne sont jamais rejoués automatiquement. Une erreur de l'application reste un échec.
+
+Un second binaire, debug uniquement, active `qa-media-devices` et conserve le frontend embarqué. Il utilise les périphériques synthétiques de WebKit, la vraie signalisation Rust et de vrais flux WebRTC. Les mesures portent sur l'énergie audio reçue, les images vidéo décodées, le mute, la caméra et le raccrochage. Une observation native, absente des paquets distribués, vérifie que les captures actives redeviennent arrêtées. La compilation release refuse cette option QA.
+
+Les rapports conservent le commit, le SHA-256 du binaire et les limites de la preuve : les périphériques physiques, les permissions interactives et les réseaux NAT distincts demandent leurs propres essais. Un test avec périphériques synthétiques ne les valide pas. Aucun binaire QA n'est inclus dans les artefacts desktop.
+
 ## Chaîne de release
 
 1. Créer un nouveau tag complet correspondant à la version, par exemple `v2.4.0`. Ne pas déplacer un ancien tag.
