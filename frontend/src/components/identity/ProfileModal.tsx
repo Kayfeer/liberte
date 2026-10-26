@@ -32,9 +32,11 @@ export default function ProfileModal({
   userId,
   displayName,
 }: Props) {
-  const { identity, setBio, setStatus, setDisplayName } = useIdentityStore();
+  const { identity, error: identityError, setBio, setStatus, setDisplayName } = useIdentityStore();
   const remoteProfile = useProfileStore((state) => userId ? state.profiles[userId] : undefined);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState("");
   const [editingName, setEditingName] = useState(false);
@@ -46,7 +48,7 @@ export default function ProfileModal({
   const profilePubkey = userId || identity?.publicKey || "";
   const profileName = isOwnProfile
     ? identity?.displayName
-    : remoteProfile?.displayName || displayName;
+    : remoteProfile?.displayName !== undefined ? remoteProfile.displayName : displayName;
   const profileBio = isOwnProfile ? identity?.bio : remoteProfile?.bio;
   const profileStatus: UserStatus | null = isOwnProfile
     ? identity?.status || "online"
@@ -59,20 +61,29 @@ export default function ProfileModal({
     ? profileName.slice(0, 2).toUpperCase()
     : shortId.slice(0, 2).toUpperCase();
 
-  const copyPubkey = () => {
-    navigator.clipboard.writeText(profilePubkey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyPubkey = async () => {
+    setCopyError(null); setCopied(false);
+    try {
+      await navigator.clipboard.writeText(profilePubkey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (cause) { setCopyError(String(cause)); }
   };
 
   const handleSaveBio = async () => {
-    await setBio(bioInput.trim());
-    setEditingBio(false);
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try { await setBio(bioInput.trim()); setEditingBio(false); }
+    catch { /* The store error is displayed in this dialog; keep the draft. */ }
+    finally { setSavingProfile(false); }
   };
 
   const handleSaveName = async () => {
-    await setDisplayName(nameInput.trim());
-    setEditingName(false);
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try { await setDisplayName(nameInput.trim()); setEditingName(false); }
+    catch { /* The store error is displayed in this dialog; keep the draft. */ }
+    finally { setSavingProfile(false); }
   };
 
   const handleStatusChange = async (newStatus: UserStatus) => {
@@ -118,6 +129,7 @@ export default function ProfileModal({
 
         {/* Profile info */}
         <div className="px-4 pt-2 pb-4 space-y-4">
+          {(copyError || (isOwnProfile && identityError)) && <p role="alert" className="text-sm text-red-300">{copyError || identityError}</p>}
           {/* Name */}
           <div>
             {isOwnProfile && editingName ? (
@@ -132,7 +144,7 @@ export default function ProfileModal({
                   autoFocus
                   className="flex-1 bg-liberte-bg border border-liberte-border rounded px-2 py-1 text-sm outline-hidden focus:border-liberte-accent"
                 />
-                <button onClick={handleSaveName} className="p-1 hover:bg-liberte-panel rounded">
+                <button aria-label="Enregistrer le pseudo" disabled={savingProfile} onClick={handleSaveName} className="p-1 hover:bg-liberte-panel rounded">
                   <Check className="w-4 h-4 text-liberte-success" />
                 </button>
               </div>
@@ -148,6 +160,7 @@ export default function ProfileModal({
                 )}
                 {isOwnProfile && (
                   <button
+                    aria-label="Modifier le pseudo"
                     onClick={() => {
                       setNameInput(profileName || "");
                       setEditingName(true);
@@ -198,6 +211,7 @@ export default function ProfileModal({
               </label>
               {isOwnProfile && !editingBio && (
                 <button
+                  aria-label="Modifier la bio"
                   onClick={() => {
                     setBioInput(profileBio || "");
                     setEditingBio(true);
@@ -231,6 +245,7 @@ export default function ProfileModal({
                       Annuler
                     </button>
                     <button
+                      disabled={savingProfile}
                       onClick={handleSaveBio}
                       className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                     >
@@ -260,7 +275,8 @@ export default function ProfileModal({
                 {profilePubkey}
               </code>
               <button
-                onClick={copyPubkey}
+                aria-label={copied ? "Clé publique copiée" : "Copier la clé publique"}
+                onClick={() => void copyPubkey()}
                 className="p-2 hover:bg-liberte-panel rounded shrink-0"
               >
                 {copied ? (

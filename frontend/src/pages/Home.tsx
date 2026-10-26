@@ -62,8 +62,9 @@ export default function Home() {
     subscriptions.add(EVENTS.PEER_CONNECTED, refreshNetwork);
     subscriptions.add(EVENTS.PEER_DISCONNECTED, refreshNetwork);
     subscriptions.add(EVENTS.CONNECTION_MODE_CHANGED, refreshNetwork);
-    subscriptions.add<{ channelId: string }>(EVENTS.MESSAGE_REACTION, (event) => {
-      if (event.payload.channelId) void useMessageStore.getState().loadMessages(event.payload.channelId);
+    subscriptions.add<{ channelId: string; messageId: string }>(EVENTS.MESSAGE_REACTION, (event) => {
+      const { channelId, messageId } = event.payload;
+      if (channelId && messageId) void useMessageStore.getState().refreshReactions(channelId, messageId);
     });
     subscriptions.add<FileTransferDto>("file-transfer-updated", (event) => useFileStore.getState().upsert(event.payload));
     subscriptions.add<PeerProfile>("profile-updated", (event) => useProfileStore.getState().upsert(event.payload));

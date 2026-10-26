@@ -14,7 +14,9 @@ export default function FileTransfers({ channelId }: { channelId: string }) {
   const transfers = useFileStore((state) => state.transfers);
   const loadError = useFileStore((state) => state.errors[channelId]);
   const ownId = useIdentityStore((state) => state.identity?.publicKey);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string | null>>({});
+  const error = errors[channelId];
+  const setError = (value: string | null) => setErrors((current) => ({ ...current, [channelId]: value }));
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const files = Object.values(transfers).filter((file) => file.channelId === channelId);
 
@@ -40,7 +42,9 @@ export default function FileTransfers({ channelId }: { channelId: string }) {
   if (!files.length && !error && !loadError) return null;
   return (
     <section aria-label="Fichiers du canal" className="max-h-48 overflow-y-auto mx-4 mb-2 border border-liberte-border rounded p-2 text-xs">
-      {(error || loadError) && <p role="alert" className="text-red-300 mb-2">{error || loadError}</p>}
+      {(error || loadError) && <p role="alert" className="text-red-300 mb-2">{error || loadError}
+        {loadError && <button className="underline ml-2" onClick={() => void useFileStore.getState().load(channelId)}>Réessayer le chargement</button>}
+      </p>}
       {files.map((file) => <div key={file.fileId} className="flex items-center gap-2 py-2 border-b last:border-b-0 border-liberte-border">
         <File className="w-4 h-4 shrink-0" />
         <div className="min-w-0 flex-1">

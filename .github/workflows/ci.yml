@@ -53,7 +53,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s scripts -p 'ci_test.py' -v
-      - run: python -m unittest discover -s scripts -p 'native_smoke_test.py' -v
+      - run: python -m unittest discover -s scripts -p 'native_*test.py' -v
       - run: python scripts/ci.py versions
 
   rust-audit:
@@ -248,12 +248,21 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_smoke.py --application target/release/liberte-client
+      - name: Build the real server for native integration
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked --bin liberte-server
+      - name: Exercise two native clients and the real server
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_integration.py --application target/release/liberte-client --server target/release/liberte-server
       - name: Preserve native client diagnostics
         if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: native-smoke-linux-${{ github.sha }}
-          path: .ci-output/native-smoke
+          path: |
+            .ci-output/native-smoke
+            .ci-output/native-integration
           if-no-files-found: warn
           retention-days: 14
       - name: Record package checksum and source commit

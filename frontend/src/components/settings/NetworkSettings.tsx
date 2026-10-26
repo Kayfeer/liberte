@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNetworkStore } from "@/stores/networkStore";
 import { getSettings, getServerInfo, updateSettings } from "@/lib/tauri";
 
-export default function NetworkSettings() {
+export default function NetworkSettings({ onServerChanged }: { onServerChanged?: () => void }) {
   const network = useNetworkStore();
   const [address, setAddress] = useState("");
   const [serverUrl, setServerUrl] = useState("");
@@ -34,6 +34,8 @@ export default function NetworkSettings() {
       const info = url ? await getServerInfo(url) : null;
       const settings = await getSettings();
       await updateSettings({ ...settings, serverUrl: url });
+      setServerUrl(url);
+      onServerChanged?.();
       setNotice(info ? `Serveur enregistré : ${info.name} (${info.version}).` : "Serveur retiré.");
     } catch (cause) { setError(String(cause)); }
     finally { setSaving(false); }

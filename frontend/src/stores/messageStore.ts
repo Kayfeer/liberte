@@ -13,6 +13,9 @@ interface MessageState {
   hasMore: Record<string, boolean>;
   errors: Record<string, string | null>;
   error: string | null;
+  focusedMessageId: string | null;
+  revealMessage: (channelId: string, messageId: string) => Promise<boolean>;
+  refreshReactions: (channelId: string, messageId: string) => Promise<void>;
   loadChannels: () => Promise<void>;
   setActiveChannel: (channelId: string) => void;
   loadMessages: (channelId: string) => Promise<void>;
@@ -32,10 +35,13 @@ function mergeMessages(existing: Message[], incoming: Message[]) {
 
 let channelsRequest: Promise<void> | null = null;
 const refreshVersions = new Map<string, number>();
+const reactionVersions = new Map<string, number>();
+const historyRequests = new Map<string, Promise<void>>();
+let focusGeneration = 0;
 
 export const useMessageStore = create<MessageState>((set, get) => ({
   channels: [], activeChannelId: null, messages: {}, channelKeys: {},
-  loadingByChannel: {}, loadingMore: {}, hasMore: {}, errors: {}, error: null,
+  loadingByChannel: {}, loadingMore: {}, hasMore: {}, errors: {}, error: null, focusedMessageId: null,
 
   loadChannels: () => {
     if (channelsRequest) return channelsRequest;
@@ -55,7 +61,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
   },
 
   setActiveChannel: (channelId) => {
-    set({ activeChannelId: channelId });
+    ++focusGeneration;
+    set({ activeChannelId: channelId, focusedMessageId: null });
     void get().loadMessages(channelId);
   },
 
@@ -83,22 +90,65 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     }
   },
 
-  loadMoreMessages: async (channelId) => {
-    if (get().loadingMore[channelId] || get().hasMore[channelId] === false) return;
+  loadMoreMessages: (channelId) => {
+    const pending = historyRequests.get(channelId);
+    if (pending) return pending;
+    if (get().hasMore[channelId] === false) return Promise.resolve();
     const offset = get().messages[channelId]?.length || 0;
     set((state) => ({ loadingMore: { ...state.loadingMore, [channelId]: true } }));
+    const request = (async () => {
+      try {
+        const messages = await tauri.getMessages(channelId, get().channelKeys[channelId] || "", MESSAGE_PAGE_SIZE, offset);
+        set((state) => ({
+          messages: { ...state.messages, [channelId]: mergeMessages(state.messages[channelId] || [], messages) },
+          hasMore: { ...state.hasMore, [channelId]: messages.length === MESSAGE_PAGE_SIZE },
+          errors: { ...state.errors, [channelId]: null },
+        }));
+      } catch (error) {
+        set((state) => ({ errors: { ...state.errors, [channelId]: String(error) } }));
+      } finally {
+        set((state) => ({ loadingMore: { ...state.loadingMore, [channelId]: false } }));
+      }
+    })();
+    historyRequests.set(channelId, request);
+    void request.finally(() => { if (historyRequests.get(channelId) === request) historyRequests.delete(channelId); });
+    return request;
+  },
+
+  refreshReactions: async (channelId, messageId) => {
+    if (!get().messages[channelId]?.some((message) => message.id === messageId)) return;
+    const version = (reactionVersions.get(messageId) ?? 0) + 1;
+    reactionVersions.set(messageId, version);
     try {
-      const messages = await tauri.getMessages(channelId, get().channelKeys[channelId] || "", MESSAGE_PAGE_SIZE, offset);
-      set((state) => ({
-        messages: { ...state.messages, [channelId]: mergeMessages(state.messages[channelId] || [], messages) },
-        hasMore: { ...state.hasMore, [channelId]: messages.length === MESSAGE_PAGE_SIZE },
-        errors: { ...state.errors, [channelId]: null },
-      }));
+      const reactions = await tauri.getReactions(messageId);
+      if (reactionVersions.get(messageId) !== version) return;
+      set((state) => ({ messages: { ...state.messages,
+        [channelId]: (state.messages[channelId] || []).map((message) => message.id === messageId ? { ...message, reactions } : message),
+      } }));
     } catch (error) {
+      if (reactionVersions.get(messageId) !== version) return;
       set((state) => ({ errors: { ...state.errors, [channelId]: String(error) } }));
-    } finally {
-      set((state) => ({ loadingMore: { ...state.loadingMore, [channelId]: false } }));
     }
+  },
+
+  revealMessage: async (channelId, messageId) => {
+    const generation = ++focusGeneration;
+    set({ activeChannelId: channelId, focusedMessageId: null });
+    if (!get().messages[channelId]?.some((message) => message.id === messageId)) await get().loadMessages(channelId);
+    while (!get().messages[channelId]?.some((message) => message.id === messageId)) {
+      if (generation !== focusGeneration) return false;
+      if (get().errors[channelId]) throw new Error(get().errors[channelId]!);
+      if (get().hasMore[channelId] === false) throw new Error("Le message recherché n'est plus disponible.");
+      const previousCount = get().messages[channelId]?.length || 0;
+      await get().loadMoreMessages(channelId);
+      if (get().errors[channelId]) throw new Error(get().errors[channelId]!);
+      if ((get().messages[channelId]?.length || 0) <= previousCount) {
+        throw new Error("Impossible de retrouver ce message dans l'historique.");
+      }
+    }
+    if (generation !== focusGeneration) return false;
+    set({ focusedMessageId: messageId });
+    return true;
   },
 
   sendMessage: async (channelId, content) => {

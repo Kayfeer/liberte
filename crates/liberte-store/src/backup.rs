@@ -281,7 +281,21 @@ impl Database {
                 Err(e) => return Err(e),
             }
         }
+        // A structurally valid encrypted record can still be corrupt or use the
+        // wrong channel key. Detect this before committing an unreadable history.
+        let mut message_keys = validated.keys.clone();
         for msg in &validated.messages {
+            if let std::collections::hash_map::Entry::Vacant(entry) = message_keys.entry(msg.channel_id) {
+                match self.get_channel_key(msg.channel_id) {
+                    Ok(key) => { entry.insert(key); }
+                    Err(StoreError::NotFound) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if let Some(key) = message_keys.get(&msg.channel_id) {
+                liberte_shared::crypto::decrypt(&decode_key(key)?, &msg.encrypted_content)
+                    .map_err(|_| invalid("Message authentication failed for its channel key"))?;
+            }
             match self.get_message_by_id(msg.id) {
                 Ok(old) if old != *msg => {
                     return Err(invalid("Existing message has different contents"))
@@ -433,6 +447,30 @@ mod tests {
         assert!(result.is_err());
         assert!(target.list_channels().unwrap().is_empty());
     }
+    #[test]
+    fn corrupted_ciphertext_or_wrong_archived_key_never_commits() {
+        let (_one, source) = db();
+        let payload = seed(&source);
+        let (_two, target) = db();
+        let mut corrupted = payload.clone();
+        let mut bytes = hex::decode(&corrupted.messages[0].encrypted_content_hex).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        corrupted.messages[0].encrypted_content_hex = hex::encode(bytes);
+        assert!(target.import_backup(&corrupted).is_err());
+        assert!(target.list_channels().unwrap().is_empty());
+        assert!(target.get_all_channel_keys().unwrap().is_empty());
+        let mut wrong_key = payload.clone();
+        *wrong_key.channel_keys.values_mut().next().unwrap() = hex::encode([99; 32]);
+        assert!(target.import_backup(&wrong_key).is_err());
+        assert!(target.list_channels().unwrap().is_empty());
+        target.import_backup(&payload).unwrap();
+        // A message-only import must authenticate against an existing local key too.
+        corrupted.channel_keys.clear();
+        corrupted.messages[0].id = Uuid::new_v4().to_string();
+        assert!(target.import_backup(&corrupted).is_err());
+        assert_eq!(target.export_backup().unwrap().messages.len(), 1);
+    }
+
     #[test]
     fn key_conflict_preserves_existing_history() {
         let (_one, target) = db();

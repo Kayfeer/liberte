@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Modal from "../common/Modal";
 import { useMessageStore } from "../../stores/messageStore";
 
@@ -9,12 +9,14 @@ interface Props {
 
 export default function CreateChannelModal({ isOpen, onClose }: Props) {
   const [name, setName] = useState("");
+  const submitting = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const { createChannel } = useMessageStore();
 
   const handleCreate = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || submitting.current) return;
+    submitting.current = true;
     setLoading(true);
     setError("");
     try {
@@ -24,6 +26,7 @@ export default function CreateChannelModal({ isOpen, onClose }: Props) {
     } catch (e) {
       setError(String(e));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };
@@ -47,7 +50,7 @@ export default function CreateChannelModal({ isOpen, onClose }: Props) {
         </div>
 
         {error && (
-          <p className="text-sm text-red-400">{error}</p>
+          <p role="alert" className="text-sm text-red-400">{error}</p>
         )}
 
         <button

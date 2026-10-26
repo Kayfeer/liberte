@@ -36,6 +36,22 @@ let ending: Promise<void> | null = null;
 let generation = 0;
 let listenerGeneration = 0;
 let setupPromise: Promise<void> | null = null;
+let backendOperations: Promise<unknown> = Promise.resolve();
+let pendingSignals: CallSignalEvent[] = [];
+const pendingPeers = new Set<string>();
+
+// Tauri may execute independent IPC requests concurrently. Preserve call-state
+// order so a delayed start or control cannot run after its corresponding hangup.
+function updateBackend<T>(operation: () => Promise<T>): Promise<T> {
+  const pending = backendOperations.then(operation);
+  backendOperations = pending.catch(() => {});
+  return pending;
+}
+
+function clearPendingPeer(userId: string) {
+  pendingPeers.delete(userId);
+  pendingSignals = pendingSignals.filter((event) => event.sender !== userId);
+}
 const idle = { inCall: false, channelId: null, participants: [], localStream: null, remoteStreams: {}, isMuted: false, isVideoEnabled: false };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -49,6 +65,8 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     const callGeneration = ++generation;
     const mode = get().mode;
     set({ busy: true, error: null });
+    pendingSignals = [];
+    pendingPeers.clear();
     let backendStarted = false;
     const current: CallSession = new (mode === "sfu" ? SfuSession : MediaSession)({
       userId: identity.publicKey,
@@ -81,26 +99,33 @@ export const useMediaStore = create<MediaState>((set, get) => ({
       onCameraEnded: () => {
         if (session !== current || !get().isVideoEnabled) return;
         set({ isVideoEnabled: false });
-        void tauri.toggleVideo(false).catch((error) => set({ error: errorText(error) }));
+        void updateBackend(() => tauri.toggleVideo(false)).catch((error) => set({ error: errorText(error) }));
       },
     });
     session = current;
     try {
       await get().setupListeners();
-      await tauri.setCallMode(mode);
+      await updateBackend(() => tauri.setCallMode(mode));
       if (generation !== callGeneration) return;
       set({ channelId, participants: [], remoteStreams: {} });
       await current.start();
       if (generation !== callGeneration) return;
       // Set the channel before publication so an immediate answer is accepted.
-      await tauri.startCall(channelId);
+      await updateBackend(() => generation === callGeneration ? tauri.startCall(channelId) : Promise.resolve());
       backendStarted = true;
       if (generation !== callGeneration) return;
       set({ inCall: true, isMuted: false, isVideoEnabled: false, mode });
+      // Presence can arrive while microphone permission or start_call IPC is
+      // pending. Negotiate only once Rust accepts outgoing call signals.
+      for (const userId of pendingPeers) current.ensurePeer?.(userId);
+      pendingPeers.clear();
+      for (const event of pendingSignals.splice(0)) {
+        void current.receive?.(event).catch((error) => { if (session === current) set({ error: errorText(error) }); });
+      }
       current.announce();
     } catch (error) {
       await current.stop();
-      if (backendStarted) await tauri.endCall().catch(() => {});
+      if (backendStarted) await updateBackend(() => tauri.endCall()).catch(() => {});
       if (session === current) session = null;
       if (generation === callGeneration) {
         set({ ...idle, error: errorText(error) });
@@ -116,11 +141,13 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     ++generation;
     const current = session;
     session = null;
+    pendingSignals = [];
+    pendingPeers.clear();
     set({ ...idle, busy: true, error: null });
     const pending = (async () => {
       try {
         await current?.stop();
-        await tauri.endCall();
+        await updateBackend(() => tauri.endCall());
       } catch (error) { set({ error: errorText(error) }); throw error; }
       finally { ending = null; set({ busy: false }); }
     })();
@@ -136,7 +163,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     // Silence immediately, even before the IPC roundtrip completes.
     if (!get().isMuted) current.setMuted(true);
     try {
-      const isMuted = await tauri.toggleMute(desired);
+      const isMuted = await updateBackend(() => tauri.toggleMute(desired));
       if (session === current) { current.setMuted(isMuted); set({ isMuted }); }
     } catch (error) {
       if (session === current) { current.setMuted(true); set({ isMuted: true, error: errorText(error) }); }
@@ -152,7 +179,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     try {
       await current.setVideoEnabled(enabled);
       if (session !== current) return;
-      const isVideoEnabled = await tauri.toggleVideo(enabled);
+      const isVideoEnabled = await updateBackend(() => tauri.toggleVideo(enabled));
       if (session === current) set({ isVideoEnabled });
     } catch (error) {
       if (session === current) {
@@ -166,7 +193,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   setParticipants: (participants) => set({ participants }),
   setMode: async (mode) => {
     if (get().inCall || get().busy) throw new Error("Quittez l'appel avant de changer de transport.");
-    try { await tauri.setCallMode(mode); set({ mode, error: null }); }
+    try { await updateBackend(() => tauri.setCallMode(mode)); set({ mode, error: null }); }
     catch (error) { set({ error: errorText(error) }); throw error; }
   },
   retryConnections: () => { set({ error: null }); session?.retryConnections(); },
@@ -180,23 +207,34 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     const promise = (async () => {
       try {
         unlisteners.push(await listen<CallSignalEvent>("call-signal", ({ payload }) => {
-          void session?.receive?.(payload).catch((error) => set({ error: errorText(error) }));
+          const current = session;
+          if (!current || get().channelId !== payload.channelId) return;
+          if (!get().inCall) {
+            if (payload.signalType === "Hangup") clearPendingPeer(payload.sender);
+            else if (pendingSignals.length < 256) pendingSignals.push(payload);
+            return;
+          }
+          void current.receive?.(payload).catch((error) => { if (session === current) set({ error: errorText(error) }); });
         }));
         unlisteners.push(await listen<{ channelId: string; userId: string }>("voice-peer-joined", ({ payload }) => {
           if (get().channelId === payload.channelId) {
+            if (!get().inCall) { pendingPeers.add(payload.userId); return; }
             try { session?.ensurePeer?.(payload.userId); }
             catch (error) { set({ error: errorText(error) }); }
           }
         }));
         unlisteners.push(await listen<{ channelId: string; userId: string }>("voice-peer-left", ({ payload }) => {
-          if (get().channelId === payload.channelId) session?.removePeer?.(payload.userId);
+          if (get().channelId === payload.channelId) {
+            clearPendingPeer(payload.userId);
+            session?.removePeer?.(payload.userId);
+          }
         }));
         unlisteners.push(await listen<{ channelId: string; userId: string; muted: boolean }>("voice-peer-muted", ({ payload }) => {
           if (get().channelId === payload.channelId) set((state) => ({ participants: state.participants.map((peer) => peer.userId === payload.userId ? { ...peer, isMuted: payload.muted } : peer) }));
         }));
         // A WebView reload may outlive its JS tracks but leave backend presence
         // active. Reconcile it before accepting the next call.
-        if (!session && setupGeneration === listenerGeneration) await tauri.endCall();
+        if (!session && setupGeneration === listenerGeneration) await updateBackend(() => tauri.endCall());
         if (setupGeneration !== listenerGeneration) unlisteners.forEach((unlisten) => unlisten());
         else set({ unlisteners });
       } catch (error) { unlisteners.forEach((unlisten) => unlisten()); throw error; }

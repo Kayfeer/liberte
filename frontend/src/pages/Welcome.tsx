@@ -75,7 +75,7 @@ export default function Welcome() {
           </div>
 
           {error && (
-            <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg text-sm text-red-300">
+            <div role="alert" className="p-3 bg-red-900/20 border border-red-800 rounded-lg text-sm text-red-300">
               {error}
             </div>
           )}

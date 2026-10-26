@@ -164,12 +164,12 @@ pub async fn create_identity(
 #[tauri::command]
 pub async fn load_identity(
     state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<IdentityInfoDto, String> {
+) -> Result<Option<IdentityInfoDto>, String> {
     // If identity is already loaded and swarm already running, just return the DTO
     let loaded = {
         let guard = state.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
         if let Some(ref id) = guard.identity {
-            let display_name = guard.database.as_ref().and_then(read_display_name);
+            let display_name = guard.database.as_ref().and_then(|db| read_display_name(db, id));
             let (bio, status) = guard
                 .database
                 .as_ref()
@@ -198,7 +198,7 @@ pub async fn load_identity(
                 }
             }
         }
-        return Ok(dto);
+        return Ok(Some(dto));
     }
 
     // Step 1: Open DB with a temporary key to read the stored secret.
@@ -210,30 +210,15 @@ pub async fn load_identity(
     let db = Database::new(&bootstrap_arr)
         .map_err(|e| format!("Failed to open database (is identity created?): {e}"))?;
 
-    let secret_hex: String = db
-        .conn()
-        .query_row(
-            "SELECT secret_key FROM local_identity WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("No identity found in database: {e}"))?;
-
-    let secret_bytes =
-        hex::decode(&secret_hex).map_err(|e| format!("Corrupt identity data: {e}"))?;
-
-    if secret_bytes.len() != 32 {
-        return Err("Corrupt identity: expected 32-byte secret key".into());
-    }
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&secret_bytes);
-    let identity = Identity::from_secret_bytes(&key);
+    let Some(identity) = read_stored_identity(&db)? else {
+        return Ok(None);
+    };
+    let key = *identity.secret_bytes();
     let pubkey_hex = hex::encode(identity.public_key_bytes());
 
     info!(pubkey = %pubkey_hex, "Loaded existing identity");
 
-    let display_name = read_display_name(&db);
+    let display_name = read_display_name(&db, &identity);
     let (bio, status) = read_profile(&db, &identity).unwrap_or((None, "online".to_string()));
     let dto = make_identity_dto(&identity, display_name, bio, status);
 
@@ -257,11 +242,43 @@ pub async fn load_identity(
         }
     }
 
-    Ok(dto)
+    Ok(Some(dto))
+}
+
+/// A fresh profile has no identity; a damaged existing identity is an error.
+fn read_stored_identity(db: &Database) -> Result<Option<Identity>, String> {
+    let exists: bool = db
+        .conn()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'local_identity')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Cannot inspect local identity: {e}"))?;
+    if !exists {
+        return Ok(None);
+    }
+    let secret: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT secret_key FROM local_identity WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("Cannot read local identity: {e}"))?;
+    let Some(secret) = secret else {
+        return Ok(None);
+    };
+    let key: [u8; 32] = hex::decode(secret)
+        .map_err(|e| format!("Corrupt identity data: {e}"))?
+        .try_into()
+        .map_err(|_| "Corrupt identity: expected 32-byte secret key")?;
+    Ok(Some(Identity::from_secret_bytes(&key)))
 }
 
 /// Read the display name from app_settings JSON, falling back to users table.
-fn read_display_name(db: &Database) -> Option<String> {
+fn read_display_name(db: &Database, identity: &Identity) -> Option<String> {
     // Try app_settings first
     if let Ok(json_str) =
         db.conn()
@@ -279,9 +296,11 @@ fn read_display_name(db: &Database) -> Option<String> {
     }
     // Fallback: users table (own pubkey row)
     db.conn()
-        .query_row("SELECT display_name FROM users LIMIT 1", [], |row| {
-            row.get::<_, Option<String>>(0)
-        })
+        .query_row(
+            "SELECT display_name FROM users WHERE pubkey = ?1",
+            [hex::encode(identity.public_key_bytes())],
+            |row| row.get::<_, Option<String>>(0),
+        )
         .ok()
         .flatten()
 }
@@ -478,7 +497,7 @@ pub fn spawn_profile_broadcast(state: Arc<Mutex<AppState>>) {
             else {
                 return;
             };
-            let display_name = read_display_name(db);
+            let display_name = read_display_name(db, identity);
             let (bio, status) = read_profile(db, identity).unwrap_or((None, "online".into()));
             let Ok(keys) = db.get_all_channel_keys() else {
                 return;
@@ -543,4 +562,74 @@ fn restore_runtime_settings(state: &mut AppState) {
         .map(|settings| settings.server_url)
         .unwrap_or_default();
     crate::commands::premium::restore_status(state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_identity_is_absent_but_corruption_is_not_silenced() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = Identity::generate();
+        let db = Database::open_at(&directory.path().join("fresh.db"), &identity.derive_db_key())
+            .unwrap();
+        assert!(read_stored_identity(&db).unwrap().is_none());
+        db.conn()
+            .execute_batch(
+                "CREATE TABLE local_identity (id INTEGER PRIMARY KEY, secret_key TEXT NOT NULL);",
+            )
+            .unwrap();
+        assert!(read_stored_identity(&db).unwrap().is_none());
+        db.conn()
+            .execute(
+                "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
+                [hex::encode(identity.secret_bytes())],
+            )
+            .unwrap();
+        assert_eq!(
+            read_stored_identity(&db).unwrap().unwrap().public_key_bytes(),
+            identity.public_key_bytes()
+        );
+        db.conn()
+            .execute("UPDATE local_identity SET secret_key = 'invalid' WHERE id = 1", [])
+            .unwrap();
+        assert!(read_stored_identity(&db).is_err());
+    }
+
+    #[test]
+    fn identity_name_fallback_never_borrows_a_peers_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let own = Identity::generate();
+        let peer = Identity::generate();
+        let db = Database::open_at(&directory.path().join("identity.db"), &own.derive_db_key())
+            .unwrap();
+        for (identity, name) in [(&peer, Some("Remote peer")), (&own, None)] {
+            db.conn()
+                .execute(
+                    "INSERT INTO users (pubkey, display_name, created_at) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![
+                        hex::encode(identity.public_key_bytes()),
+                        name,
+                        chrono::Utc::now().to_rfc3339()
+                    ],
+                )
+                .unwrap();
+        }
+        assert_eq!(read_display_name(&db, &own), None);
+        db.conn()
+            .execute(
+                "UPDATE users SET display_name = ?1 WHERE pubkey = ?2",
+                rusqlite::params!["Own name", hex::encode(own.public_key_bytes())],
+            )
+            .unwrap();
+        assert_eq!(read_display_name(&db, &own).as_deref(), Some("Own name"));
+        db.conn()
+            .execute(
+                "UPDATE users SET display_name = NULL WHERE pubkey = ?1",
+                [hex::encode(own.public_key_bytes())],
+            )
+            .unwrap();
+        assert_eq!(read_display_name(&db, &own), None);
+    }
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Message } from "../../lib/types";
 import ReactionBar from "./ReactionBar";
 import ProfileModal from "../identity/ProfileModal";
+import { useIdentityStore } from "../../stores/identityStore";
 import { useProfileStore } from "../../stores/profileStore";
 
 interface Props {
@@ -12,9 +13,11 @@ interface Props {
 export default function MessageBubble({ message, onReactionChange }: Props) {
   const shortId = message.senderId.slice(0, 8);
   const profile = useProfileStore((state) => state.profiles[message.senderId]);
-  const displayLabel = profile?.displayName || message.senderDisplayName || shortId;
-  const avatarLetters = message.senderDisplayName
-    ? message.senderDisplayName.slice(0, 2).toUpperCase()
+  const ownIdentity = useIdentityStore((state) => state.identity?.publicKey === message.senderId ? state.identity : null);
+  const name = ownIdentity ? ownIdentity.displayName : profile?.displayName !== undefined ? profile.displayName : message.senderDisplayName;
+  const displayLabel = name || shortId;
+  const avatarLetters = name
+    ? name.slice(0, 2).toUpperCase()
     : shortId.slice(0, 2).toUpperCase();
   const time = new Date(message.timestamp).toLocaleTimeString("fr-FR", {
     hour: "2-digit",
@@ -47,7 +50,7 @@ export default function MessageBubble({ message, onReactionChange }: Props) {
             >
               {displayLabel}
             </button>
-            {message.senderDisplayName && (
+            {name && (
               <span className="text-xs text-liberte-muted font-mono opacity-50">
                 {shortId}
               </span>

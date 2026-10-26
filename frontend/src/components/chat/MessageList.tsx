@@ -10,13 +10,14 @@ export default function MessageList({ channelId }: Props) {
   const loadingMore = useMessageStore((state) => state.loadingMore[channelId]);
   const hasMore = useMessageStore((state) => state.hasMore[channelId]);
   const error = useMessageStore((state) => state.errors[channelId]);
+  const focusedMessageId = useMessageStore((state) => state.focusedMessageId);
   const viewport = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const previousHeight = useRef<number | null>(null);
   const newestId = messages?.[messages.length - 1]?.id;
 
   useEffect(() => {
-    if (previousHeight.current === null) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!focusedMessageId && previousHeight.current === null) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [newestId, channelId]);
 
   useLayoutEffect(() => {
@@ -25,6 +26,10 @@ export default function MessageList({ channelId }: Props) {
       previousHeight.current = null;
     }
   }, [loadingMore, messages]);
+
+  useEffect(() => {
+    if (focusedMessageId) document.getElementById("message-" + focusedMessageId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusedMessageId, channelId]);
 
   const loadOlder = () => {
     previousHeight.current = viewport.current?.scrollHeight ?? null;
@@ -43,8 +48,11 @@ export default function MessageList({ channelId }: Props) {
       {!messages?.length && <p className="text-liberte-muted text-sm text-center py-6">
         {loading ? "Chargement des messages..." : error ? "Historique indisponible." : "Aucun message. Commencez la conversation !"}
       </p>}
-      {messages?.map((message) => <MessageBubble key={message.id} message={message}
-        onReactionChange={() => void useMessageStore.getState().loadMessages(channelId)} />)}
+      {messages?.map((message) => <div key={message.id} id={"message-" + message.id}
+        className={focusedMessageId === message.id ? "rounded border border-liberte-accent/50 bg-liberte-accent/10" : undefined}>
+        <MessageBubble message={message}
+          onReactionChange={() => void useMessageStore.getState().refreshReactions(channelId, message.id)} />
+      </div>)}
       <div ref={bottomRef} />
     </div>
   );

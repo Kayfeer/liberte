@@ -65,22 +65,42 @@ export function disposeAudio(capture: AudioCapture | null) {
   void capture.context.close().catch(() => {});
 }
 
-export async function captureAudio(settings: Preferences): Promise<AudioCapture> {
+export async function captureAudio(settings: Preferences, signal?: AbortSignal): Promise<AudioCapture> {
   const raw = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(settings), video: false });
   let context: AudioContext | undefined;
+  let output: MediaStream | undefined;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    raw.getTracks().forEach((track) => track.stop());
+    output?.getTracks().forEach((track) => track.stop());
+    void context?.close().catch(() => {});
+  };
+  let rejectAbort: ((reason: DOMException) => void) | undefined;
+  const abort = () => {
+    dispose();
+    rejectAbort?.(new DOMException("Capture annulée.", "AbortError"));
+  };
   try {
+    if (signal?.aborted) throw new DOMException("Capture annulée.", "AbortError");
     context = new AudioContext();
-    await context.resume();
+    // resume() can remain pending until a user gesture. Keep ownership of the
+    // physical microphone during that wait, including when the caller hangs up.
+    const cancelled = new Promise<never>((_, reject) => { rejectAbort = reject; });
+    signal?.addEventListener("abort", abort, { once: true });
+    await Promise.race([context.resume(), cancelled]);
+    if (signal?.aborted) throw new DOMException("Capture annulée.", "AbortError");
     const gain = context.createGain();
     gain.gain.value = Math.max(0, Math.min(2, settings.inputVolume / 100));
     const destination = context.createMediaStreamDestination();
+    output = destination.stream;
     context.createMediaStreamSource(raw).connect(gain).connect(destination);
     return { raw, stream: destination.stream, context, gain };
   } catch (error) {
-    raw.getTracks().forEach((track) => track.stop());
-    void context?.close().catch(() => {});
+    dispose();
     throw error;
-  }
+  } finally { signal?.removeEventListener("abort", abort); }
 }
 
 export async function captureVideo(settings: Preferences): Promise<MediaStreamTrack> {
@@ -172,6 +192,7 @@ export interface SessionOptions {
 
 export class MediaSession implements CallSession {
   private closed = false;
+  private captureAbort = new AbortController();
   private started = false;
   private audio: AudioCapture | null = null;
   private pendingAudio: AudioCapture | null = null;
@@ -197,7 +218,7 @@ export class MediaSession implements CallSession {
       throw new Error("Les appels WebRTC ne sont pas disponibles dans ce navigateur.");
     }
     this.started = true;
-    const capture = await captureAudio(this.settings);
+    const capture = await captureAudio(this.settings, this.captureAbort.signal);
     if (this.closed) { disposeAudio(capture); throw new Error("Appel annulé."); }
     this.audio = capture;
     registerMediaSession(this);
@@ -211,7 +232,7 @@ export class MediaSession implements CallSession {
     const tick = () => {
       void this.options.announce().catch((error) => this.error(error));
       for (const [id, peer] of this.peers) {
-        if (Date.now() - peer.lastSeen > 35_000) this.removePeer(id);
+        if (Date.now() - peer.lastSeen > 35_000 && peer.pc.connectionState !== "connected") this.removePeer(id);
       }
     };
     tick();
@@ -321,7 +342,7 @@ export class MediaSession implements CallSession {
       const settings = preferences();
       const keys: (keyof Preferences)[] = ["selectedAudioInput", "noiseSuppression", "echoCancellation", "autoGainControl", "voiceIsolation"];
       if (keys.some((key) => settings[key] !== this.settings[key])) {
-        const next = await captureAudio(settings);
+        const next = await captureAudio(settings, this.captureAbort.signal);
         if (this.closed) { disposeAudio(next); return; }
         next.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
         next.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
@@ -437,7 +458,18 @@ export class MediaSession implements CallSession {
   }
 
   retryConnections() {
-    for (const peer of this.peers.values()) peer.pc.restartIce();
+    for (const [userId, peer] of this.peers) {
+      if (peer.makingOffer) continue;
+      const description = peer.pc.localDescription;
+      if (peer.pc.signalingState === "have-local-offer" && description?.type === "offer") {
+        // restartIce waits for stable signaling. A failed GossipSub publication
+        // leaves an outstanding offer, so resend it (including gathered ICE).
+        peer.makingOffer = true;
+        void this.options.sendSignal(userId, { Offer: description.sdp })
+          .catch((error) => this.error(error))
+          .finally(() => { peer.makingOffer = false; });
+      } else peer.pc.restartIce();
+    }
     void this.options.announce().catch((error) => this.error(error));
   }
 
@@ -514,6 +546,7 @@ export class MediaSession implements CallSession {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.captureAbort.abort();
     releaseMediaSession(this);
     clearInterval(this.heartbeat);
     const hangups = [...this.peers.keys()].map((userId) => this.options.sendSignal(userId, "Hangup"));

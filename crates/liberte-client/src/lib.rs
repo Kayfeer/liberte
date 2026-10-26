@@ -102,6 +102,7 @@ pub fn run() {
             commands::backup::list_backups,
             commands::backup::upload_remote_backup,
             commands::backup::restore_remote_backup,
+            commands::backup::restore_local_backup,
             commands::profile::export_profile,
             commands::profile::save_profile_to_file,
             commands::profile::import_profile,

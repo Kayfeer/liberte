@@ -173,26 +173,42 @@ function CameraPreview({ deviceId }: { deviceId: string }) {
 }
 
 export default function Settings() {
-  const { identity, setDisplayName, setBio } = useIdentityStore();
+  const { identity, error: identityError, setDisplayName, setBio } = useIdentityStore();
   const navigate = useNavigationStore((s) => s.navigate);
   const media = useMediaDevices();
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [serverRevision, setServerRevision] = useState(0);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [editingBio, setEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState("");
 
-  const copyPubkey = () => {
-    if (identity) {
-      navigator.clipboard.writeText(identity.publicKey);
+  const copyPubkey = async () => {
+    if (!identity) return;
+    setCopyError(null); setCopied(false);
+    try {
+      await navigator.clipboard.writeText(identity.publicKey);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }
+    } catch (cause) { setCopyError(String(cause)); }
   };
 
   const handleSaveName = async () => {
-    await setDisplayName(nameInput.trim());
-    setEditingName(false);
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try { await setDisplayName(nameInput.trim()); setEditingName(false); }
+    catch { /* Keep the draft and display the store error. */ }
+    finally { setSavingProfile(false); }
+  };
+
+  const handleSaveBio = async () => {
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try { await setBio(bioInput.trim()); setEditingBio(false); }
+    catch { /* Keep the draft and display the store error. */ }
+    finally { setSavingProfile(false); }
   };
 
   return (
@@ -208,7 +224,7 @@ export default function Settings() {
         <h2 className="text-xl font-bold">Paramètres</h2>
       </div>
 
-      <NetworkSettings />
+      <NetworkSettings onServerChanged={() => setServerRevision((value) => value + 1)} />
 
       <ThemeSection />
 
@@ -219,6 +235,7 @@ export default function Settings() {
           Identité
         </h3>
 
+        {(copyError || identityError) && <p role="alert" className="text-sm text-red-300">{copyError || identityError}</p>}
         {identity && (
           <div className="space-y-2">
             {/* Display name */}
@@ -239,6 +256,8 @@ export default function Settings() {
                                focus:border-liberte-accent transition-colors"
                   />
                   <button
+                    aria-label="Enregistrer le pseudo"
+                    disabled={savingProfile}
                     onClick={handleSaveName}
                     className="p-1.5 hover:bg-liberte-panel rounded transition-colors"
                   >
@@ -253,6 +272,7 @@ export default function Settings() {
                     )}
                   </p>
                   <button
+                    aria-label="Modifier le pseudo"
                     onClick={() => {
                       setNameInput(identity.displayName || "");
                       setEditingName(true);
@@ -274,7 +294,8 @@ export default function Settings() {
                   {identity.publicKey}
                 </code>
                 <button
-                  onClick={copyPubkey}
+                  aria-label={copied ? "Clé publique copiée" : "Copier la clé publique"}
+                  onClick={() => void copyPubkey()}
                   className="p-2 hover:bg-liberte-panel rounded transition-colors"
                 >
                   {copied ? (
@@ -297,6 +318,7 @@ export default function Settings() {
                 <label className="text-xs text-liberte-muted">Bio</label>
                 {!editingBio && (
                   <button
+                    aria-label="Modifier la bio"
                     onClick={() => {
                       setBioInput(identity.bio || "");
                       setEditingBio(true);
@@ -330,10 +352,8 @@ export default function Settings() {
                         Annuler
                       </button>
                       <button
-                        onClick={async () => {
-                          await setBio(bioInput.trim());
-                          setEditingBio(false);
-                        }}
+                        disabled={savingProfile}
+                        onClick={handleSaveBio}
                         className="px-2 py-1 text-xs bg-liberte-accent rounded text-white hover:bg-liberte-accent/90"
                       >
                         Sauvegarder
@@ -372,7 +392,7 @@ export default function Settings() {
         </div>
 
         {media.error && (
-          <p className="text-xs text-liberte-accent bg-liberte-accent/10 p-2 rounded">
+          <p role="alert" className="text-xs text-liberte-accent bg-liberte-accent/10 p-2 rounded">
             ⚠ {media.error}
           </p>
         )}
@@ -478,7 +498,7 @@ export default function Settings() {
 
       <BackupSettings />
       <IceSettings servers={media.iceServers} onSave={(iceServers) => media.update({ iceServers })} />
-      <PremiumSettings />
+      <PremiumSettings key={serverRevision} />
     </div>
   );
 }

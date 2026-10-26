@@ -31,14 +31,28 @@ pub async fn publish_confirmed(
     topic: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let (reply, receiver) = oneshot::channel();
-    request_with_timeout(
-        cmd_tx,
-        SwarmCommand::PublishConfirmed { topic, data, reply },
-        receiver,
-        std::time::Duration::from_secs(15),
-    )
-    .await?
+    let started = tokio::time::Instant::now();
+    let operation_deadline = started + std::time::Duration::from_secs(15);
+    let subscription_deadline = started + std::time::Duration::from_secs(3);
+    let no_subscribers = libp2p::gossipsub::PublishError::NoPeersSubscribedToTopic.to_string();
+    loop {
+        let (reply, receiver) = oneshot::channel();
+        let result = request_with_timeout(
+            cmd_tx,
+            SwarmCommand::PublishConfirmed { topic: topic.clone(), data: data.clone(), reply },
+            receiver,
+            operation_deadline.saturating_duration_since(tokio::time::Instant::now()),
+        ).await?;
+        // A transport connection precedes the GossipSub subscription handshake.
+        // This particular failure has not entered GossipSub's duplicate cache;
+        // retrying the same authenticated envelope cannot duplicate a publication.
+        if result.as_ref().is_err_and(|error| error == &no_subscribers)
+            && tokio::time::Instant::now() < subscription_deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            continue;
+        }
+        return result;
+    }
 }
 
 pub async fn dial_confirmed(
@@ -53,6 +67,20 @@ pub async fn dial_confirmed(
         std::time::Duration::from_secs(15),
     )
     .await?
+}
+
+/// Dial alternative addresses together so an unreachable first hint cannot suppress the rest.
+pub async fn dial_addresses_confirmed(
+    cmd_tx: &mpsc::Sender<SwarmCommand>,
+    addresses: Vec<libp2p::Multiaddr>,
+) -> Result<(), String> {
+    let (reply, receiver) = oneshot::channel();
+    request_with_timeout(
+        cmd_tx,
+        SwarmCommand::DialAddressesConfirmed { addresses, reply },
+        receiver,
+        std::time::Duration::from_secs(15),
+    ).await?
 }
 
 pub async fn network_snapshot(

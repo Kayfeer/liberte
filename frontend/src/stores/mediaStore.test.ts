@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   start: vi.fn(), stop: vi.fn(), announce: vi.fn(), mute: vi.fn(), camera: vi.fn(),
   startCall: vi.fn(), endCall: vi.fn(), toggleMute: vi.fn(), toggleVideo: vi.fn(),
   setCallMode: vi.fn(), listen: vi.fn(), unlisten: vi.fn(),
+  receive: vi.fn(), ensurePeer: vi.fn(), removePeer: vi.fn(),
+  listeners: new Map<string, (event: { payload: unknown }) => void>(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
@@ -15,10 +17,12 @@ vi.mock("./identityStore", () => ({ useIdentityStore: { getState: () => ({ ident
 vi.mock("@/lib/mediaSession", () => ({ MediaSession: class {
   start = mocks.start; stop = mocks.stop; announce = mocks.announce;
   setMuted = mocks.mute; setVideoEnabled = mocks.camera;
+  receive = mocks.receive; ensurePeer = mocks.ensurePeer; removePeer = mocks.removePeer;
 } }));
 vi.mock("@/lib/sfuSession", () => ({ SfuSession: class {
   start = mocks.start; stop = mocks.stop; announce = mocks.announce;
   setMuted = mocks.mute; setVideoEnabled = mocks.camera;
+  receive = mocks.receive; ensurePeer = mocks.ensurePeer; removePeer = mocks.removePeer;
 } }));
 
 import { useMediaStore } from "./mediaStore";
@@ -32,7 +36,9 @@ beforeEach(() => {
   mocks.toggleMute.mockResolvedValue(true);
   mocks.toggleVideo.mockResolvedValue(true);
   mocks.setCallMode.mockResolvedValue("mesh");
-  mocks.listen.mockResolvedValue(mocks.unlisten);
+  mocks.receive.mockResolvedValue(undefined);
+  mocks.listeners.clear();
+  mocks.listen.mockImplementation(async (event, callback) => { mocks.listeners.set(event, callback); return mocks.unlisten; });
   useMediaStore.setState({ mode: "mesh", error: null, busy: false });
 });
 afterEach(async () => {
@@ -66,6 +72,47 @@ describe("media store lifecycle", () => {
     await starting;
     expect(mocks.startCall).not.toHaveBeenCalled();
     expect(useMediaStore.getState().inCall).toBe(false);
+  });
+
+  it("waits for native call acceptance before forwarding queued presence and signaling", async () => {
+    let finish!: () => void;
+    mocks.startCall.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const starting = useMediaStore.getState().startCall("channel");
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    const userId = "b".repeat(64);
+    const signal = { channelId: "channel", sender: userId, target: "a".repeat(64), signalType: { Offer: "sdp" } };
+    mocks.listeners.get("voice-peer-joined")!({ payload: { channelId: "channel", userId } });
+    mocks.listeners.get("call-signal")!({ payload: signal });
+    const departedId = "c".repeat(64);
+    mocks.listeners.get("voice-peer-joined")!({ payload: { channelId: "channel", userId: departedId } });
+    mocks.listeners.get("call-signal")!({ payload: { ...signal, sender: departedId } });
+    mocks.listeners.get("voice-peer-left")!({ payload: { channelId: "channel", userId: departedId } });
+    expect(mocks.ensurePeer).not.toHaveBeenCalled();
+    expect(mocks.receive).not.toHaveBeenCalled();
+    finish();
+    await starting;
+    expect(mocks.ensurePeer).toHaveBeenCalledOnce();
+    expect(mocks.ensurePeer).toHaveBeenCalledWith(userId);
+    expect(mocks.receive).toHaveBeenCalledOnce();
+    expect(mocks.receive).toHaveBeenCalledWith(signal);
+  });
+
+  it("orders a pending native start before hangup so cancellation cannot leave ghost presence", async () => {
+    let finish!: () => void;
+    let nativeInCall = false;
+    mocks.startCall.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finish = () => { nativeInCall = true; resolve(); };
+    }));
+    mocks.endCall.mockImplementationOnce(async () => { nativeInCall = false; });
+    const starting = useMediaStore.getState().startCall("channel");
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    const ending = useMediaStore.getState().endCall();
+    await Promise.resolve();
+    expect(mocks.endCall).not.toHaveBeenCalled();
+    finish();
+    await Promise.all([starting, ending]);
+    expect(nativeInCall).toBe(false);
+    expect(useMediaStore.getState()).toMatchObject({ inCall: false, busy: false });
   });
 
   it("silences the microphone before awaiting the backend", async () => {

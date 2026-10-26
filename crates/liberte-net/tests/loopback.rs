@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use liberte_net::swarm::SwarmConfig;
 use liberte_net::{
-    dial_confirmed, network_snapshot, publish_confirmed, spawn_swarm, subscribe_topic,
+    dial_addresses_confirmed, network_snapshot, publish_confirmed, spawn_swarm, subscribe_topic,
     SwarmCommand, SwarmNotification,
 };
 use liberte_shared::{
@@ -85,7 +85,9 @@ async fn two_loopback_clients_exchange_an_authenticated_encrypted_message() {
     }
     subscribe_topic(&alice_tx, &channel).await.unwrap();
     let bob_address = listen_address(&bob_tx).await;
-    dial_confirmed(&alice_tx, bob_address).await.unwrap();
+    // An unsupported first address must not prevent the reachable QUIC alternative.
+    let unavailable: libp2p::Multiaddr = format!("/ip4/127.0.0.1/tcp/1/p2p/{bob_peer}").parse().unwrap();
+    dial_addresses_confirmed(&alice_tx, vec![unavailable, bob_address]).await.unwrap();
     // Joining after discovery/connection must notify existing channel members.
     subscribe_topic(&bob_tx, &channel).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -159,4 +161,83 @@ fn chrono_now() -> chrono::DateTime<chrono::Utc> {
 }
 fn new_uuid() -> uuid::Uuid {
     uuid::Uuid::new_v4()
+}
+
+#[tokio::test]
+async fn occupied_default_port_uses_an_available_quic_listener() {
+    let occupied = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, liberte_shared::constants::DEFAULT_QUIC_PORT)).unwrap();
+    let mut config = isolated_config();
+    config.listen_port = liberte_shared::constants::DEFAULT_QUIC_PORT;
+    let (tx, _rx, _) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), config).await.unwrap();
+    let address = listen_address(&tx).await;
+    let port = address.iter().find_map(|protocol| match protocol {
+        libp2p::multiaddr::Protocol::Udp(port) => Some(port), _ => None,
+    }).unwrap();
+    assert_ne!(port, liberte_shared::constants::DEFAULT_QUIC_PORT);
+    assert_ne!(port, 0);
+    tx.send(SwarmCommand::Shutdown).await.unwrap();
+    drop(occupied);
+}
+
+#[tokio::test]
+async fn explicit_peer_reconnects_after_the_remote_process_restarts() {
+    let remote_key = libp2p::identity::Keypair::generate_ed25519();
+    let (alice_tx, mut alice_rx, _) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), isolated_config()).await.unwrap();
+    let (bob_tx, mut bob_rx, bob_peer) = spawn_swarm(remote_key.clone(), isolated_config()).await.unwrap();
+    let bob_notifications = tokio::spawn(async move { while bob_rx.recv().await.is_some() {} });
+    let address = listen_address(&bob_tx).await;
+    let port = address.iter().find_map(|p| match p { libp2p::multiaddr::Protocol::Udp(port) => Some(port), _ => None }).unwrap();
+    dial_addresses_confirmed(&alice_tx, vec![address]).await.unwrap();
+    bob_tx.send(SwarmCommand::Shutdown).await.unwrap();
+    bob_notifications.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(notification) = alice_rx.recv().await {
+            if matches!(notification, SwarmNotification::PeerDisconnected { peer_id } if peer_id == bob_peer) { return; }
+        }
+        panic!("local swarm stopped");
+    }).await.expect("remote shutdown should be observed");
+    let mut config = isolated_config();
+    config.listen_port = port;
+    let (restarted_tx, mut restarted_rx, restarted_peer) = spawn_swarm(remote_key, config).await.unwrap();
+    assert_eq!(restarted_peer, bob_peer);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(notification) = alice_rx.recv().await {
+            if matches!(notification, SwarmNotification::PeerConnected { peer_id, .. } if peer_id == bob_peer) { return; }
+        }
+        panic!("local swarm stopped");
+    }).await.expect("explicit peer should reconnect without mDNS or another user dial");
+    let remote_notifications = tokio::spawn(async move { while restarted_rx.recv().await.is_some() {} });
+    alice_tx.send(SwarmCommand::Shutdown).await.unwrap();
+    restarted_tx.send(SwarmCommand::Shutdown).await.unwrap();
+    remote_notifications.await.unwrap();
+}
+
+#[tokio::test]
+async fn first_publication_waits_for_the_remote_subscription() {
+    let (alice_tx, mut alice_rx, _) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), isolated_config()).await.unwrap();
+    let (bob_tx, mut bob_rx, _) = spawn_swarm(libp2p::identity::Keypair::generate_ed25519(), isolated_config()).await.unwrap();
+    let alice_notifications = tokio::spawn(async move { while alice_rx.recv().await.is_some() {} });
+    let channel = ChannelId::new();
+    subscribe_topic(&alice_tx, &channel).await.unwrap();
+    dial_addresses_confirmed(&alice_tx, vec![listen_address(&bob_tx).await]).await.unwrap();
+    let delayed_tx = bob_tx.clone();
+    let delayed_channel = channel.clone();
+    let delayed_subscription = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        subscribe_topic(&delayed_tx, &delayed_channel).await.unwrap();
+    });
+    publish_confirmed(&alice_tx, channel.to_topic(), b"first message".to_vec()).await.unwrap();
+    delayed_subscription.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(notification) = bob_rx.recv().await {
+            if let SwarmNotification::MessageReceived { data, .. } = notification {
+                assert_eq!(data, b"first message");
+                return;
+            }
+        }
+        panic!("remote swarm stopped");
+    }).await.expect("first publication should arrive after the subscription handshake");
+    alice_tx.send(SwarmCommand::Shutdown).await.unwrap();
+    bob_tx.send(SwarmCommand::Shutdown).await.unwrap();
+    alice_notifications.await.unwrap();
 }

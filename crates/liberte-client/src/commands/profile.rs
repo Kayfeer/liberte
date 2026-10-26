@@ -24,6 +24,9 @@ pub struct ProfilePayload {
     pub secret_key_hex: String,
     pub public_key_hex: String,
     pub display_name: Option<String>,
+    /// Portable server origin; absent in older profiles. Device-local paths stay local.
+    #[serde(default)]
+    pub server_url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<ProfileChannel>,
     #[serde(default)]
@@ -69,6 +72,7 @@ pub fn export_profile(
             secret_key_hex: hex::encode(identity.secret_bytes()),
             public_key_hex: hex::encode(identity.public_key_bytes()),
             display_name,
+            server_url: Some(guard.server_url.clone()),
             channels: Vec::new(),
             backup: Some(backup),
         };
@@ -149,6 +153,11 @@ fn restore_profile(
     identity: &Identity,
 ) -> Result<usize, String> {
     let backup = profile_backup(payload)?;
+    // Reject a malformed/untrusted server origin before the importer starts writing.
+    let server_url = payload.server_url.as_deref().map(str::trim);
+    if let Some(url) = server_url.filter(|url| !url.is_empty()) {
+        crate::server_client::endpoint(url, "/info")?;
+    }
     let public_key = hex::encode(identity.public_key_bytes());
     let secret_key = hex::encode(identity.secret_bytes());
     let stats = db.import_backup_with(&backup, |conn| {
@@ -163,13 +172,20 @@ fn restore_profile(
             params![public_key, payload.display_name, payload.exported_at])?;
         if let Some(name) = &payload.display_name {
             conn.execute("UPDATE users SET display_name=?1 WHERE pubkey=?2", params![name, public_key])?;
+        }
+        if payload.display_name.is_some() || server_url.is_some() {
             let current: Option<String> = conn.query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).optional()?;
             let mut settings = match current {
                 Some(json) => serde_json::from_str::<serde_json::Value>(&json).map_err(|e| StoreError::InvalidBackup(format!("Existing settings are invalid: {e}")))?,
                 None => serde_json::to_value(crate::commands::settings::AppSettings::default()).map_err(|e| StoreError::InvalidBackup(e.to_string()))?,
             };
             let object = settings.as_object_mut().ok_or_else(|| StoreError::InvalidBackup("Existing settings are not an object".into()))?;
-            object.insert("displayName".into(), name.clone().into());
+            if let Some(name) = &payload.display_name {
+                object.insert("displayName".into(), name.clone().into());
+            }
+            if let Some(url) = server_url {
+                object.insert("serverUrl".into(), url.into());
+            }
             conn.execute("INSERT INTO app_settings (id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json", params![settings.to_string()])?;
         }
         Ok(())
@@ -222,6 +238,7 @@ mod tests {
             secret_key_hex: hex::encode(identity.secret_bytes()),
             public_key_hex: hex::encode(identity.public_key_bytes()),
             display_name: Some("Restored".into()),
+            server_url: Some("https://backup.example.test".into()),
             channels: Vec::new(),
             backup: None,
         }
@@ -297,5 +314,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, hex::encode(identity.secret_bytes()));
+        // Reopen like a fresh application start: connection configuration survives too.
+        drop(db);
+        let reopened = Database::open_at(&dir.path().join("profile.db"), &identity.derive_db_key()).unwrap();
+        let settings: String = reopened.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
+        let settings: crate::commands::settings::AppSettings = serde_json::from_str(&settings).unwrap();
+        assert_eq!(settings.server_url, "https://backup.example.test");
+        assert_eq!(settings.display_name.as_deref(), Some("Restored"));
+        assert_eq!(reopened.get_channel_key(channel.id).unwrap(), hex::encode([9; 32]));
+    }
+
+    #[test]
+    fn legacy_profile_keeps_existing_settings_and_invalid_server_rolls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = Identity::generate();
+        let db = Database::open_at(&dir.path().join("legacy.db"), &identity.derive_db_key()).unwrap();
+        db.conn().execute_batch("CREATE TABLE app_settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL);").unwrap();
+        db.conn().execute("INSERT INTO app_settings VALUES(1,?1)", params![r#"{"serverUrl":"https://existing.example.test","notificationsEnabled":false}"#]).unwrap();
+        let mut value = serde_json::to_value(payload(&identity)).unwrap();
+        value.as_object_mut().unwrap().remove("serverUrl");
+        let mut legacy: ProfilePayload = serde_json::from_value(value).unwrap();
+        restore_profile(&db, &legacy, &identity).unwrap();
+        let settings: String = db.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
+        let settings: crate::commands::settings::AppSettings = serde_json::from_str(&settings).unwrap();
+        assert_eq!(settings.server_url, "https://existing.example.test");
+        assert!(!settings.notifications_enabled);
+        legacy.server_url = Some("http://remote.example.test".into());
+        let fresh = Database::open_at(&dir.path().join("invalid.db"), &identity.derive_db_key()).unwrap();
+        assert!(restore_profile(&fresh, &legacy, &identity).is_err());
+        let identity_table: bool = fresh.conn().query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='local_identity')", [], |row| row.get(0)).unwrap();
+        assert!(!identity_table);
+        assert!(fresh.list_channels().unwrap().is_empty());
     }
 }

@@ -30,6 +30,7 @@ class Connection {
   static instances: Connection[] = [];
   connectionState = "new";
   signalingState = "stable";
+  onnegotiationneeded: (() => Promise<void>) | null = null;
   remoteDescription: unknown = null;
   localDescription = { type: "answer", sdp: "answer-sdp" };
   senders: { track: Track | null; replaceTrack: ReturnType<typeof vi.fn> }[] = [];
@@ -101,6 +102,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.stop()));
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("WebRTC call lifecycle", () => {
@@ -137,6 +139,21 @@ describe("WebRTC call lifecycle", () => {
     resolve(late);
     await rejection;
     expect(late.getTracks()[0].stop).toHaveBeenCalledOnce();
+    expect(Audio.instances).toHaveLength(0);
+  });
+
+  it("releases the physical microphone when hanging up while AudioContext resume is blocked", async () => {
+    class SuspendedAudio extends Audio {
+      resume = vi.fn(() => new Promise<void>(() => {}));
+    }
+    vi.stubGlobal("AudioContext", SuspendedAudio);
+    const { session } = fixture();
+    const starting = session.start();
+    const rejection = expect(starting).rejects.toThrow("annul");
+    await vi.waitFor(() => expect(Audio.instances).toHaveLength(1));
+    await session.stop();
+    await rejection;
+    expect(captures[0].getAudioTracks()[0].stop).toHaveBeenCalledOnce();
     expect(Audio.instances[0].close).toHaveBeenCalledOnce();
   });
 
@@ -250,6 +267,37 @@ describe("WebRTC call lifecycle", () => {
     finish();
     await changing;
     expect(captures[1].getTracks()[0].stop).toHaveBeenCalledOnce();
+  });
+
+  it("resends an outstanding offer when GossipSub publication failed instead of waiting for stable signaling", async () => {
+    const { session, callbacks } = fixture();
+    await session.start();
+    session.ensurePeer(remoteId);
+    const connection = Connection.instances[0];
+    connection.localDescription = { type: "offer", sdp: "offer-with-gathered-ice" };
+    connection.signalingState = "have-local-offer";
+    callbacks.sendSignal.mockRejectedValueOnce(new Error("InsufficientPeers"));
+    await connection.onnegotiationneeded!();
+    expect(callbacks.onError).toHaveBeenCalledWith("InsufficientPeers");
+    session.retryConnections();
+    await vi.waitFor(() => expect(callbacks.sendSignal).toHaveBeenCalledTimes(2));
+    expect(callbacks.sendSignal).toHaveBeenLastCalledWith(remoteId, { Offer: "offer-with-gathered-ice" });
+    expect(connection.restartIce).not.toHaveBeenCalled();
+  });
+
+  it("keeps connected media alive during a signaling outage and expires disconnected peers", async () => {
+    vi.useFakeTimers();
+    const { session } = fixture();
+    await session.start();
+    session.ensurePeer(remoteId);
+    const connection = Connection.instances[0];
+    connection.connectionState = "connected";
+    session.announce();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(connection.close).not.toHaveBeenCalled();
+    connection.connectionState = "disconnected";
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(connection.close).toHaveBeenCalledOnce();
   });
 
   it("buffers ICE until SDP arrives and ignores another room or recipient", async () => {

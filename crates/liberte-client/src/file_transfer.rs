@@ -9,7 +9,7 @@ use liberte_shared::{
 };
 use serde::Serialize;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{Read, Seek, SeekFrom, Write},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -41,6 +41,7 @@ pub struct TransferRecord {
     pub file: Option<NamedTempFile>,
     pub received: HashSet<u32>,
     pub recipients: HashSet<[u8; 32]>,
+    recipient_attempts: HashMap<[u8; 32], u8>,
     pub acknowledgements: HashSet<[u8; 32]>,
     pub sending: bool,
     pub attempts: u8,
@@ -55,6 +56,7 @@ impl TransferRecord {
             file,
             received: HashSet::new(),
             recipients: HashSet::new(),
+            recipient_attempts: HashMap::new(),
             acknowledgements: HashSet::new(),
             sending: false,
             attempts: 0,
@@ -206,6 +208,30 @@ fn receive_chunk(record: &mut TransferRecord, chunk: &FileChunk) -> Result<bool,
     Ok(true)
 }
 
+/// Count explicit retries per receiver, not across the whole channel.
+/// A new receiver can join the current stream without spawning another sender.
+fn accept_recipient(record: &mut TransferRecord, recipient: [u8; 32]) -> Option<bool> {
+    let known = record.recipients.contains(&recipient);
+    if (!known && record.recipients.len() >= 64)
+        || record.acknowledgements.contains(&recipient)
+        || (known && (record.sending || record.updated.elapsed() < Duration::from_secs(5)))
+    {
+        return None;
+    }
+    let attempts = record.recipient_attempts.entry(recipient).or_default();
+    if *attempts >= 3 {
+        return None;
+    }
+    *attempts += 1;
+    record.recipients.insert(recipient);
+    let start = !record.sending;
+    record.sending = true;
+    record.dto.status = "sending".into();
+    record.dto.error = None;
+    record.updated = Instant::now();
+    Some(start)
+}
+
 pub fn handle_incoming(
     app: &AppHandle,
     state: &Arc<Mutex<AppState>>,
@@ -268,28 +294,13 @@ pub fn handle_incoming(
                 if record.dto.channel_id != channel.0.to_string()
                     || record.dto.sender_id != hex::encode(own.0)
                     || record.file.is_none()
-                    || record.recipients.len() >= 64
                 {
                     return;
                 }
-                let new_recipient = record.recipients.insert(author.0);
-                if !new_recipient
-                    && (record.sending
-                        || record.acknowledgements.contains(&author.0)
-                        || record.updated.elapsed() < Duration::from_secs(5))
-                {
-                    return;
-                }
-                if !record.sending {
-                    if record.attempts >= 3 {
-                        return;
+                if let Some(start_sending) = accept_recipient(record, author.0) {
+                    if start_sending {
+                        start = Some(accept.file_id);
                     }
-                    record.attempts += 1;
-                    record.sending = true;
-                    record.dto.status = "sending".into();
-                    record.dto.error = None;
-                    record.updated = Instant::now();
-                    start = Some(accept.file_id);
                     emit(app, record);
                 }
             }
@@ -544,6 +555,37 @@ mod tests {
         )
         .is_err());
     }
+    #[test]
+    fn later_channel_members_do_not_exhaust_each_others_transfer_attempts() {
+        let mut transfer = record(b"shared file");
+        for index in 0..8_u8 {
+            let recipient = [index; 32];
+            assert_eq!(accept_recipient(&mut transfer, recipient), Some(true));
+            transfer.acknowledgements.insert(recipient);
+            transfer.sending = false;
+            transfer.dto.status = "completed".into();
+        }
+        assert_eq!(transfer.recipients.len(), 8);
+    }
+
+    #[test]
+    fn receiver_retries_remain_bounded_and_do_not_spawn_parallel_senders() {
+        let mut transfer = record(b"shared file");
+        let first = [1; 32];
+        assert_eq!(accept_recipient(&mut transfer, first), Some(true));
+        assert_eq!(accept_recipient(&mut transfer, first), None);
+        assert_eq!(accept_recipient(&mut transfer, [2; 32]), Some(false));
+        for _ in 0..2 {
+            transfer.sending = false;
+            transfer.updated = Instant::now() - Duration::from_secs(6);
+            assert_eq!(accept_recipient(&mut transfer, first), Some(true));
+        }
+        transfer.sending = false;
+        transfer.updated = Instant::now() - Duration::from_secs(6);
+        assert_eq!(accept_recipient(&mut transfer, first), None);
+        assert_eq!(accept_recipient(&mut transfer, [3; 32]), Some(true));
+    }
+
     #[test]
     fn empty_file_completes() {
         let mut r = record(b"");

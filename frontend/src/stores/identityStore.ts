@@ -50,6 +50,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       }
     } catch (e) {
       set({ error: String(e) });
+      throw e;
     }
   },
 
@@ -65,6 +66,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       }
     } catch (e) {
       set({ error: String(e) });
+      throw e;
     }
   },
 

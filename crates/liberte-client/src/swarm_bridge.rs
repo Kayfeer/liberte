@@ -26,7 +26,10 @@ pub async fn start_swarm_and_bridge(
     let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
         .map_err(|e| format!("Failed to create libp2p keypair: {e}"))?;
 
-    let config = liberte_net::swarm::SwarmConfig::default();
+    let config = liberte_net::swarm::SwarmConfig {
+        extra_dials: crate::commands::network::saved_peer_addresses(&state)?,
+        ..Default::default()
+    };
 
     let (cmd_tx, notif_rx, local_peer_id) = liberte_net::spawn_swarm(libp2p_keypair, config)
         .await
@@ -76,7 +79,12 @@ async fn subscribe_all_channels(state: &Arc<Mutex<AppState>>, cmd_tx: &mpsc::Sen
         if let Ok(uuid) = uuid::Uuid::parse_str(channel_id_str) {
             let topic = ChannelId(uuid).to_topic();
             debug!(topic = %topic, "Auto-subscribing to channel");
-            let _ = cmd_tx.send(SwarmCommand::SubscribeTopic(topic)).await;
+            if let Err(error) = liberte_net::subscribe_topic(cmd_tx, &ChannelId(uuid)).await {
+                if let Ok(mut guard) = state.lock() {
+                    guard.network_error = Some(format!("Channel subscription failed: {error}"));
+                }
+                warn!(%error, "Could not subscribe restored channel");
+            }
         }
     }
 

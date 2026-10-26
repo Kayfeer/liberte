@@ -42,6 +42,11 @@ export class SfuSession implements CallSession {
   private room: Room | null = null;
   private worker: Worker | null = null;
   private audio: AudioCapture | null = null;
+  private captureController = new AbortController();
+  private pendingAudio: AudioCapture | null = null;
+  private pendingVideo: MediaStreamTrack | null = null;
+  private pendingVideoTrack: LocalVideoTrack | null = null;
+  private videoGeneration = 0;
   private audioTrack: LocalAudioTrack | null = null;
   private videoTrack: LocalVideoTrack | null = null;
   private settings = preferences();
@@ -185,9 +190,10 @@ export class SfuSession implements CallSession {
       if (room.name !== connection.roomName || room.localParticipant.identity !== this.options.userId) {
         throw new Error("Le serveur SFU a renvoyé une salle ou une identité inattendue.");
       }
-      const capture = await captureAudio(this.settings);
+      const capture = await captureAudio(this.settings, this.captureController.signal);
       if (this.closed) { disposeAudio(capture); this.assertOpen(); }
       this.audio = capture;
+      this.applyMute(capture);
       const audio = new LocalAudioTrack(capture.stream.getAudioTracks()[0], undefined, true);
       this.audioTrack = audio;
       this.assertEncrypted();
@@ -218,11 +224,29 @@ export class SfuSession implements CallSession {
     return result;
   }
 
+  private applyMute(capture: AudioCapture | null) {
+    capture?.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
+    capture?.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
+  }
+
+  private disposePendingAudio(capture: AudioCapture) {
+    if (this.pendingAudio !== capture) return;
+    this.pendingAudio = null;
+    disposeAudio(capture);
+  }
+
+  private disposePendingVideo(raw: MediaStreamTrack) {
+    if (this.pendingVideo !== raw) return;
+    this.pendingVideo = null;
+    raw.enabled = false;
+    raw.stop();
+  }
+
   setMuted(muted: boolean) {
     if (this.closed) return;
     this.muted = muted;
-    this.audio?.raw.getAudioTracks().forEach((track) => { track.enabled = !muted; });
-    this.audio?.stream.getAudioTracks().forEach((track) => { track.enabled = !muted; });
+    this.applyMute(this.audio);
+    this.applyMute(this.pendingAudio);
     void this.mutate(async () => {
       if (this.muted) await this.audioTrack?.mute();
       else await this.audioTrack?.unmute();
@@ -230,34 +254,49 @@ export class SfuSession implements CallSession {
   }
 
   setVideoEnabled(enabled: boolean): Promise<void> {
+    const generation = ++this.videoGeneration;
+    if (!enabled) {
+      // Camera off must cut capture even when a publish/replace or permission
+      // request still owns the mutation queue. Its late result is invalidated.
+      const previous = this.videoTrack;
+      const pending = this.pendingVideoTrack;
+      this.videoTrack = null;
+      this.pendingVideoTrack = null;
+      if (previous) { previous.mediaStreamTrack.enabled = false; previous.stop(); }
+      if (this.pendingVideo) this.disposePendingVideo(this.pendingVideo);
+      this.publishLocalStream();
+      const participant = this.room?.localParticipant;
+      if (!participant) return Promise.resolve();
+      return Promise.all([previous, pending].filter((track): track is LocalVideoTrack => !!track)
+        .map((track) => participant.unpublishTrack(track, true))).then(() => {});
+    }
     return this.mutate(async () => {
-      if (enabled === !!this.videoTrack) return;
+      if (generation !== this.videoGeneration || this.videoTrack) return;
       const room = this.room!;
-      if (!enabled) {
-        const previous = this.videoTrack!;
-        // Release the camera before signalling; a transport failure must not
-        // reactivate capture after the user has disabled it.
-        previous.mediaStreamTrack.enabled = false;
-        previous.stop();
-        this.videoTrack = null;
-        this.publishLocalStream();
-        await room.localParticipant.unpublishTrack(previous, true);
-      } else {
-        const raw = await captureVideo(this.settings);
-        if (this.closed) { raw.stop(); this.assertOpen(); }
-        const track = new LocalVideoTrack(raw, undefined, true);
-        try {
-          this.assertEncrypted();
-          const publication = await room.localParticipant.publishTrack(track, { source: Track.Source.Camera, simulcast: false });
-          this.assertEncrypted();
-          if (!publication.isEncrypted) throw new Error("Publication vidéo SFU non chiffrée refusée.");
-          this.videoTrack = track;
-          this.watchVideo();
-        } catch (error) {
-          raw.stop();
+      const raw = await captureVideo(this.settings);
+      if (this.closed || generation !== this.videoGeneration) { raw.stop(); return; }
+      this.pendingVideo = raw;
+      const track = new LocalVideoTrack(raw, undefined, true);
+      this.pendingVideoTrack = track;
+      try {
+        this.assertEncrypted();
+        const publication = await room.localParticipant.publishTrack(track, { source: Track.Source.Camera, simulcast: false });
+        this.assertEncrypted();
+        if (generation !== this.videoGeneration) {
+          this.disposePendingVideo(raw);
           await room.localParticipant.unpublishTrack(track, true).catch(() => {});
-          throw error;
+          return;
         }
+        if (!publication.isEncrypted) throw new Error("Publication vidéo SFU non chiffrée refusée.");
+        this.videoTrack = track;
+        this.pendingVideo = null;
+        this.watchVideo();
+      } catch (error) {
+        this.disposePendingVideo(raw);
+        await room.localParticipant.unpublishTrack(track, true).catch(() => {});
+        throw error;
+      } finally {
+        if (this.pendingVideoTrack === track) this.pendingVideoTrack = null;
       }
       this.publishLocalStream();
     });
@@ -276,26 +315,38 @@ export class SfuSession implements CallSession {
       const settings = preferences();
       const keys: (keyof Preferences)[] = ["selectedAudioInput", "noiseSuppression", "echoCancellation", "autoGainControl", "voiceIsolation"];
       if (keys.some((key) => settings[key] !== this.settings[key])) {
-        const next = await captureAudio(settings);
+        const next = await captureAudio(settings, this.captureController.signal);
         if (this.closed) { disposeAudio(next); this.assertOpen(); }
-        next.raw.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
-        next.stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
-        try { await this.audioTrack!.replaceTrack(next.stream.getAudioTracks()[0], true); }
-        catch (error) { disposeAudio(next); throw error; }
-        if (this.closed) { disposeAudio(next); this.assertOpen(); }
-        disposeAudio(this.audio);
-        this.audio = next;
+        this.pendingAudio = next;
+        this.applyMute(next);
+        try {
+          await this.audioTrack!.replaceTrack(next.stream.getAudioTracks()[0], true);
+          this.assertEncrypted();
+          this.applyMute(next);
+          disposeAudio(this.audio);
+          this.audio = next;
+          this.pendingAudio = null;
+        } catch (error) { this.disposePendingAudio(next); throw error; }
       }
       if (this.audio) this.audio.gain.gain.value = Math.max(0, Math.min(2, settings.inputVolume / 100));
       if (this.videoTrack && settings.selectedVideoInput !== this.settings.selectedVideoInput) {
+        const generation = this.videoGeneration;
+        const track = this.videoTrack;
         const raw = await captureVideo(settings);
-        if (this.closed) { raw.stop(); this.assertOpen(); }
-        const previous = this.videoTrack.mediaStreamTrack;
-        try { await this.videoTrack.replaceTrack(raw, true); }
-        catch (error) { raw.stop(); throw error; }
-        if (this.closed) { raw.stop(); this.assertOpen(); }
-        previous.stop();
-        this.watchVideo();
+        if (this.closed || generation !== this.videoGeneration) { raw.stop(); return; }
+        this.pendingVideo = raw;
+        const previous = track.mediaStreamTrack;
+        try {
+          await track.replaceTrack(raw, true);
+          this.assertEncrypted();
+          if (generation !== this.videoGeneration || this.videoTrack !== track) {
+            this.disposePendingVideo(raw);
+            return;
+          }
+          previous.stop();
+          this.pendingVideo = null;
+          this.watchVideo();
+        } catch (error) { this.disposePendingVideo(raw); throw error; }
       }
       this.settings = settings;
       this.publishLocalStream();
@@ -319,10 +370,15 @@ export class SfuSession implements CallSession {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.captureController.abort();
+    this.videoGeneration++;
     this.encrypted = false;
     releaseMediaSession(this);
     disposeAudio(this.audio);
     this.audio = null;
+    if (this.pendingAudio) this.disposePendingAudio(this.pendingAudio);
+    if (this.pendingVideo) this.disposePendingVideo(this.pendingVideo);
+    this.pendingVideoTrack = null;
     this.audioTrack?.stop();
     this.audioTrack = null;
     this.videoTrack?.stop();

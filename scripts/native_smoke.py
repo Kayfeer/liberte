@@ -70,6 +70,23 @@ def until(action, description, timeout=30):
         time.sleep(0.2)
 
 
+def decode_ipc_result(name, result):
+    if not isinstance(result, dict) or result.get("ok") is not True or "value" not in result:
+        error = result.get("error", "Invalid IPC response") if isinstance(result, dict) else "Invalid IPC response"
+        raise RuntimeError(f"Native IPC {name} failed: {error}")
+    return result["value"]
+
+
+def isolated_environment(directory):
+    env = os.environ.copy()
+    for variable, folder in (("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"),
+                             ("XDG_CACHE_HOME", "cache"), ("XDG_RUNTIME_DIR", "runtime")):
+        path = Path(directory) / folder
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        env[variable] = str(path)
+    return env
+
+
 def free_ports():
     with socket.socket() as first, socket.socket() as second:
         first.bind(("127.0.0.1", 0))
@@ -110,10 +127,10 @@ class NativeSession:
             finally:
                 error.close()
 
-    def command(self, method, path, data=None):
+    def command(self, method, path, data=None, timeout=20):
         if not self.session:
             raise RuntimeError("No native WebDriver session was established")
-        return self.request(method, f"/session/{urllib.parse.quote(self.session, safe='')}{path}", data)
+        return self.request(method, f"/session/{urllib.parse.quote(self.session, safe='')}{path}", data, timeout=timeout)
 
     def __enter__(self):
         self.log = (self.artifacts / f"{self.label}-driver.log").open("wb")
@@ -164,6 +181,25 @@ class NativeSession:
     def fill(self, selector, text):
         element = self.wait_element(selector)
         self.command("POST", f"/element/{element}/value", {"text": text})
+
+    def value(self, selector):
+        element = self.wait_element(selector)
+        return self.command("GET", f"/element/{element}/property/value")
+
+    def invoke(self, name, arguments=None):
+        """Call the shipped Tauri IPC bridge; never inject or replace handlers."""
+        self.command("POST", "/timeouts", {"script": 60000})
+        result = self.command("POST", "/execute/async", {
+            "script": """
+                const name = arguments[0], args = arguments[1];
+                const done = arguments[arguments.length - 1];
+                Promise.resolve().then(() => window.__TAURI_INTERNALS__.invoke(name, args))
+                    .then(value => done({ok: true, value: value === undefined ? null : value}),
+                          error => done({ok: false, error: String(error)}));
+            """,
+            "args": [name, arguments or {}],
+        }, timeout=65)
+        return decode_ipc_result(name, result)
 
     def assert_no_alert(self):
         elements = self.command("POST", "/elements", {"using": "css selector", "value": '[role="alert"]'})

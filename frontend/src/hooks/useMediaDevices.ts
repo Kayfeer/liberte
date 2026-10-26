@@ -138,16 +138,19 @@ export function useMediaDevices() {
     };
   }, [enumerateDevices]);
 
-  const update = useCallback((patch: Partial<MediaDevicesState>) => {
+  const update = useCallback(async (patch: Partial<MediaDevicesState>): Promise<boolean> => {
     const next = { ...stateRef.current, ...patch, error: null };
     try { savePersistent(next); }
-    catch (cause) { setState((previous) => ({ ...previous, error: String(cause) })); return; }
+    catch (cause) { setState((previous) => ({ ...previous, error: String(cause) })); return false; }
     stateRef.current = next;
     setState(next);
-    void applyMediaPreferences().catch((cause) => {
-      if (!mounted.current) return;
-      setState((previous) => ({ ...previous, error: String(cause) }));
-    });
+    try {
+      await applyMediaPreferences();
+      return true;
+    } catch (cause) {
+      if (mounted.current) setState((previous) => ({ ...previous, error: String(cause) }));
+      return false;
+    }
   }, []);
 
   return { ...state, update, refresh: enumerateDevices };

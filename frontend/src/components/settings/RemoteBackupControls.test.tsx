@@ -4,7 +4,7 @@ import RemoteBackupControls from "./RemoteBackupControls";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), loadChannels: vi.fn(), loadMessages: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
-vi.mock("@/stores/messageStore", () => ({ useMessageStore: { getState: () => ({ activeChannelId: "channel", loadChannels: mocks.loadChannels, loadMessages: mocks.loadMessages }) } }));
+vi.mock("@/stores/messageStore", () => ({ useMessageStore: { getState: () => ({ activeChannelId: "channel", error: null, errors: {}, loadChannels: mocks.loadChannels, loadMessages: mocks.loadMessages }) } }));
 
 describe("Remote backup controls", () => {
   beforeEach(() => { mocks.loadChannels.mockResolvedValue(undefined); mocks.loadMessages.mockResolvedValue(undefined); });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useMessageStore } from "./messageStore";
 import type { Message } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({ getMessages: vi.fn(), listChannels: vi.fn(), getAllChannelKeys: vi.fn(), sendMessage: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getMessages: vi.fn(), listChannels: vi.fn(), getAllChannelKeys: vi.fn(), sendMessage: vi.fn(), getReactions: vi.fn() }));
 vi.mock("@/lib/tauri", () => mocks);
 function message(index: number): Message {
   return { id: String(index), channelId: "room", senderId: "alice", content: `Message ${index}`,
@@ -13,7 +13,7 @@ describe("message history", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     useMessageStore.setState({ channels: [], activeChannelId: null, messages: {}, channelKeys: { room: "key" },
-      loadingByChannel: {}, loadingMore: {}, hasMore: {}, errors: {}, error: null });
+      loadingByChannel: {}, loadingMore: {}, hasMore: {}, errors: {}, error: null, focusedMessageId: null });
   });
   it("loads older pages and keeps them after a real-time refresh", async () => {
     mocks.getMessages.mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => message(index + 50)))
@@ -53,5 +53,38 @@ describe("message history", () => {
     await useMessageStore.getState().loadMoreMessages("room");
     expect(useMessageStore.getState().hasMore.room).toBe(false);
     expect(mocks.getMessages).toHaveBeenCalledOnce();
+  });
+  it("refreshes reactions on an old loaded message without refetching only the newest page", async () => {
+    useMessageStore.setState({ messages: { room: Array.from({ length: 100 }, (_, index) => message(index)) } });
+    mocks.getReactions.mockResolvedValue([{ emoji: "👍", users: ["bob"] }]);
+    await useMessageStore.getState().refreshReactions("room", "0");
+    expect(useMessageStore.getState().messages.room[0].reactions).toEqual([{ emoji: "👍", users: ["bob"] }]);
+    expect(mocks.getMessages).not.toHaveBeenCalled();
+    expect(useMessageStore.getState().messages.room).toHaveLength(100);
+  });
+  it("reveals a search result older than the first history page", async () => {
+    mocks.getMessages.mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => message(index + 50)))
+      .mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => message(index)));
+    expect(await useMessageStore.getState().revealMessage("room", "3")).toBe(true);
+    expect(useMessageStore.getState().focusedMessageId).toBe("3");
+    expect(useMessageStore.getState().activeChannelId).toBe("room");
+    expect(useMessageStore.getState().messages.room).toHaveLength(100);
+    expect(mocks.getMessages).toHaveBeenLastCalledWith("room", "key", 50, 50);
+  });
+  it("does not redirect focus when the user changes channel while history loads", async () => {
+    let finish!: (value: Message[]) => void;
+    mocks.getMessages.mockReturnValueOnce(new Promise<Message[]>((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce([]);
+    const reveal = useMessageStore.getState().revealMessage("room", "0");
+    useMessageStore.getState().setActiveChannel("other");
+    finish([message(0)]);
+    expect(await reveal).toBe(false);
+    expect(useMessageStore.getState().activeChannelId).toBe("other");
+    expect(useMessageStore.getState().focusedMessageId).toBeNull();
+  });
+  it("reports a missing search result instead of pretending to open it", async () => {
+    mocks.getMessages.mockResolvedValue([]);
+    await expect(useMessageStore.getState().revealMessage("room", "gone")).rejects.toThrow("n'est plus disponible");
+    expect(useMessageStore.getState().focusedMessageId).toBeNull();
   });
 });

@@ -13,7 +13,7 @@ pub use behaviour::{LiberteBehaviour, LiberteEvent};
 pub use discovery::load_bootstrap_peers;
 pub use dns::build_doh_resolver;
 pub use messages::{
-    dial_confirmed, network_snapshot, publish_confirmed, publish_message, subscribe_topic,
+    dial_addresses_confirmed, dial_confirmed, network_snapshot, publish_confirmed, publish_message, subscribe_topic,
 };
 pub use peers::{ConnectionInfo, PeerTracker};
 pub use relay::{dial_via_relay, request_relay_reservation};

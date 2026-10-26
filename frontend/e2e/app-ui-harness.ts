@@ -19,6 +19,7 @@ mockIPC((command, args) => {
         { id: "two", channelId: (args as { channelId: string }).channelId, senderId: userId, senderDisplayName: "Camille", content: "Canaux, historique et paramètres sont accessibles depuis cette fenêtre.", timestamp: "2026-01-01T09:01:00Z", reactions: [] },
       ];
     case "list_channel_files": return [];
+    case "list_backups": return [];
     case "get_settings": return { serverUrl: "", notificationsEnabled: false };
     case "check_premium": return { isPremium: false, validUntil: null };
     // Reconcile stale native presence after a WebView reload.

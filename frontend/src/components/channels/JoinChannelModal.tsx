@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Modal from "../common/Modal";
 import { acceptInvite } from "../../lib/tauri";
 import { useMessageStore } from "../../stores/messageStore";
@@ -10,24 +10,29 @@ interface Props {
 
 export default function JoinChannelModal({ isOpen, onClose }: Props) {
   const [code, setCode] = useState("");
+  const submitting = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const { loadChannels, setActiveChannel, setChannelKey } = useMessageStore();
 
   const handleJoin = async () => {
-    if (!code.trim()) return;
+    if (!code.trim() || submitting.current) return;
+    submitting.current = true;
     setLoading(true);
     setError("");
     try {
       const result = await acceptInvite(code.trim());
       setChannelKey(result.id, result.channelKeyHex);
       await loadChannels();
+      const loadError = useMessageStore.getState().error;
+      if (loadError) throw new Error(loadError);
       setActiveChannel(result.id);
       setCode("");
       onClose();
     } catch (e) {
       setError(String(e));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };
@@ -49,7 +54,7 @@ export default function JoinChannelModal({ isOpen, onClose }: Props) {
         </div>
 
         {error && (
-          <p className="text-sm text-red-400">{error}</p>
+          <p role="alert" className="text-sm text-red-400">{error}</p>
         )}
 
         <button

@@ -22,6 +22,8 @@ export default function RemoteBackupControls() {
         const channel = useMessageStore.getState().activeChannelId;
         if (channel) await useMessageStore.getState().loadMessages(channel);
         setNotice(`${result.channelsImported} canaux et ${result.messagesImported} messages restaurés depuis le serveur.`);
+        const refreshError = useMessageStore.getState().error || (channel && useMessageStore.getState().errors[channel]);
+        if (refreshError) setError(`Les données sont restaurées, mais l'affichage n'a pas pu être actualisé : ${refreshError}`);
       }
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(null); }

@@ -181,6 +181,9 @@ export const autoBackup = () =>
 export const importBackup = (json: string, password?: string, allowLegacy = false) =>
   invoke<ImportStats>("import_backup", { json, password, allowLegacy });
 
+export const restoreLocalBackup = (fileName: string) =>
+  invoke<ImportStats>("restore_local_backup", { fileName });
+
 export const listBackups = () =>
   invoke<BackupFileInfo[]>("list_backups");
 

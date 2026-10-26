@@ -3,8 +3,8 @@ import type { UserStatus } from "@/lib/types";
 
 export interface PeerProfile {
   userId: string;
-  displayName: string | null;
-  bio: string | null;
+  displayName?: string | null;
+  bio?: string | null;
   status: UserStatus;
 }
 const statuses = new Set<string>(["online", "dnd", "idle", "invisible"]);
@@ -22,7 +22,7 @@ export const useProfileStore = create<ProfileState>((set) => ({
   setStatus: (userId, status) => {
     if (!statuses.has(status)) return;
     set((state) => ({ profiles: { ...state.profiles, [userId]: {
-      ...(state.profiles[userId] ?? { userId, displayName: null, bio: null }), status: status as UserStatus,
+      ...(state.profiles[userId] ?? { userId }), status: status as UserStatus,
     } } }));
   },
 }));

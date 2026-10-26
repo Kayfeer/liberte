@@ -6,6 +6,7 @@ import { useIdentityStore } from "@/stores/identityStore";
 import { useMessageStore } from "@/stores/messageStore";
 import { useBackupStore } from "@/stores/backupStore";
 import RemoteBackupControls from "./RemoteBackupControls";
+import LocalBackupControls from "./LocalBackupControls";
 
 export function ArchiveExport({ kind }: { kind: "profile" | "backup" }) {
   const [password, setPassword] = useState("");
@@ -66,6 +67,8 @@ export function ArchiveImport({ kind }: { kind: "profile" | "backup" }) {
         const active = useMessageStore.getState().activeChannelId;
         if (active) await useMessageStore.getState().loadMessages(active);
         setNotice(`${stats.channelsImported} canaux et ${stats.messagesImported} messages importés.`);
+        const refreshError = useMessageStore.getState().error || (active && useMessageStore.getState().errors[active]);
+        if (refreshError) setError(`Les données sont importées, mais l'affichage n'a pas pu être actualisé : ${refreshError}`);
       }
       setPassword(""); setAllowLegacy(false);
     } catch (cause) { setError(String(cause)); }
@@ -101,6 +104,7 @@ export function BackupSettings() {
     <button disabled={backup.isBackingUp} onClick={() => void backup.runAutoBackup()} className="btn-secondary text-sm">{backup.isBackingUp ? "Sauvegarde..." : "Sauvegarder localement maintenant"}</button>
     {backup.lastBackupTime && <p className="text-xs text-liberte-muted">Dernière sauvegarde : {new Date(backup.lastBackupTime).toLocaleString("fr-FR")}</p>}
     {backup.error && <p role="alert" className="text-sm text-red-300">{backup.error}</p>}
+    <div className="border-t border-liberte-border pt-4"><LocalBackupControls /></div>
     <div className="border-t border-liberte-border pt-4"><ArchiveExport kind="backup" /></div>
     <div className="border-t border-liberte-border pt-4"><ArchiveImport kind="backup" /></div>
     <div className="border-t border-liberte-border pt-4"><RemoteBackupControls /></div>

@@ -14,6 +14,7 @@ use liberte_store::Channel;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateChannelResult {
     pub id: String,
     pub name: String,
@@ -59,10 +60,11 @@ pub async fn create_channel(
 
     // Subscribe to GossipSub topic
     if let Some(tx) = cmd_tx {
-        let topic = ChannelId(channel_id).to_topic();
-        let _ = tx
-            .send(liberte_net::SwarmCommand::SubscribeTopic(topic))
-            .await;
+        if let Err(error) = liberte_net::subscribe_topic(&tx, &ChannelId(channel_id)).await {
+            if let Ok(mut guard) = state.lock() {
+                guard.network_error = Some(format!("Channel saved, but subscription failed: {error}"));
+            }
+        }
     }
 
     info!(channel_id = %channel_id, name = %name, "Channel created");
@@ -109,17 +111,20 @@ pub async fn generate_invite(
     if channel_name.trim().is_empty() || channel_name.len() > 128 {
         return Err("Invalid channel name".into());
     }
-    let mut addresses = Vec::new();
-    if let Some(tx) = tx {
-        if let Ok(snapshot) = liberte_net::network_snapshot(&tx).await {
-            addresses.extend(snapshot.external_addresses);
-            addresses.extend(snapshot.listen_addresses);
-            let mut seen = std::collections::HashSet::new();
-            addresses.retain(|address| seen.insert(address.clone()));
-            addresses.sort_by_key(|address| !address.contains("/p2p-circuit"));
-            addresses.truncate(8);
+    let tx = tx.ok_or("Network not started; cannot generate a reachable invitation")?;
+    let mut addresses = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let snapshot = liberte_net::network_snapshot(&tx).await?;
+            let addresses: Vec<String> = snapshot.external_addresses.into_iter()
+                .chain(snapshot.listen_addresses).collect();
+            if !addresses.is_empty() { return Ok::<_, String>(addresses); }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-    }
+    }).await.map_err(|_| "Network has no listening address yet; try again".to_string())??;
+    let mut seen = std::collections::HashSet::new();
+    addresses.retain(|address| seen.insert(address.clone()));
+    addresses.sort_by_key(|address| !address.contains("/p2p-circuit"));
+    addresses.truncate(8);
     let token = InviteToken::create_with_addresses(
         &identity,
         channel_uuid,
@@ -171,7 +176,11 @@ pub async fn accept_invite(
                 return Err("This invitation conflicts with the existing channel key".into());
             }
         }
-        let _ = db.create_channel(&channel);
+        match db.get_channel(channel_id) {
+            Ok(_) => {},
+            Err(liberte_store::StoreError::NotFound) => db.create_channel(&channel).map_err(|e| e.to_string())?,
+            Err(error) => return Err(error.to_string()),
+        }
 
         db.store_channel_key(channel_id, &channel_key_hex)
             .map_err(|e| format!("Failed to store channel key: {e}"))?;
@@ -179,28 +188,25 @@ pub async fn accept_invite(
         guard.swarm_cmd_tx.clone()
     };
 
-    // Subscribe to GossipSub topic
-    if let Some(tx) = cmd_tx {
-        let topic = ChannelId(channel_id).to_topic();
-        let _ = tx
-            .send(liberte_net::SwarmCommand::SubscribeTopic(topic))
-            .await;
+    // Preserve the channel locally even if its inviter is currently unreachable.
+    // Network errors remain visible and persisted hints are retried with backoff.
+    let network_result: Result<(), String> = async {
+        let tx = cmd_tx.ok_or("Network not started")?;
+        liberte_net::subscribe_topic(&tx, &ChannelId(channel_id)).await.map_err(|e| e.to_string())?;
+        let mut addresses = Vec::new();
         for raw in &token.payload.addresses {
-            if let Ok(address) = raw.parse::<libp2p::Multiaddr>() {
-                // Generated invitations contain literal IP addresses; no system-DNS fallback.
-                if !address.iter().any(|p| {
-                    matches!(
-                        p,
-                        libp2p::multiaddr::Protocol::Dns(_)
-                            | libp2p::multiaddr::Protocol::Dns4(_)
-                            | libp2p::multiaddr::Protocol::Dns6(_)
-                            | libp2p::multiaddr::Protocol::Dnsaddr(_)
-                    )
-                }) {
-                    let _ = tx.send(liberte_net::SwarmCommand::Dial(address)).await;
-                }
-            }
+            let address = raw.parse::<libp2p::Multiaddr>().map_err(|e| e.to_string())?;
+            let address = liberte_net::dns::resolve_multiaddr(address).await.map_err(|e| e.to_string())?;
+            if !addresses.contains(&address) { addresses.push(address); }
         }
+        if !addresses.is_empty() {
+            crate::commands::network::remember_peer_addresses(state.inner(), &addresses)?;
+            liberte_net::dial_addresses_confirmed(&tx, addresses).await?;
+        }
+        Ok(())
+    }.await;
+    if let Ok(mut guard) = state.lock() {
+        guard.network_error = network_result.err().map(|error| format!("Channel saved, connection pending: {error}"));
     }
 
     info!(channel_id = %channel_id, name = %channel_name, "Joined channel via invite");
@@ -232,4 +238,18 @@ pub fn get_all_channel_keys(
         .into_iter()
         .map(|(id, k)| (id.to_string(), k))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_result_matches_frontend_camel_case_contract() {
+        let value = serde_json::to_value(CreateChannelResult {
+            id: "id".into(), name: "name".into(), channel_key_hex: "ab".into(),
+        }).unwrap();
+        assert_eq!(value["channelKeyHex"], "ab");
+        assert!(value.get("channel_key_hex").is_none());
+    }
 }

@@ -3,7 +3,7 @@ use liberte_shared::backup_crypto::{self, BackupKind};
 use liberte_store::backup::ImportStats;
 use serde::{Deserialize, Serialize};
 use std::{
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -100,9 +100,7 @@ pub async fn auto_backup(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Strin
         .map_err(|e| e.to_string())?;
         backup_crypto::encrypt_identity(&plaintext, BackupKind::Backup, identity)?
     };
-    let dirs = directories::ProjectDirs::from("com", "liberte", "liberte")
-        .ok_or("Cannot determine data directory")?;
-    let backup_dir = dirs.data_dir().join("backups");
+    let backup_dir = backup_directory()?;
     tokio::fs::create_dir_all(&backup_dir)
         .await
         .map_err(|e| format!("Cannot create backup directory: {e}"))?;
@@ -184,11 +182,64 @@ async fn subscribe_restored_channels(
     }
 }
 
-#[tauri::command]
-pub async fn list_backups() -> Result<Vec<BackupFileInfo>, String> {
+fn backup_directory() -> Result<PathBuf, String> {
     let dirs = directories::ProjectDirs::from("com", "liberte", "liberte")
         .ok_or("Cannot determine data directory")?;
-    let backup_dir = dirs.data_dir().join("backups");
+    Ok(dirs.data_dir().join("backups"))
+}
+
+/// Resolve only a direct entry of the application's backup directory. The
+/// frontend receives names from list_backups; it never grants an arbitrary path.
+fn read_local_backup(directory: &Path, file_name: &str) -> Result<String, String> {
+    let mut components = Path::new(file_name).components();
+    if file_name.contains(['/', '\\', ':'])
+        || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err("Invalid local backup filename".into());
+    }
+    let root = directory.canonicalize().map_err(|e| format!("Cannot open backup directory: {e}"))?;
+    let candidate = root.join(file_name);
+    let entry = std::fs::symlink_metadata(&candidate).map_err(|e| format!("Cannot open backup: {e}"))?;
+    if entry.file_type().is_symlink() || !entry.is_file() {
+        return Err("Local backups must be regular files, not symbolic links".into());
+    }
+    let resolved = candidate.canonicalize().map_err(|e| format!("Cannot resolve backup: {e}"))?;
+    if !resolved.starts_with(&root) {
+        return Err("Backup is outside the local backup directory".into());
+    }
+    let file = std::fs::File::open(&resolved).map_err(|e| format!("Cannot read backup: {e}"))?;
+    let metadata = file.metadata().map_err(|e| format!("Cannot inspect backup: {e}"))?;
+    if !metadata.is_file() || metadata.len() > backup_crypto::MAX_CONTAINER_BYTES as u64 {
+        return Err("Local backup exceeds the size limit or is not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(backup_crypto::MAX_CONTAINER_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Cannot read backup: {e}"))?;
+    if bytes.len() > backup_crypto::MAX_CONTAINER_BYTES {
+        return Err("Local backup exceeds the size limit".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "Invalid local backup encoding".into())
+}
+
+/// Automatic backups live in the store's data directory, which can differ from
+/// Tauri's plugin-fs app directory. Restore natively without broadening fs scope.
+#[tauri::command]
+pub async fn restore_local_backup(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    file_name: String,
+) -> Result<ImportStats, String> {
+    let directory = backup_directory()?;
+    let json = tokio::task::spawn_blocking(move || read_local_backup(&directory, &file_name))
+        .await
+        .map_err(|e| format!("Backup read task failed: {e}"))??;
+    import_backup(state, json, None, Some(false)).await
+}
+
+#[tauri::command]
+pub async fn list_backups() -> Result<Vec<BackupFileInfo>, String> {
+    let backup_dir = backup_directory()?;
     let mut dir = match tokio::fs::read_dir(&backup_dir).await {
         Ok(dir) => dir,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -201,10 +252,10 @@ pub async fn list_backups() -> Result<Vec<BackupFileInfo>, String> {
         if extension != Some("json") && extension != Some("liberte") {
             continue;
         }
-        let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
-        if !metadata.is_file() {
+        if !entry.file_type().await.map_err(|e| e.to_string())?.is_file() {
             continue;
         }
+        let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
         let modified: chrono::DateTime<chrono::Utc> =
             metadata.modified().map_err(|e| e.to_string())?.into();
         entries.push(BackupFileInfo {
@@ -465,6 +516,69 @@ mod tests {
         ))));
     }
 
+    #[test]
+    fn local_restore_rejects_traversal_directories_and_oversized_files() {
+        let root = tempfile::tempdir().unwrap();
+        let backups = root.path().join("backups");
+        std::fs::create_dir(&backups).unwrap();
+        std::fs::write(root.path().join("outside.liberte"), "outside").unwrap();
+        for name in ["", ".", "..", "../outside.liberte", "..\\outside.liberte", "/outside.liberte", "C:\\outside.liberte", "backup.liberte:stream"] {
+            assert!(read_local_backup(&backups, name).is_err(), "accepted {name}");
+        }
+        std::fs::create_dir(backups.join("directory.liberte")).unwrap();
+        assert!(read_local_backup(&backups, "directory.liberte").is_err());
+        let oversized = std::fs::File::create(backups.join("large.liberte")).unwrap();
+        oversized.set_len(backup_crypto::MAX_CONTAINER_BYTES as u64 + 1).unwrap();
+        assert!(read_local_backup(&backups, "large.liberte").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_restore_rejects_symlinks_outside_the_backup_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let backups = root.path().join("backups");
+        std::fs::create_dir(&backups).unwrap();
+        let outside = root.path().join("outside.liberte");
+        std::fs::write(&outside, "outside").unwrap();
+        std::os::unix::fs::symlink(outside, backups.join("link.liberte")).unwrap();
+        assert!(read_local_backup(&backups, "link.liberte").is_err());
+    }
+
+    #[test]
+    fn local_identity_snapshot_roundtrip_restores_readable_history() {
+        let root = tempfile::tempdir().unwrap();
+        let backups = root.path().join("backups");
+        std::fs::create_dir(&backups).unwrap();
+        let identity = liberte_shared::identity::Identity::generate();
+        let source = liberte_store::Database::open_at(&root.path().join("source.db"), &identity.derive_db_key()).unwrap();
+        let channel = liberte_store::Channel {
+            id: uuid::Uuid::new_v4(), name: "local restored history".into(), server_id: None, created_at: chrono::Utc::now(),
+        };
+        source.create_channel(&channel).unwrap();
+        source.store_channel_key(channel.id, &hex::encode([23; 32])).unwrap();
+        let message = liberte_store::Message {
+            id: uuid::Uuid::new_v4(), channel_id: channel.id, sender_pubkey: identity.public_key_bytes(),
+            encrypted_content: liberte_shared::crypto::encrypt(&[23; 32], b"local snapshot message").unwrap(),
+            timestamp: chrono::Utc::now(),
+        };
+        source.insert_message(&message).unwrap();
+        let encrypted = backup_crypto::encrypt_identity(&serde_json::to_vec(&source.export_backup().unwrap()).unwrap(), BackupKind::Backup, &identity).unwrap();
+        write_atomic(&backups.join("snapshot.liberte"), encrypted.as_bytes()).unwrap();
+        let saved = read_local_backup(&backups, "snapshot.liberte").unwrap();
+        let plaintext = backup_crypto::decode_import(&saved, None, Some(&identity), BackupKind::Backup, false).unwrap();
+        let payload: liberte_store::BackupPayload = serde_json::from_slice(&plaintext).unwrap();
+        let target = liberte_store::Database::open_at(&root.path().join("target.db"), &identity.derive_db_key()).unwrap();
+        let stats = target.import_backup(&payload).unwrap();
+        assert_eq!((stats.channels_imported, stats.messages_imported, stats.keys_imported), (1, 1, 1));
+        let key: [u8; 32] = hex::decode(target.get_channel_key(channel.id).unwrap()).unwrap().try_into().unwrap();
+        assert_eq!(liberte_shared::crypto::decrypt(&key, &target.get_message_by_id(message.id).unwrap().encrypted_content).unwrap(), b"local snapshot message");
+        let other = liberte_shared::identity::Identity::generate();
+        assert!(backup_crypto::decode_import(&saved, None, Some(&other), BackupKind::Backup, false).is_err());
+        std::fs::write(backups.join("legacy.json"), serde_json::to_vec(&payload).unwrap()).unwrap();
+        let legacy = read_local_backup(&backups, "legacy.json").unwrap();
+        assert!(backup_crypto::decode_import(&legacy, None, Some(&identity), BackupKind::Backup, false).is_err());
+    }
+
     async fn receive_request(
         socket: &mut tokio::net::TcpStream,
     ) -> (
@@ -529,14 +643,31 @@ mod tests {
     async fn remote_roundtrip_signs_exact_ciphertext_and_restores_portably() {
         let identity = liberte_shared::identity::Identity::generate();
         let expected_key = identity.public_key_bytes();
+        let channel = uuid::Uuid::new_v4();
+        let message = uuid::Uuid::new_v4();
+        let server = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
         let payload = liberte_store::BackupPayload {
             created_at: chrono::Utc::now().to_rfc3339(),
             version: "test".into(),
-            channels: Vec::new(),
-            messages: Vec::new(),
-            channel_keys: Default::default(),
-            servers: Vec::new(),
-            reactions: Vec::new(),
+            channels: vec![liberte_store::backup::BackupChannel {
+                id: channel.to_string(), name: "private restored channel".into(),
+                server_id: Some(server.to_string()), created_at: now.to_rfc3339(),
+            }],
+            messages: vec![liberte_store::backup::BackupMessage {
+                id: message.to_string(), channel_id: channel.to_string(),
+                sender_pubkey_hex: hex::encode(expected_key),
+                encrypted_content_hex: hex::encode(liberte_shared::crypto::encrypt(&[7; 32], b"private restored message").unwrap()),
+                timestamp: now.to_rfc3339(),
+            }],
+            channel_keys: std::collections::HashMap::from([(channel.to_string(), hex::encode([7; 32]))]),
+            servers: vec![liberte_store::Server {
+                id: server, name: "private server".into(), owner_pubkey: expected_key, created_at: now,
+            }],
+            reactions: vec![liberte_store::Reaction {
+                id: uuid::Uuid::new_v4(), message_id: message, channel_id: channel,
+                user_pubkey: hex::encode(expected_key), emoji: "👍".into(), created_at: now,
+            }],
             users: vec![liberte_store::User {
                 pubkey: expected_key,
                 display_name: Some("private profile name".into()),
@@ -601,6 +732,25 @@ mod tests {
             .unwrap();
         let restored = fetch_remote_backup(&base, &identity).await.unwrap();
         assert_eq!(restored.users, payload.users);
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("restored.db");
+        let database = liberte_store::Database::open_at(&database_path, &identity.derive_db_key()).unwrap();
+        let stats = database.import_backup(&restored).unwrap();
+        assert_eq!(stats.channels_imported, 1);
+        assert_eq!(stats.messages_imported, 1);
+        assert_eq!(stats.keys_imported, 1);
+        assert_eq!(stats.servers_imported, 1);
+        assert_eq!(stats.users_imported, 1);
+        assert_eq!(stats.reactions_imported, 1);
+        drop(database);
+        let reopened = liberte_store::Database::open_at(&database_path, &identity.derive_db_key()).unwrap();
+        assert_eq!(reopened.get_server(server).unwrap().owner_pubkey, expected_key);
+        assert_eq!(reopened.get_channel(channel).unwrap().server_id, Some(server));
+        let key: [u8; 32] = hex::decode(reopened.get_channel_key(channel).unwrap()).unwrap().try_into().unwrap();
+        let stored = reopened.get_message_by_id(message).unwrap();
+        assert_eq!(liberte_shared::crypto::decrypt(&key, &stored.encrypted_content).unwrap(), b"private restored message");
+        assert_eq!(reopened.get_reactions_for_message(message).unwrap(), payload.reactions);
+        assert_eq!(reopened.import_backup(&restored).unwrap(), ImportStats::default());
         mock.await.unwrap();
     }
 

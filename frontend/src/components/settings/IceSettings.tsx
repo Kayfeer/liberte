@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 
-export default function IceSettings({ servers, onSave }: { servers: RTCIceServer[]; onSave: (servers: RTCIceServer[]) => void }) {
+export default function IceSettings({ servers, onSave }: { servers: RTCIceServer[]; onSave: (servers: RTCIceServer[]) => Promise<boolean> }) {
   const [value, setValue] = useState(JSON.stringify(servers, null, 2));
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
   useEffect(() => { setValue(JSON.stringify(servers, null, 2)); }, [servers]);
-  const save = () => {
+  const save = async () => {
+    if (busy) return;
+    setBusy(true); setSaved(false); setError(null);
     try {
       const parsed: unknown = JSON.parse(value);
       if (!Array.isArray(parsed)) throw new Error("La configuration doit être un tableau JSON.");
@@ -18,19 +21,20 @@ export default function IceSettings({ servers, onSave }: { servers: RTCIceServer
         if (server.username !== undefined && typeof server.username !== "string") throw new Error("username doit être du texte.");
         if (server.credential !== undefined && typeof server.credential !== "string") throw new Error("credential doit être du texte.");
       }
-      onSave(parsed as RTCIceServer[]);
-      setError(null); setSaved(true);
-    } catch (cause) { setError(String(cause)); setSaved(false); }
+      if (!await onSave(parsed as RTCIceServer[])) throw new Error("La configuration n'a pas pu être enregistrée ou appliquée. Consultez l'erreur des paramètres audio puis réessayez.");
+      setSaved(true);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
   };
   return <section className="panel p-4 space-y-3">
     <h3 className="font-medium">Appels entre réseaux différents</h3>
     <p className="text-xs text-liberte-muted">Configurez vos serveurs STUN/TURN si les participants sont derrière un routeur. Aucun fournisseur tiers n'est ajouté par défaut. Une modification s'applique aux nouvelles connexions.</p>
     <label className="block text-xs">Serveurs ICE (JSON)
-      <textarea rows={5} value={value} onChange={(event) => { setValue(event.target.value); setSaved(false); }} className="input-field mt-1 font-mono text-xs"
+      <textarea disabled={busy} rows={5} value={value} onChange={(event) => { setValue(event.target.value); setSaved(false); }} className="input-field mt-1 font-mono text-xs"
         placeholder={'[{"urls":"turn:relay.example:3478","username":"utilisateur","credential":"secret"}]'} spellCheck={false} />
     </label>
     <p className="text-xs text-liberte-muted">Les identifiants TURN sont conservés sur cet appareil avec vos préférences.</p>
-    <button onClick={save} className="btn-secondary text-sm">Enregistrer la configuration</button>
+    <button disabled={busy} onClick={() => void save()} className="btn-secondary text-sm">{busy ? "Enregistrement..." : "Enregistrer la configuration"}</button>
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
     {saved && <p role="status" className="text-sm text-liberte-success">Configuration enregistrée.</p>}
   </section>;

@@ -208,29 +208,40 @@ pub fn dismiss_file(state: State<'_, Arc<Mutex<AppState>>>, file_id: String) -> 
 }
 
 #[tauri::command]
-pub fn save_received_file(
+pub async fn save_received_file(
     state: State<'_, Arc<Mutex<AppState>>>,
     file_id: String,
     file_path: String,
 ) -> Result<(), String> {
     let id = Uuid::parse_str(&file_id).map_err(|e| e.to_string())?;
-    let guard = state.lock().map_err(|e| e.to_string())?;
-    let record = guard.file_transfers.get(&id).ok_or("Fichier introuvable")?;
-    if record.dto.status != "received" {
-        return Err("Réception non terminée".into());
-    }
-    let source = record.file.as_ref().ok_or("Fichier temporaire absent")?;
-    let destination = Path::new(&file_path);
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or("Destination invalide")?;
-    let mut temp = NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    std::io::copy(&mut source.reopen().map_err(|e| e.to_string())?, &mut temp)
-        .map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(destination).map_err(|e| e.to_string())?;
-    Ok(())
+    let source = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        let record = guard.file_transfers.get(&id).ok_or("Fichier introuvable")?;
+        if record.dto.status != "received" {
+            return Err("Réception non terminée".into());
+        }
+        record
+            .file
+            .as_ref()
+            .ok_or("Fichier temporaire absent")?
+            .reopen()
+            .map_err(|e| e.to_string())?
+    };
+    // Disk copying and fsync must not hold the application mutex or UI thread.
+    tokio::task::spawn_blocking(move || {
+        let destination = Path::new(&file_path);
+        let parent = destination
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or("Destination invalide")?;
+        let mut temp = NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+        std::io::copy(&mut { source }, &mut temp).map_err(|e| e.to_string())?;
+        temp.as_file().sync_all().map_err(|e| e.to_string())?;
+        temp.persist(destination).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("File save task failed: {e}"))?
 }
 
 #[derive(Deserialize)]
