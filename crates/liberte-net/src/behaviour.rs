@@ -19,8 +19,8 @@ pub struct LiberteBehaviour {
 #[derive(Debug)]
 pub enum LiberteEvent {
     Gossipsub(gossipsub::Event),
-    Kademlia(kad::Event),
-    Identify(identify::Event),
+    Kademlia(Box<kad::Event>),
+    Identify(Box<identify::Event>),
     RelayClient(relay::client::Event),
     Dcutr(dcutr::Event),
     Mdns(mdns::Event),
@@ -40,13 +40,13 @@ impl From<gossipsub::Event> for LiberteEvent {
 
 impl From<kad::Event> for LiberteEvent {
     fn from(event: kad::Event) -> Self {
-        LiberteEvent::Kademlia(event)
+        LiberteEvent::Kademlia(Box::new(event))
     }
 }
 
 impl From<identify::Event> for LiberteEvent {
     fn from(event: identify::Event) -> Self {
-        LiberteEvent::Identify(event)
+        LiberteEvent::Identify(Box::new(event))
     }
 }
 

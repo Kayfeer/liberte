@@ -312,15 +312,14 @@ pub async fn spawn_swarm(
                                 .await;
                         }
 
-                        SwarmEvent::Behaviour(LiberteEvent::Kademlia(
-                            kad::Event::OutboundQueryProgressed { result, .. },
-                        )) => {
-                            debug!(result = ?result, "Kademlia query progressed");
+                        SwarmEvent::Behaviour(LiberteEvent::Kademlia(event)) => {
+                            if let kad::Event::OutboundQueryProgressed { result, .. } = *event {
+                                debug!(result = ?result, "Kademlia query progressed");
+                            }
                         }
 
-                        SwarmEvent::Behaviour(LiberteEvent::Identify(
-                            identify::Event::Received { peer_id, info, .. },
-                        )) => {
+                        SwarmEvent::Behaviour(LiberteEvent::Identify(event)) => {
+                            let identify::Event::Received { peer_id, info, .. } = *event else { continue; };
                             debug!(
                                 peer = %peer_id,
                                 protocol = ?info.protocol_version,

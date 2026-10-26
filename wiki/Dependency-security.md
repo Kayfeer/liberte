@@ -150,11 +150,15 @@ cryptographic patch, forced incompatible version or advisory exception is
 introduced. The new report retains 6 maintenance warnings and the GLib
 soundness warning separately; these remain visible for review.
 
-**Validation pending:** a new CI run must regenerate the Cargo lockfile after
-removing the unused dependency, run RustSec against that exact lockfile, and
-pass Rust tests, peer-network integration tests, browser media tests and native
-builds on Windows, macOS and Linux. No clean audit after this removal is claimed
-here. The lockfile must be produced by Cargo rather than edited manually.
+**Audit verified:** run [40316431767](https://github.com/Kayfeer/liberte/actions/runs/40316431767),
+commit `505931e8`, regenerated the lockfile with Cargo after that removal.
+RustSec reported **zero known vulnerabilities**, with the six maintenance
+warnings and one GLib soundness warning still visible. The candidate lockfile's
+SHA-256 is `e79f4b55b11b37542769e7cb1592a9c8cf50733d4e6c9de2f037be934fd9cb18`;
+it is preserved for the release checkout. npm audit also reported zero
+vulnerabilities in this run. The final delivery must pass all CI checks against
+the committed lockfiles; audit success alone does not establish application
+correctness or resolve the separate warnings.
 
 ### Rust primary references
 

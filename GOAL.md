@@ -12,6 +12,7 @@ Terminer une application pleinement fonctionnelle sur `codex/complete-liberte`, 
 - Sauvegardes locales, portables et distantes chiffrées, restauration validée.
 - API serveur authentifiée, propriétaires isolés, quotas et état persistant.
 - Interface vérifiée, sans commande factice ni succès simulé.
+- Client Linux lancé réellement en CI : création d'identité et de canal, puis persistance après redémarrage.
 - Tests, compilation, formatage, Clippy, audits et smoke Docker validés sur le même commit.
 - Paquets Windows, Linux et macOS construits sur ce commit et conservés en artefacts CI.
 - Documentation de configuration, migration et limites conforme au comportement livré.
@@ -22,9 +23,8 @@ Les tests distinguent les échanges réseau/média réels des tests d'interface 
 
 Serveur distant, HTTPS/WSS, TURN et LiveKit nécessitent une configuration opérateur. Aucune clé de signature inventée, aucun merge, déploiement public ou release officielle sans instruction correspondante.
 
-## État au 26 octobre 2026
+## Suivi et preuve de livraison
 
-Commit examiné : `e364ddcac3626b62dcc19d9aa394ae2ea48fd0ff`.
-Source : https://github.com/Kayfeer/liberte/actions/runs/39698753266
+La [PR #2](https://github.com/Kayfeer/liberte/pull/2) regroupe l'implémentation et le bilan de validation. Les [exécutions CI de la branche](https://github.com/Kayfeer/liberte/actions?query=branch%3Acodex%2Fcomplete-liberte) fournissent les résultats et les installateurs, identifiés par commit et SHA-256.
 
-Frontend, outils de livraison, Docker et paquets Windows/Linux/macOS passent. Audit Rust, qualité Rust et tests navigateur restent en échec. L'objectif reste ouvert jusqu'à correction et vérification.
+La livraison est validée lorsque tous les contrôles du dernier commit passent, y compris le lancement du client Linux. Les vérifications sur des périphériques physiques et des réseaux distincts restent explicitement séparées des preuves automatisées. Le document [Démarrer](wiki/Getting-Started.md) décrit leur parcours.
