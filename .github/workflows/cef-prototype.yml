@@ -113,11 +113,11 @@ jobs:
         if: always()
         run: python scripts/ci.py rust-audit-gate --report .ci-output/cargo-audit.json --status .ci-output/cargo-audit-exit.txt
 
-  updater-tests:
-    name: Vendored updater upstream library tests
+  updater-lock:
+    name: Resolve the shared updater test lock on Linux
     needs: prototype-scope
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -162,42 +162,93 @@ jobs:
         if: always() && hashFiles('vendor/tauri-plugin-updater/Cargo.lock') != ''
         with:
           name: updater-test-lock
+          include-hidden-files: true
           path: |
             vendor/tauri-plugin-updater/Cargo.lock
             .ci-output/updater-tests/Cargo.lock.sha256
           if-no-files-found: error
+
+  updater-tests:
+    name: Vendored updater library tests (${{ matrix.label }})
+    needs: updater-lock
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: linux-x86_64
+          - runner: windows-latest
+            label: windows-x86_64
+          - runner: macos-14
+            label: macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-test-lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - name: Verify the shared Linux-generated updater lock digest
+        shell: python
+        run: |
+          import hashlib, pathlib
+          lock = pathlib.Path('vendor/tauri-plugin-updater/Cargo.lock')
+          expected = pathlib.Path('.ci-output/updater-tests/Cargo.lock.sha256').read_text(encoding='utf-8').split()[0]
+          actual = hashlib.sha256(lock.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit('Updater lock differs from the shared Linux artifact')
+          print(f'Using the exact shared updater test lock: {actual}')
       - uses: Swatinem/rust-cache@v2
         with:
-          key: cef-updater-tests
+          key: cef-updater-tests-${{ matrix.label }}
           workspaces: vendor/tauri-plugin-updater -> target
           cache-on-failure: true
-      - name: Install the updater test platform dependencies
+      - name: Preserve the active Linux updater dependency tree
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y libgtk-3-dev libgtk-4-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config
-          pkg-config --atleast-version=4.14 gtk4
-      - name: Test the exact upstream updater source with its dedicated lock
+          mkdir -p .ci-output/updater-tests
+          cargo tree --manifest-path vendor/tauri-plugin-updater/Cargo.toml --locked --target x86_64-unknown-linux-gnu -e normal,build,features > .ci-output/updater-tests/linux-dependency-tree.txt
+      - name: Test the upstream updater library with ZIP enabled on this OS
         id: updater_tests
         continue-on-error: true
+        shell: python
         run: |
-          set -o pipefail
-          cargo test --manifest-path vendor/tauri-plugin-updater/Cargo.toml --lib --locked 2>&1 | tee .ci-output/updater-tests/tests.log
+          import pathlib, subprocess, sys
+          sys.stdout.reconfigure(encoding='utf-8')
+          directory = pathlib.Path('.ci-output/updater-tests')
+          directory.mkdir(parents=True, exist_ok=True)
+          command = ['cargo', 'test', '--manifest-path', 'vendor/tauri-plugin-updater/Cargo.toml', '--lib', '--features', 'zip', '--locked']
+          with (directory / 'tests.log').open('w', encoding='utf-8') as log:
+              process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+              for line in process.stdout:
+                  print(line, end='', flush=True)
+                  log.write(line)
+              result = process.wait()
+          raise SystemExit(result)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: updater-test-results
+          name: updater-test-results-${{ matrix.label }}
           path: .ci-output/updater-tests
           if-no-files-found: warn
-      - name: Require updater tests and an unchanged versioned test lock
+      - name: Require updater tests and the unchanged versioned shared lock
         if: always()
+        shell: python
         env:
-          LOCK: ${{ steps.updater_lock.outcome }}
+          LOCK: ${{ needs.updater-lock.result }}
           TESTS: ${{ steps.updater_tests.outcome }}
         run: |
-          test "$LOCK" = success
-          test "$TESTS" = success
-          git ls-files --error-unmatch vendor/tauri-plugin-updater/Cargo.lock
-          git diff --exit-code -- vendor/tauri-plugin-updater/Cargo.lock
+          import os, subprocess
+          if os.environ.get('LOCK') != 'success' or os.environ.get('TESTS') != 'success':
+              raise SystemExit('Updater lock resolution and platform tests must both succeed')
+          subprocess.run(['git', 'ls-files', '--error-unmatch', 'vendor/tauri-plugin-updater/Cargo.lock'], check=True)
+          subprocess.run(['git', 'diff', '--exit-code', '--', 'vendor/tauri-plugin-updater/Cargo.lock'], check=True)
 
   frontend:
     name: Frontend tests, types and build
