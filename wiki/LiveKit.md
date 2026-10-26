@@ -2,6 +2,14 @@
 
 Le mode LiveKit complète les appels WebRTC entre pairs. Il nécessite un serveur choisi et configuré par l'opérateur ; aucun service cloud ni compte tiers n'est préconfiguré. Le SDK client applique le chiffrement de bout en bout avec une clé issue du canal. La présence du code ne démontre pas sa compatibilité avec chaque WebView ou chaque réseau.
 
+## Compatibilité native
+
+Le client natif Linux refuse le mode SFU avant toute demande de jeton, connexion LiveKit ou capture. Dans WebKitGTK 2.50.4, `RTCRtpScriptTransform` est exposé, mais les transformations de trames du backend GStreamer ne sont pas implémentées. Le contrôle `isE2EESupported()` du SDK, fondé sur la présence de l'API, ne suffit donc pas à garantir le chiffrement. Ce constat ne démontre pas qu'un flux a été transmis en clair ; il impose de refuser ce parcours non vérifié. Utiliser **P2P direct** sous Linux.
+
+Ce refus reste actif pour les versions suivantes du moteur jusqu'à une validation native démontrant le chiffrement et le refus d'une mauvaise clé. Les appels SFU restent proposés sur Windows et macOS, sous réserve du support E2EE du moteur installé. Les tests Chromium ne certifient pas ces WebViews.
+
+Sources primaires de la version auditée : [activation de l'API](https://github.com/WebKit/WebKit/blob/webkitgtk-2.50.4/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml), [transformation sortante](https://github.com/WebKit/WebKit/blob/webkitgtk-2.50.4/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderTransformBackend.cpp), [traitement des trames](https://github.com/WebKit/WebKit/blob/webkitgtk-2.50.4/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp), [détection LiveKit 2.23.0](https://github.com/livekit/client-sdk-js/blob/v2.23.0/src/e2ee/utils.ts).
+
 ## Déploiement mono-noeud
 
 Depuis `docker/`, compléter `.env` sans versionner les secrets :
@@ -50,7 +58,7 @@ La confidentialité du contenu dépend aussi de la clé du canal et du fonctionn
 
 ## Validation avant utilisation
 
-Vérifier un appel à deux clients, la réception audio et vidéo, le mute, les périphériques, le partage d'écran et la reconnexion. Vérifier qu'une clé de canal incorrecte empêche le décodage du média et qu'une absence de support E2EE est signalée avant publication. Refaire ces essais sur Windows/WebView2, Linux/WebKitGTK et macOS/WKWebView, puis entre deux réseaux distincts avec les règles NAT réelles.
+Vérifier un appel à deux clients, la réception audio et vidéo, le mute, les périphériques, le partage d'écran et la reconnexion. Vérifier qu'une clé de canal incorrecte empêche le décodage du média et qu'une absence de support E2EE est signalée avant publication. Refaire ces essais sur Windows/WebView2 et macOS/WKWebView, puis entre deux réseaux distincts avec les règles NAT réelles. Sous Linux/WebKitGTK, vérifier le refus explicite du mode SFU avant capture ; la validation native P2P ne couvre pas le SFU.
 
 La CI utilise Chromium, des périphériques simulés et une instance LiveKit locale avec des identifiants de test. Ces essais ne certifient pas les WebViews natives, les autorisations système, les périphériques physiques ou un déploiement public.
 

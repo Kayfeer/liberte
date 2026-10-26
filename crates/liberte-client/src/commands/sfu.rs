@@ -30,11 +30,23 @@ fn room_material(channel: Uuid, key: &[u8; 32]) -> (String, String) {
     (hex::encode(room), hex::encode(encryption))
 }
 
+fn ensure_platform_support() -> Result<(), String> {
+    // WebKitGTK 2.50.4 exposes RTCRtpScriptTransform but its GStreamer frame
+    // transform backend is not implemented. API presence cannot prove E2EE.
+    // Keep Linux closed until a native encrypted-media test verifies its engine.
+    // Source: WebKit/webkitgtk-2.50.4 GStreamerRtpTransformBackend.cpp.
+    if cfg!(target_os = "linux") {
+        return Err("Les appels SFU chiffrés sont indisponibles sous Linux : le moteur WebKitGTK ne garantit pas leur chiffrement. Choisissez P2P direct pour appeler.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_sfu_connection(
     state: State<'_, Arc<Mutex<AppState>>>,
     channel_id: String,
 ) -> Result<SfuConnection, String> {
+    ensure_platform_support()?;
     let channel = Uuid::parse_str(&channel_id).map_err(|e| e.to_string())?;
     let (server, identity, token, key): (String, Identity, _, [u8; 32]) = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
@@ -96,6 +108,18 @@ pub async fn get_sfu_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linux_engine_is_refused_before_sfu_admission() {
+        let result = ensure_platform_support();
+        if cfg!(target_os = "linux") {
+            let error = result.unwrap_err();
+            assert!(error.contains("WebKitGTK"));
+            assert!(error.contains("P2P direct"));
+        } else {
+            assert!(result.is_ok());
+        }
+    }
+
     #[test]
     fn room_and_media_keys_are_separate_and_depend_on_channel_secret() {
         let channel = Uuid::new_v4();

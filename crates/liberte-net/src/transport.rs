@@ -85,6 +85,14 @@ pub(crate) fn build_swarm_with_options(
 
                 let identify_config =
                     identify::Config::new(PROTOCOL_VERSION.to_string(), key.public())
+                        // A process restart keeps its PeerId but loses GossipSub state.
+                        // Identify runs on the authenticated connection and lets peers
+                        // distinguish a fresh session from an additional live link.
+                        .with_agent_version(format!(
+                            "liberte/{}/session/{}",
+                            env!("CARGO_PKG_VERSION"),
+                            libp2p::PeerId::random()
+                        ))
                         .with_push_listen_addr_updates(true)
                         .with_interval(Duration::from_secs(60));
                 let identify = identify::Behaviour::new(identify_config);

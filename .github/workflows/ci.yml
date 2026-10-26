@@ -252,7 +252,9 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo build --release --locked --bin liberte-server
       - name: Exercise two native clients and the real server
+        id: native_integration
         if: runner.os == 'Linux'
+        continue-on-error: true
         timeout-minutes: 10
         run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_integration.py --driver WebKitWebDriver --application target/release/liberte-client --server target/release/liberte-server
       - name: Verify the native WebRTC media backend
@@ -294,6 +296,7 @@ jobs:
           printf 'PULSE_SERVER=%s\nPULSE_COOKIE=%s\n' "$socket" "$cookie" >> "$GITHUB_ENV"
           pactl list short sinks > .ci-output/native-media/audio-output.txt
       - name: Verify native audio, video and track cleanup between two clients
+        id: native_media
         if: runner.os == 'Linux'
         timeout-minutes: 10
         run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_media.py --driver WebKitWebDriver --application target/native-media-qa/debug/liberte-client
@@ -315,6 +318,15 @@ jobs:
             .ci-output/native-media
           if-no-files-found: warn
           retention-days: 14
+      - name: Require both native integration and media checks before packaging
+        if: always() && runner.os == 'Linux'
+        env:
+          NATIVE_INTEGRATION: ${{ steps.native_integration.outcome }}
+          NATIVE_MEDIA: ${{ steps.native_media.outcome }}
+        run: |
+          for result in "$NATIVE_INTEGRATION" "$NATIVE_MEDIA"; do
+            test "$result" = success || exit 1
+          done
       - name: Record package checksum and source commit
         run: python scripts/ci.py package-desktop --label ${{ matrix.label }}
       - uses: actions/upload-artifact@v4

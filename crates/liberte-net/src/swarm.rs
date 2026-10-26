@@ -39,6 +39,19 @@ struct ReconnectTarget {
     next_attempt: Instant,
 }
 
+struct PeerSession {
+    nonce: PeerId,
+    latest_connection: ConnectionId,
+    resetting: bool,
+}
+
+fn session_nonce(agent_version: &str) -> Option<PeerId> {
+    if agent_version.len() > 160 || !agent_version.starts_with("liberte/") {
+        return None;
+    }
+    agent_version.rsplit_once("/session/")?.1.parse().ok()
+}
+
 struct RelayReservationState {
     address: Multiaddr,
     listener: Option<ListenerId>,
@@ -283,6 +296,7 @@ pub async fn spawn_swarm(
         let mut pending_dials: Vec<PendingDial> = Vec::new();
         let mut maintenance = tokio::time::interval(std::time::Duration::from_secs(1));
         let mut relay_reservations: HashMap<PeerId, RelayReservationState> = HashMap::new();
+        let mut peer_sessions: HashMap<PeerId, PeerSession> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -488,12 +502,49 @@ pub async fn spawn_swarm(
                         }
 
                         SwarmEvent::Behaviour(LiberteEvent::Identify(event)) => {
-                            let identify::Event::Received { peer_id, info, .. } = *event else { continue; };
+                            let identify::Event::Received { peer_id, connection_id, info } = *event else { continue; };
+                            // Ignore queued Identify replies from links being closed or
+                            // older than the session we have already authenticated.
+                            if peer_sessions.get(&peer_id).is_some_and(|session| {
+                                session.resetting || connection_id < session.latest_connection
+                            }) { continue; }
                             debug!(
                                 peer = %peer_id,
+                                %connection_id,
                                 protocol = ?info.protocol_version,
                                 "Identify: received info from peer"
                             );
+                            if let Some(nonce) = session_nonce(&info.agent_version) {
+                                let changed = peer_sessions.get(&peer_id)
+                                    .is_some_and(|session| session.nonce != nonce);
+                                if peer_sessions.len() >= 128 && !peer_sessions.contains_key(&peer_id) {
+                                    let stale = peer_sessions.keys().find(|peer| !swarm.is_connected(peer)).copied();
+                                    if let Some(stale) = stale { peer_sessions.remove(&stale); }
+                                }
+                                if peer_sessions.len() < 128 || peer_sessions.contains_key(&peer_id) {
+                                    peer_sessions.insert(peer_id, PeerSession { nonce, latest_connection: connection_id, resetting: changed });
+                                }
+                                if changed {
+                                    // GossipSub sends its subscription hello only on the
+                                    // first connection. A crash can leave old QUIC links
+                                    // alive while a new process with the same PeerId dials.
+                                    // Close ALL links so its peer state is really removed,
+                                    // then reconnect and exchange the hello normally.
+                                    let addresses: Vec<_> = info.listen_addrs.iter()
+                                        .filter(|address| address.to_string().len() <= 1024)
+                                        .filter_map(|address| {
+                                            match target_peer_id(address) {
+                                                Some(peer) if peer == peer_id => Some(address.clone()),
+                                                Some(_) => None,
+                                                None => Some(address.clone().with(Protocol::P2p(peer_id))),
+                                            }
+                                        }).take(8).collect();
+                                    remember_target(&mut reconnect_targets, &addresses);
+                                    info!(peer = %peer_id, "Remote process restarted; rebuilding GossipSub subscriptions");
+                                    let _ = swarm.disconnect_peer_id(peer_id);
+                                    continue;
+                                }
+                            }
                             for addr in &info.listen_addrs {
                                 swarm
                                     .behaviour_mut()
@@ -545,8 +596,14 @@ pub async fn spawn_swarm(
                         }
 
                         SwarmEvent::ConnectionEstablished {
-                            peer_id, endpoint, ..
+                            peer_id, connection_id, endpoint, num_established, ..
                         } => {
+                            if peer_sessions.get(&peer_id).is_some_and(|session| session.resetting) {
+                                // A concurrent mDNS dial must not keep the old peer state
+                                // alive while we wait for all connections to close.
+                                swarm.close_connection(connection_id);
+                                continue;
+                            }
                             let addr = endpoint.get_remote_address().clone();
                             // For inbound circuits, send_back_addr may contain only the
                             // remote PeerId. The local endpoint carries the relay route.
@@ -572,6 +629,8 @@ pub async fn spawn_swarm(
                                 peer = %peer_id,
                                 addr = %addr,
                                 relayed = is_relayed,
+                                %connection_id,
+                                connections = num_established.get(),
                                 "Peer connected"
                             );
                             let _ = notif_tx
@@ -589,9 +648,24 @@ pub async fn spawn_swarm(
                             ..
                         } => {
                             if num_established == 0 {
+                                let restarting = peer_sessions.get(&peer_id).is_some_and(|session| session.resetting);
+                                if restarting {
+                                    // Keep the new nonce/ConnectionId to ignore late replies
+                                    // from the previous process after this reset completes.
+                                    if let Some(session) = peer_sessions.get_mut(&peer_id) { session.resetting = false; }
+                                } else {
+                                    peer_sessions.remove(&peer_id);
+                                }
                                 peer_tracker.on_disconnected(&peer_id);
                                 if let Some(target) = reconnect_targets.get_mut(&peer_id) {
                                     target.next_attempt = Instant::now() + Duration::from_secs(1);
+                                    if restarting {
+                                        target.failures = 0;
+                                        let options = DialOpts::peer_id(peer_id).addresses(target.addresses.clone()).build();
+                                        if let Err(error) = swarm.dial(options) {
+                                            debug!(%peer_id, %error, "Fresh session connection deferred to retry");
+                                        }
+                                    }
                                 }
                                 if let Some(reservation) = relay_reservations.remove(&peer_id) {
                                     if let Some(listener) = reservation.listener { swarm.remove_listener(listener); }

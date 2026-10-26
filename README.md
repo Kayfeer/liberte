@@ -12,7 +12,7 @@ La branche 2.4.0 est une version de stabilisation avec un protocole incompatible
 | Messagerie | Enveloppe chiffrée XChaCha20-Poly1305, auteur signé, contrôle du canal, de la date et des rejeux. La clé de canal reste partagée et durable. |
 | Découverte | Réseau local et adresses de pairs dans les invitations. Les réseaux distants peuvent nécessiter un relais et une configuration réseau. |
 | Invitations | Codes signés contenant un secret d'accès, limités dans le temps. Ils ne sont pas chiffrés pour leur destinataire et doivent être transmis confidentiellement. |
-| Audio et vidéo | WebRTC entre pairs ou SFU LiveKit auto-hébergé optionnel avec chiffrement côté client. Permissions micro/caméra et connectivité ICE nécessaires. Voir les limites et essais de validation dans [LiveKit](wiki/LiveKit.md). |
+| Audio et vidéo | WebRTC entre pairs ou SFU LiveKit auto-hébergé optionnel avec chiffrement côté client. Permissions micro/caméra et connectivité ICE nécessaires. Le SFU chiffré est refusé dans le client Linux tant que son moteur ne garantit pas les transformations E2EE. Voir les limites et essais de validation dans [LiveKit](wiki/LiveKit.md). |
 | Fichiers et sauvegardes | Stockage local et API de relais. Les opérations serveur sont authentifiées ; une sauvegarde doit être testée par une restauration avant d'être considérée comme fiable. |
 | Serveur | API HTTP, relais P2P et stockage. Utiliser un proxy HTTPS pour l'accès distant. |
 | Mise à jour | Installateurs manuels. Les mises à jour automatiques exigent une paire de clés de signature configurée et les artefacts signés vérifiés par la release. |
@@ -38,6 +38,8 @@ Pour utiliser un relais Internet, suivre le [parcours de configuration P2P](wiki
 Le client macOS exige **macOS 13.3 minimum**, conformément à la configuration du bundle. Maintenir macOS et son moteur WebKit à jour.
 
 L'interface utilise Tailwind CSS 4, dont les [prérequis de navigateur](https://tailwindcss.com/docs/compatibility) comprennent Safari 16.4 et Chromium 111. Sur Windows, utiliser WebView2 à jour. Sur Linux, utiliser WebKitGTK récent ; son numéro d'API `4.1` ne désigne pas la version du moteur WebKit.
+
+Sous Linux, les appels P2P exigent aussi un moteur compilé avec WebRTC. La série [WebKitGTK 2.54 désactive ce support](https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html) pendant sa transition vers LibWebRTC ; le numéro de version seul ne garantit donc pas la disponibilité des appels. Les résultats natifs identifient le moteur effectivement testé.
 
 Une compilation du paquet ne valide pas le rendu, les permissions micro/caméra ou l'E2EE dans la WebView native. Ces essais restent nécessaires sur chaque plateforme.
 
@@ -78,7 +80,7 @@ L'API est publiée sur `127.0.0.1:8080` par défaut. Le transport QUIC utilise U
 
 ## Vérification et distribution
 
-La CI exécute les tests frontend, les vérifications Rust, des tests d'authentification HTTP, des échanges média dans Chromium et le chargement/démarrage d'une image Docker réellement exportée. Elle lance également le vrai client Linux via WebDriver, crée une identité et un canal par l'interface, puis vérifie leur persistance après redémarrage. Les résultats et captures du parcours natif sont conservés dans les artefacts `native-smoke-linux`. Elle ne remplace pas un appel entre deux appareils derrière des NAT différents, un essai des périphériques dans chaque WebView native, ni un audit cryptographique indépendant.
+La CI exécute les tests frontend, les vérifications Rust, des tests d'authentification HTTP, des échanges média dans Chromium et le chargement/démarrage d'une image Docker réellement exportée. Elle lance aussi deux vrais clients Linux via WebDriver pour les invitations, les messages, les réactions, les fichiers, la reconnexion et la restauration depuis le vrai serveur. Un binaire QA distinct utilise des périphériques synthétiques pour tester les flux WebRTC natifs et leur arrêt ; il n'est pas distribué. Les résultats et captures du parcours natif sont conservés dans les artefacts `native-smoke-linux`. Elle ne remplace pas un appel entre deux appareils derrière des NAT différents, un essai des périphériques dans chaque WebView native, ni un audit cryptographique indépendant.
 
 Les jobs desktop produisent des paquets de test Windows, Linux et macOS dans les artefacts de l'exécution GitHub Actions. Leur nom et `build.json` identifient le commit ; vérifier aussi `SHA256SUMS`. Ces paquets CI ne sont pas signés ni publiés comme release et ne proposent pas de mise à jour automatique.
 

@@ -199,6 +199,15 @@ def run_media(application, driver, artifacts):
                 identity_ui(bob, BOB)
                 report["capture_states"] = {"initial": {"alice": capture_state(alice, {"microphone": "none", "camera": "none"}),
                                                        "bob": capture_state(bob, {"microphone": "none", "camera": "none"})}}
+                try:
+                    alice.invoke("get_sfu_connection", {"channelId": "invalid-on-purpose"})
+                except RuntimeError as error:
+                    if "Linux" not in str(error) or "P2P direct" not in str(error):
+                        raise AssertionError("Native SFU must refuse the unsupported engine before parsing a channel") from error
+                else:
+                    raise AssertionError("Native Linux SFU unexpectedly supplied an E2EE connection")
+                capture_state(alice, {"microphone": "none", "camera": "none"})
+                record("Native SFU refuses the unsupported Linux E2EE engine before channel lookup or capture")
                 alice.click('button[title="Cr\u00e9er un canal"]')
                 alice.fill('input[placeholder="ex: general"]', CHANNEL)
                 alice.click(xpath_text("button", "Cr\u00e9er"), "xpath")

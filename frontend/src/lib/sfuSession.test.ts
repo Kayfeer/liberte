@@ -120,6 +120,22 @@ describe("SFU mandatory encryption", () => {
     expect(mocks.capture).not.toHaveBeenCalled();
   });
 
+  it("honors native engine rejection even when the browser exposes encryption APIs", async () => {
+    const reason = "Les appels SFU chiffrés sont indisponibles sous Linux : le moteur WebKitGTK ne garantit pas leur chiffrement. Choisissez P2P direct pour appeler.";
+    mocks.supported.mockReturnValue(true);
+    mocks.invoke.mockRejectedValueOnce(new Error(reason));
+    const handlers = options();
+    await expect(new SfuSession(handlers).start()).rejects.toThrow(reason);
+    expect(mocks.invoke).toHaveBeenCalledOnce();
+    expect(mocks.invoke).toHaveBeenCalledWith("get_sfu_connection", { channelId: "channel" });
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.captureVideo).not.toHaveBeenCalled();
+    expect(mocks.setKey).not.toHaveBeenCalled();
+    expect(mocks.room).toBeNull();
+    expect(mocks.register).not.toHaveBeenCalled();
+    expect(handlers.onLocalStream).toHaveBeenLastCalledWith(null);
+  });
+
   it("imports the key and enables encryption before connecting and publishing", async () => {
     const session = new SfuSession(options());
     await session.start();
