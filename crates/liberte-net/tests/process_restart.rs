@@ -3,8 +3,8 @@
 use std::{io::Write as _, process::Stdio, time::Duration};
 
 use liberte_net::{
-    network_snapshot, publish_confirmed, spawn_swarm, subscribe_topic,
-    swarm::SwarmConfig, SwarmCommand, SwarmNotification,
+    network_snapshot, publish_confirmed, spawn_swarm, subscribe_topic, swarm::SwarmConfig,
+    SwarmCommand, SwarmNotification,
 };
 use liberte_shared::{
     crypto,
@@ -70,8 +70,7 @@ fn seal(identity: &Identity, channel: &ChannelId, text: &str) -> Vec<u8> {
 }
 
 fn message_matches(data: &[u8], channel: &ChannelId, author: &UserId, expected: &str) -> bool {
-    let (actual_author, message) =
-        WireMessage::open(data, channel.clone(), &CHANNEL_KEY).unwrap();
+    let (actual_author, message) = WireMessage::open(data, channel.clone(), &CHANNEL_KEY).unwrap();
     assert_eq!(&actual_author, author);
     let WireMessage::ChatMessage(message) = message else {
         panic!("Expected an authenticated chat message");
@@ -85,7 +84,12 @@ struct ChildPeer {
     output: Lines<BufReader<ChildStdout>>,
 }
 
-fn launch_bob(phase: &str, channel: &ChannelId, address: &Multiaddr, alice: &Identity) -> ChildPeer {
+fn launch_bob(
+    phase: &str,
+    channel: &ChannelId,
+    address: &Multiaddr,
+    alice: &Identity,
+) -> ChildPeer {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "process_restart_child", "--nocapture"])
         .env(PHASE_ENV, phase)
@@ -161,9 +165,7 @@ fn process_restart_child() {
         return;
     };
     assert!(matches!(phase.as_str(), "before-crash" | "after-crash"));
-    let channel = ChannelId(
-        uuid::Uuid::parse_str(&std::env::var(CHANNEL_ENV).unwrap()).unwrap(),
-    );
+    let channel = ChannelId(uuid::Uuid::parse_str(&std::env::var(CHANNEL_ENV).unwrap()).unwrap());
     let address: Multiaddr = std::env::var(ADDRESS_ENV).unwrap().parse().unwrap();
     let alice_id = UserId::from_hex(&std::env::var(ALICE_ID_ENV).unwrap()).unwrap();
     let alice_peer = liberte_net::swarm::target_peer_id(&address).unwrap();
@@ -189,8 +191,11 @@ fn process_restart_child() {
             loop {
                 match rx.recv().await {
                     Some(SwarmNotification::PeerConnected { peer_id, .. })
-                        if peer_id == alice_peer => break,
-                    Some(_) => {},
+                        if peer_id == alice_peer =>
+                    {
+                        break
+                    }
+                    Some(_) => {}
                     None => panic!("Bob's swarm stopped before its connection"),
                 }
             }
@@ -208,7 +213,7 @@ fn process_restart_child() {
                             break;
                         }
                     }
-                    Some(_) => {},
+                    Some(_) => {}
                     None => panic!("Bob's swarm stopped before receiving Alice's reply"),
                 }
             }
