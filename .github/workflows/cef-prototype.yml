@@ -268,9 +268,9 @@ jobs:
     if: always() && needs.lockfile.result == 'success' && needs.frontend.outputs.build == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    env:
-      CEF_PATH: ${{ runner.temp }}/tauri-cef
     steps:
+      - name: Configure the CEF distribution directory
+        run: printf 'CEF_PATH=%s/tauri-cef\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
