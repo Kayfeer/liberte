@@ -4,6 +4,8 @@ Travailler sur une branche et ouvrir une pull request. Les corrections de sécur
 
 ## Contrôles
 
+Sur cette branche prototype, préparer d'abord les [dépendances CEF et les variables Linux](Getting-Started.md#préparer-ubuntu-2404), notamment `CEF_PATH` et le chemin des bibliothèques pour les tests. Les contrôles ci-dessous ne remplacent pas la [qualification native](Releasing.md#validation-native-linux-à-obtenir).
+
 ```bash
 python -m unittest discover -s scripts -p ci_test.py -v
 python scripts/ci.py versions

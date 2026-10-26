@@ -10,22 +10,22 @@ authors = ["Kayfeer"]
 qa-media-devices = []
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "=3.0.0-alpha.4", features = [] }
 
 [dependencies]
 liberte-shared = { workspace = true }
 liberte-net    = { workspace = true }
 liberte-media  = { workspace = true }
 liberte-store  = { workspace = true }
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "=3.0.0-alpha.5", features = ["tray-icon"] }
 rusqlite = { version = "0.31" }
-tauri-plugin-shell = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-notification = "2"
-# Official upstream ZIP 9 security fix, pending the next stable plugin release.
-tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "ba98bfadc4c868c9a7e1a226c83af528e1f11b89" }
-tauri-plugin-process = "2"
+tauri-plugin-shell = "=3.0.0-alpha.3"
+tauri-plugin-dialog = { version = "=3.0.0-alpha.4", default-features = false, features = ["xdg-portal"] }
+tauri-plugin-fs = "=3.0.0-alpha.3"
+tauri-plugin-notification = "=3.0.0-alpha.3"
+# Official v3 updater with the upstream ZIP 9 security fix applied locally.
+tauri-plugin-updater = { path = "../../vendor/tauri-plugin-updater" }
+tauri-plugin-process = "=3.0.0-alpha.3"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -46,6 +46,8 @@ name = "liberte_client_lib"
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
-webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
+tauri-runtime-cef = "=3.0.0-alpha.6"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tauri-runtime-wry = "=3.0.0-alpha.5"
 

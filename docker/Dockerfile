@@ -5,6 +5,8 @@ WORKDIR /app
 # A missing lockfile is a hard failure; CI can produce the initial candidate.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
+# Cargo loads every workspace manifest, including the client updater path.
+COPY vendor/ vendor/
 RUN cargo build --release --locked --bin liberte-server
 
 FROM debian:bookworm-slim

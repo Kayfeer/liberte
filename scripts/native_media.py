@@ -1,7 +1,7 @@
-"""Native media QA: real clients/signaling/WebRTC, synthetic WebKit capture.
+"""Native media QA: real clients/signaling/WebRTC, synthetic engine capture.
 
-Requires the separate debug-only qa-media-devices binary. WebDriver engine consent
-is not evidence about physical devices, the GTK prompt, or release media runtime.
+Requires the separate debug-only qa-media-devices binary. Automated permission
+decisions are not evidence about physical devices, OS prompts, or release media.
 Diagnostic JavaScript only observes real DOM streams; it replaces no app API.
 """
 import argparse
@@ -13,8 +13,9 @@ import shutil
 import sys
 import tempfile
 
-from native_smoke import NativeSession, isolated_environment, until
-from native_integration import ALICE, BOB, CHANNEL, identity_ui, network_ready, select_channel, xpath_text
+from native_smoke import resolve_driver, native_runtime, NativeSession, isolated_environment, until
+from native_integration import (ALICE, BOB, CHANNEL, identity_ui, network_ready, select_channel,
+                                xpath_text, configure_server_ui)
 
 VOICE = 'section[aria-label="Appel audio et vid\u00e9o"]'
 CAPABILITY_PROBE = """
@@ -23,6 +24,10 @@ return {
     getUserMedia: typeof navigator.mediaDevices?.getUserMedia,
     RTCPeerConnection: typeof window.RTCPeerConnection,
     AudioContext: typeof window.AudioContext,
+    RTCRtpScriptTransform: typeof window.RTCRtpScriptTransform,
+    createEncodedStreams: typeof window.RTCRtpSender?.prototype?.createEncodedStreams,
+    Worker: typeof window.Worker,
+    cryptoSubtle: !!window.crypto?.subtle,
     origin: window.location.origin,
     protocol: window.location.protocol,
     userAgent: navigator.userAgent,
@@ -165,29 +170,68 @@ def click_voice(client, label):
     client.click(f'{VOICE} button[aria-label="{label}"]')
 
 
-def start_call(client):
+def select_call_mode_ui(client, mode):
+    if mode not in ("mesh", "sfu"):
+        raise ValueError("Unsupported media transport")
+    selector = 'select[aria-label="Transport de l\'appel"]'
+    if client.value(selector) != mode:
+        client.click(selector)
+        element = client.wait_element(selector)
+        # Native keyboard input drives the real select and React change handler.
+        key = "\ue015" if mode == "sfu" else "\ue013"
+        client.command("POST", f"/element/{element}/value", {"text": key + "\ue007"})
+    def selected():
+        client.assert_no_alert()
+        return client.value(selector) == mode and client.invoke("get_call_state").get("mode") == mode
+    until(selected, f"UI and native call transport both select {mode}")
+
+
+def require_sfu_capabilities(value):
+    require_capabilities(value)
+    if (value.get("RTCRtpScriptTransform") != "function"
+            and value.get("createEncodedStreams") != "function"):
+        raise RuntimeError("Native SFU requires WebRTC encoded media transforms")
+    if value.get("Worker") != "function" or value.get("cryptoSubtle") is not True:
+        raise RuntimeError("Native SFU requires Worker and WebCrypto support")
+
+
+def start_call(client, mode="mesh"):
+
     client.click('button[aria-label="Rejoindre l\'appel"]')
     def joined():
         client.assert_no_alert()
         return client.find(VOICE)
     until(joined, "native call UI or an explicit application error")
     state = client.invoke("get_call_state")
-    if state.get("inCall") is not True or state.get("mode") != "mesh":
-        raise AssertionError("The native client did not enter the requested P2P call")
+    if state.get("inCall") is not True or state.get("mode") != mode:
+        raise AssertionError(f"The native client did not enter the requested {mode} call")
+
+
+def require_cef_qa_configuration(configuration, port):
+    if (not isinstance(configuration, dict) or configuration.get("engine") != "cef"
+            or configuration.get("syntheticMedia") is not True
+            or configuration.get("debugBuild") is not True
+            or configuration.get("remoteDebuggingPort") != port):
+        raise AssertionError("CEF media QA requires the actual debug build, synthetic devices and its own CDP endpoint")
 
 
 def capture_state(client, expected=None):
     latest = {}
     def observed():
         nonlocal latest
-        latest = client.invoke("qa_media_capture_state")
-        if not isinstance(latest, dict) or latest.get("mockCaptureDevices") is not True or latest.get("automationControlled") is not True:
-            raise AssertionError("QA capture must use synthetic devices under WebDriver automation")
+        if getattr(client, "driver", None) == "cef":
+            latest = client.capture_state()
+            if not isinstance(latest, dict) or latest.get("source") != "cdp-media-stream-tracks":
+                raise AssertionError("CEF capture proof requires observed real MediaStreamTrack objects")
+        else:
+            latest = client.invoke("qa_media_capture_state")
+            if not isinstance(latest, dict) or latest.get("mockCaptureDevices") is not True or latest.get("automationControlled") is not True:
+                raise AssertionError("QA capture must use synthetic devices under WebDriver automation")
         return all(latest.get(kind) == state for kind, state in (expected or {}).items())
     try:
-        until(observed, "WebKit capture state", timeout=20)
+        until(observed, "native capture observation", timeout=20)
     except TimeoutError as error:
-        raise TimeoutError(f"Expected WebKit capture {expected}; observed {latest}") from error
+        raise TimeoutError(f"Expected capture observation {expected}; observed {latest}") from error
     return latest
 
 
@@ -198,22 +242,29 @@ def stop_probe(client):
         print(f"Native media diagnostic cleanup: {type(error).__name__}", file=sys.stderr)
 
 
-def run_media(application, driver, artifacts):
+def run_media(application, driver, artifacts, *, server_url=None, mode="mesh", after_call=None):
     if sys.platform != "linux":
         raise RuntimeError("Native media QA requires Linux")
+    if mode not in ("mesh", "sfu"):
+        raise ValueError("Unsupported media transport")
+    if mode == "sfu" and not server_url:
+        raise ValueError("Native SFU QA requires the real configured admission server")
     application = Path(application).resolve(strict=True)
     if not application.is_file() or not os.access(application, os.X_OK):
         raise ValueError("The separate QA client binary must be executable")
-    driver = shutil.which(driver)
-    if not driver:
-        raise RuntimeError("Pinned tauri-driver was not found")
+    driver = resolve_driver(driver)
     artifacts = Path(artifacts).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    report = {"status": "running", "driver": Path(driver).name, "commit": os.environ.get("GITHUB_SHA"), "checks": [],
+    report = {"status": "running", "driver": Path(driver).name, "runtime": native_runtime(driver), "commit": os.environ.get("GITHUB_SHA"), "checks": [],
               "build": "separate debug QA binary, qa-media-devices, bundled frontend",
-              "capture": "synthetic WebKit devices", "consent": "WebDriver engine automation",
-              "not_validated": ["physical microphone/camera/speakers", "GTK consent dialog", "release media runtime"],
-              "ipc_mocked": False, "signaling_mocked": False, "webrtc_mocked": False}
+              "capture": "synthetic Chromium devices" if driver == "cef" else "synthetic WebKit devices",
+              "consent": "origin-scoped CDP permission decision" if driver == "cef" else "WebDriver engine automation",
+              "capture_observation": "CDP MediaStreamTrack objects; not a hardware capture-state API" if driver == "cef" else "WebKit capture-state API",
+              "not_validated": ["physical microphone/camera/speakers", "native consent dialog", "release media runtime", "native SFU transport (separate test required)"],
+              "ipc_mocked": False, "signaling_mocked": False, "webrtc_mocked": False,
+              "mode": mode}
+    if mode == "sfu":
+        report["not_validated"].remove("native SFU transport (separate test required)")
     with application.open("rb") as stream:
         report["qa_application_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
     def record(check):
@@ -229,19 +280,30 @@ def run_media(application, driver, artifacts):
                 report["runtime_capabilities"] = {"alice": execute(alice, CAPABILITY_PROBE),
                                                   "bob": execute(bob, CAPABILITY_PROBE)}
                 print("CODEX_NATIVE_MEDIA_RUNTIME " + json.dumps(report["runtime_capabilities"]), flush=True)
+                if driver == "cef":
+                    configurations = {}
+                    for name, client in (("alice", alice), ("bob", bob)):
+                        configuration = client.invoke("qa_runtime_configuration")
+                        require_cef_qa_configuration(configuration, client.native_port)
+                        configurations[name] = configuration
+                    report["qa_runtime_configuration"] = configurations
                 report["capture_states"] = {"initial": {"alice": capture_state(alice, {"microphone": "none", "camera": "none"}),
                                                        "bob": capture_state(bob, {"microphone": "none", "camera": "none"})}}
-                try:
-                    alice.invoke("get_sfu_connection", {"channelId": "invalid-on-purpose"})
-                except RuntimeError as error:
-                    if "Linux" not in str(error) or "P2P direct" not in str(error):
-                        raise AssertionError("Native SFU must refuse the unsupported engine before parsing a channel") from error
-                else:
-                    raise AssertionError("Native Linux SFU unexpectedly supplied an E2EE connection")
-                capture_state(alice, {"microphone": "none", "camera": "none"})
-                record("Native SFU refuses the unsupported Linux E2EE engine before channel lookup or capture")
+                if driver != "cef":
+                    try:
+                        alice.invoke("get_sfu_connection", {"channelId": "invalid-on-purpose"})
+                    except RuntimeError as error:
+                        if "Linux" not in str(error) or "P2P direct" not in str(error):
+                            raise AssertionError("Native SFU must refuse the unsupported engine before parsing a channel") from error
+                    else:
+                        raise AssertionError("Native Linux SFU unexpectedly supplied an E2EE connection")
+                    capture_state(alice, {"microphone": "none", "camera": "none"})
+                    record("Native SFU refuses the unsupported Linux E2EE engine before channel lookup or capture")
                 for capabilities in report["runtime_capabilities"].values():
-                    require_capabilities(capabilities)
+                    if mode == "sfu":
+                        require_sfu_capabilities(capabilities)
+                    else:
+                        require_capabilities(capabilities)
                 alice.click('button[title="Cr\u00e9er un canal"]')
                 alice.fill('input[placeholder="ex: general"]', CHANNEL)
                 alice.click(xpath_text("button", "Cr\u00e9er"), "xpath")
@@ -254,11 +316,32 @@ def run_media(application, driver, artifacts):
                 bob.click(xpath_text("button", "Rejoindre"), "xpath")
                 select_channel(bob)
                 network_ready(alice, bob)
-                start_call(alice)
-                start_call(bob)
+                if server_url:
+                    for client in (alice, bob):
+                        configure_server_ui(client, server_url)
+                    record("Both clients saved the real admission server through Settings UI")
+                for client in (alice, bob):
+                    select_call_mode_ui(client, mode)
+                if driver == "cef":
+                    alice.set_media_permissions("denied")
+                    alice.click('button[aria-label="Rejoindre l\'appel"]')
+                    errors = until(lambda: execute(alice, """return [...document.querySelectorAll('[role="alert"]')]
+                        .map(node => node.textContent.trim()).filter(Boolean);"""),
+                        "an explicit UI error after Chromium denies microphone permission")
+                    if not any(word in " ".join(errors).casefold() for word in ("notallowed", "permission", "denied", "refus", "autorisa")):
+                        raise AssertionError(f"Unexpected error instead of permission denial: {errors}")
+                    if alice.invoke("get_call_state").get("inCall") is not False:
+                        raise AssertionError("A denied microphone must not enter a call")
+                    capture_state(alice, {"microphone": "none", "camera": "none"})
+                    record("Chromium permission denial produced a visible UI error without starting capture or a call")
+                    for client in (alice, bob):
+                        client.set_media_permissions("granted")
+                start_call(alice, mode)
+                start_call(bob, mode)
                 report["capture_states"]["audio_call"] = {"alice": capture_state(alice, {"microphone": "active"}),
                                                          "bob": capture_state(bob, {"microphone": "active"})}
-                record("Both clients joined through UI and production Rust IPC/signaling")
+                record("Both clients joined through UI, production Rust admission and LiveKit E2EE"
+                       if mode == "sfu" else "Both clients joined through UI and production Rust IPC/signaling")
                 try:
                     for client in (alice, bob):
                         until(lambda: execute(client, INSTALL_PROBE), "remote audio stream for native observation", timeout=45)
@@ -275,7 +358,7 @@ def run_media(application, driver, artifacts):
                     report["received"] = observations
                     report["capture_states"]["video_call"] = {"alice": capture_state(alice, {"microphone": "active", "camera": "active"}),
                                                              "bob": capture_state(bob, {"microphone": "active", "camera": "active"})}
-                    record("Bidirectional real WebRTC audio energy and decoded video frames in WebKit")
+                    record("Bidirectional real WebRTC audio energy and decoded video frames in the native runtime")
                     alice.screenshot("06-native-media-alice.png")
                     bob.screenshot("07-native-media-bob.png")
                     click_voice(alice, "Couper le microphone")
@@ -318,10 +401,14 @@ def run_media(application, driver, artifacts):
                                       and tracks_ended(value["heldRemote"]) and value["visibleVideos"] == 0,
                                       "leaving releases exposed local/remote tracks and removes video elements")
                         report["capture_states"]["after_hangup"][name] = capture_state(client, {"microphone": "none", "camera": "none"})
-                    record("UI hangup cleared native state, ended observed tracks and stopped WebKit microphone/camera capture")
+                        if driver == "cef" and report["capture_states"]["after_hangup"][name].get("allObservedRawTracksEnded") is not True:
+                            raise AssertionError("Previously observed raw capture tracks must all end after hangup")
+                    record("UI hangup cleared native state, ended observed tracks and stopped observed microphone/camera tracks")
                 finally:
                     for client in (alice, bob):
                         stop_probe(client)
+                if after_call is not None:
+                    after_call(alice, bob, report, record)
         report["status"] = "passed"
     except BaseException as error:
         report["status"] = "failed"
@@ -330,6 +417,7 @@ def run_media(application, driver, artifacts):
     finally:
         (artifacts / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print("CODEX_NATIVE_MEDIA_RESULT " + json.dumps(report), flush=True)
+    return report
 
 
 def main():

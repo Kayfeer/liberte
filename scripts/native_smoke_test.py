@@ -98,7 +98,11 @@ class NativeHarnessTests(unittest.TestCase):
 
     def test_dev_server_or_external_page_does_not_count_as_native_bundle(self):
         native_smoke.require_bundled_origin("tauri://localhost/index.html")
-        for url in ("http://localhost:5173", "http://127.0.0.1:1420", "https://example.com", "tauri://localhost.example.com"):
+        native_smoke.require_bundled_origin("http://tauri.localhost/index.html")
+        native_smoke.require_bundled_origin("https://tauri.localhost/index.html")
+        for url in ("http://localhost:5173", "http://127.0.0.1:1420", "https://example.com", "tauri://localhost.example.com",
+                    "http://tauri.localhost.example.com", "http://tauri.localhost:5173",
+                    "http://user@tauri.localhost"):
             with self.assertRaises(RuntimeError):
                 native_smoke.require_bundled_origin(url)
 

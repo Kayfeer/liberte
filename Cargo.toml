@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/tauri-plugin-updater"]
 members = [
     "crates/liberte-shared",
     "crates/liberte-net",

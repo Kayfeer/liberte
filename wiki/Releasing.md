@@ -1,6 +1,8 @@
 # Construire et publier
 
-Une publication est une opération distincte d'une pull request. Ne pas créer de tag tant que les résultats CI et les essais nécessaires n'ont pas été examinés.
+Cette branche est le **prototype Tauri 3 / CEF**, sans publication stable ni validation native CEF acquise. Le workflow dédié est `cef-prototype.yml` ; lire [Prototype CEF](CEF-Prototype.md) pour les critères d'adoption.
+
+Une publication est une opération distincte d'une pull request. Ne pas créer de tag du prototype avant sa qualification et l'adaptation de la chaîne de release. Les sections consacrées aux tags, signatures et archives Docker ci-dessous décrivent la chaîne historique à requalifier ; elles n'annoncent pas des paquets du prototype déjà publiés.
 
 ## Amorçage des lockfiles
 
@@ -12,25 +14,29 @@ Une erreur de formatage Rust produit `rustfmt-patch` sans transformer le résult
 
 La release exige `Cargo.lock` versionné, un lockfile npm identique à celui du dépôt et des versions Cargo/Tauri/frontend identiques.
 
-## Paquets de test CI
+## Paquets de test du prototype
 
-Les jobs desktop construisent Windows NSIS, Linux AppImage et macOS ARM64 `.app` sans signature de distribution. Leurs artefacts `desktop-<plateforme>-<commit>` contiennent un paquet, `SHA256SUMS` et `build.json`. Sur Linux, rendre l'AppImage exécutable après extraction. Sur macOS, l'archive tar conserve les permissions et liens du bundle ; les exigences Gatekeeper et de signature doivent être traitées pour une distribution publique.
+Le workflow prépare un paquet Debian Linux CEF et le serveur, dans `cef-prototype-linux-<commit>`, avec `SHA256SUMS` et `provenance.json`. Les builds Windows NSIS et macOS ARM64 `.app` conservent Wry ; leurs artefacts `wry-prototype-<plateforme>-<commit>` contiennent `SHA256SUMS` et `build.json`. Aucun de ces paquets n'est signé pour une distribution publique ; les mises à jour automatiques restent désactivées.
 
-Ces paquets permettent les essais sur machine, sans créer de release ni de tag. Les tests Rust continuent indépendamment des erreurs frontend ; un paquet desktop exige cependant le véritable frontend compilé. Une erreur de test, de type, de formatage, de lint, de smoke test ou une vulnérabilité npm high/critical conserve une CI en échec. Le rapport `npm-audit` et les traces Playwright sont disponibles pour le diagnostic.
+Ces paquets permettent les essais sur machine, sans créer de release ni de tag. Vérifier le résultat de l'exécution CI entière, le commit et les empreintes avant de les utiliser : la présence d'un artefact ne suffit pas à qualifier le client. Les builds Windows/macOS ne démontrent pas le fonctionnement natif de leur interface ou de leurs médias. Les prérequis Linux sont indiqués dans [Démarrer](Getting-Started.md#préparer-ubuntu-2404).
 
-Le job RustSec indépendant emploie [cargo-audit 0.22.2](https://github.com/rustsec/rustsec/releases/tag/cargo-audit/v0.22.2), dont l'archive officielle est vérifiée par SHA-256. Il examine le `Cargo.lock` conservé, actualise la base officielle RustSec et conserve le JSON complet, le commit de la base et le statut de l'outil dans les logs et l'artefact `cargo-audit`. Toute vulnérabilité signalée bloque, y compris sans correctif publié ; aucune exception n'est configurée. Les avis de maintenance, notamment `unmaintained`, restent visibles séparément et ne sont pas comptés comme des vulnérabilités. Une base inaccessible ou un rapport incomplet bloque aussi. Toute exception future nécessiterait une justification précise et révisable, sans retirer l'avis du rapport.
+Les contrôles frontend, Rust, dépendances et serveur restent nécessaires. Les diagnostics natifs Linux sont conservés dans `cef-native-diagnostics-<commit>`. Les résultats du navigateur de test, lorsqu'ils sont verts, ne constituent pas une preuve du fonctionnement du binaire CEF.
 
-## Validation native Linux
+## Validation native Linux à obtenir
 
-Le client de production est lancé avec son frontend embarqué dans deux profils temporaires. Le parcours vérifie une invitation avant tout redémarrage, les messages dans les deux sens, une réaction, un fichier de plusieurs blocs avec SHA-256 et accusé de réception, la reconnexion, puis une sauvegarde et une restauration depuis le vrai serveur. Les rapports indiquent quelles actions passent par l'interface et lesquelles utilisent les commandes IPC de production, notamment pour éviter les sélecteurs de fichiers du système.
+Le paquet de distribution et le binaire QA sont construits séparément. Les parcours natifs du prototype utilisent un binaire debug avec `qa-media-devices` et le frontend embarqué. Playwright se connecte par CDP au processus CEF de cette application ; il ne lance pas un navigateur de remplacement. Les profils sont isolés et les commandes IPC, le transport P2P et le serveur sont réels.
 
-Le pilote WebKitGTK est utilisé directement avec les mêmes options d'automatisation que le pilote Tauri. Une interruption de transport peut relancer au plus deux fois une lecture explicitement autorisée ; les envois, clics et autres mutations ne sont jamais rejoués automatiquement. Une erreur de l'application reste un échec.
+Le parcours d'intégration doit vérifier une invitation avant tout redémarrage, les messages dans les deux sens, une réaction, un fichier de plusieurs blocs avec SHA-256 et accusé de réception, la reconnexion, puis une sauvegarde et une restauration depuis le serveur. Les rapports distinguent les actions d'interface des commandes IPC de production. Les chemins de fichiers transmis directement à ces commandes ne valident pas les fenêtres d'ouverture et d'enregistrement du bureau : celles-ci exigent un essai séparé avec un portail XDG fonctionnel.
 
-Un second binaire, debug uniquement, active `qa-media-devices` et conserve le frontend embarqué. Il utilise les périphériques synthétiques de WebKit, la vraie signalisation Rust et de vrais flux WebRTC. Les mesures portent sur l'énergie audio reçue, les images vidéo décodées, le mute, la caméra et le raccrochage. Une observation native, absente des paquets distribués, vérifie que les captures actives redeviennent arrêtées. La compilation release refuse cette option QA.
+Une interruption de transport peut relancer au plus deux fois une lecture explicitement autorisée ; les envois, clics et autres mutations ne sont jamais rejoués automatiquement. Une erreur de l'application reste un échec.
 
-Les rapports conservent le commit, le SHA-256 du binaire et les limites de la preuve : les périphériques physiques, les permissions interactives et les réseaux NAT distincts demandent leurs propres essais. Un test avec périphériques synthétiques ne les valide pas. Aucun binaire QA n'est inclus dans les artefacts desktop.
+Les scénarios médias emploient des périphériques synthétiques Chromium, la vraie signalisation Rust et de vrais flux WebRTC. Les mesures attendues portent sur l'énergie audio reçue, les images vidéo décodées, le mute, la caméra et le raccrochage. CDP observe les objets `MediaStreamTrack` effectivement créés et leur arrêt ; cette observation ne mesure pas l'état matériel du microphone ou de la caméra.
 
-## Chaîne de release
+Le scénario [SFU E2EE](LiveKit.md) doit également démontrer la réception avec la bonne clé, puis le refus d'une clé incorrecte. Pour ce second cas, une troisième application CEF QA héberge un participant de test distinct : elle doit continuer à émettre du média chiffré pendant que le client normal signale l'erreur et arrête ses captures, sans décoder le média adverse.
+
+CDP et les sources synthétiques sont réservés au debug ; la compilation release refuse `qa-media-devices`. Les paquets distribués n'incluent pas ce binaire QA. Les rapports doivent conserver le commit, le SHA-256 du binaire et les limites de la preuve : périphériques physiques, consentement interactif, sélecteurs de fichiers du bureau et réseaux NAT distincts restent à essayer séparément. La présence de ces scénarios dans le dépôt ne prouve pas encore leur réussite.
+
+## Chaîne de release historique à requalifier
 
 1. Créer un nouveau tag complet correspondant à la version, par exemple `v2.4.0`. Ne pas déplacer un ancien tag.
 2. Le workflow réutilise la CI sur le même commit.
@@ -41,7 +47,7 @@ Les rapports conservent le commit, le SHA-256 du binaire et les limites de la pr
 
 Aucun job de compilation ne publie directement dans une release. Un échec interrompt la publication finale.
 
-## Signature des mises à jour
+## Signature des mises à jour après qualification
 
 Configurer sur le dépôt :
 
@@ -55,11 +61,11 @@ Si seule une des deux clés est configurée, le build échoue. Si aucune clé n'
 
 Une clé de signature d'updater ne remplace pas une signature de code Windows Authenticode. Conserver la clé privée et son mot de passe hors du dépôt, avec une sauvegarde maîtrisée.
 
-Documentation officielle : [Tauri updater](https://v2.tauri.app/plugin/updater/), [Tauri action](https://github.com/tauri-apps/tauri-action).
+Référence de la chaîne historique : [Tauri 2 updater](https://v2.tauri.app/plugin/updater/), [Tauri action](https://github.com/tauri-apps/tauri-action).
 
-## Docker
+## Archives Docker de la chaîne de release
 
-Deux archives distinctes sont publiées :
+La chaîne de release prévoit deux archives distinctes :
 
 - `liberte-server-docker-linux-amd64.tar.gz`
 - `liberte-server-docker-linux-arm64.tar.gz`
@@ -71,4 +77,4 @@ gzip --decompress --stdout liberte-server-docker-linux-amd64.tar.gz > image.tar
 docker load --input image.tar
 ```
 
-Chaque image a été exportée par `docker save`, retirée du cache local, rechargée puis démarrée dans son job de build. Le workflow ne compresse pas une sortie vide de build pour fabriquer un artefact de succès.
+Avant publication, chaque image doit avoir été exportée par `docker save`, retirée du cache local, rechargée puis démarrée dans son job de build. Le workflow ne compresse pas une sortie vide de build pour fabriquer un artefact de succès.

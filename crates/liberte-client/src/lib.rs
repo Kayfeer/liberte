@@ -8,7 +8,6 @@ pub mod swarm_bridge;
 
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::state::AppState;
@@ -33,7 +32,14 @@ pub fn run() {
 
     let app_state = Arc::new(Mutex::new(AppState::new()));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "linux")]
+    let builder = builder
+        .runtime(media_permissions::cef_runtime().expect("Invalid Chromium runtime configuration"));
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.runtime(tauri_runtime_wry::Wry::default());
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -42,9 +48,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(app_state.clone())
         .setup(move |app| {
-            if let Some(window) = app.get_webview_window("main") {
-                media_permissions::configure(&window)?;
-            }
+            media_permissions::create_main_window(app)?;
             let handle = app.handle().clone();
             file_transfer::start_cleanup(Arc::downgrade(&app_state), handle.clone());
             if let Ok(mut guard) = app_state.lock() {
@@ -78,7 +82,7 @@ pub fn run() {
             commands::media::set_call_mode,
             commands::media::get_call_state,
             #[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
-            media_permissions::qa_media_capture_state,
+            media_permissions::qa_runtime_configuration,
             commands::media::send_call_signal,
             commands::media::announce_call,
             commands::sfu::get_sfu_connection,
