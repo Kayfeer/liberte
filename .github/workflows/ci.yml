@@ -232,8 +232,8 @@ jobs:
       - name: Install Linux build and media dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev pkg-config perl gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libnice10 webkit2gtk-driver xvfb xauth dbus-x11
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev pkg-config perl gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libnice10 gstreamer1.0-nice gstreamer1.0-tools gstreamer1.0-pulseaudio pulseaudio pulseaudio-utils webkit2gtk-driver xvfb xauth dbus-x11
       - run: npm ci
         working-directory: frontend
       - name: Disable release updating for unsigned CI packages
@@ -241,20 +241,69 @@ jobs:
       - name: Build a testable desktop package
         working-directory: crates/liberte-client
         run: node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --bundles ${{ matrix.bundle }} --config tauri-ci.conf.json -- --locked
-      - name: Install pinned native WebDriver
+      - name: Verify the native WebKitGTK driver
         if: runner.os == 'Linux'
-        run: cargo install tauri-driver --version 2.1.0 --locked
+        run: WebKitWebDriver --version
       - name: Exercise the real Linux client and persisted profile
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_smoke.py --application target/release/liberte-client
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_smoke.py --driver WebKitWebDriver --application target/release/liberte-client
       - name: Build the real server for native integration
         if: runner.os == 'Linux'
         run: cargo build --release --locked --bin liberte-server
       - name: Exercise two native clients and the real server
         if: runner.os == 'Linux'
         timeout-minutes: 10
-        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_integration.py --application target/release/liberte-client --server target/release/liberte-server
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_integration.py --driver WebKitWebDriver --application target/release/liberte-client --server target/release/liberte-server
+      - name: Verify the native WebRTC media backend
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p .ci-output/native-media
+          gst-inspect-1.0 --version | tee .ci-output/native-media/runtime.txt
+          dpkg-query -W libwebkit2gtk-4.1-0 gstreamer1.0-nice >> .ci-output/native-media/runtime.txt
+          for element in webrtcbin nicesrc nicesink opusenc opusdec vp8enc vp8dec pulsesink; do
+            gst-inspect-1.0 "$element" > ".ci-output/native-media/gst-$element.txt"
+          done
+          cat .ci-output/native-media/runtime.txt
+      - name: Build a separate debug client with synthetic media devices
+        if: runner.os == 'Linux'
+        timeout-minutes: 30
+        working-directory: crates/liberte-client
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/native-media-qa
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_INCREMENTAL: '0'
+        run: node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --debug --no-bundle --features qa-media-devices,tauri/custom-protocol --config tauri-ci.conf.json -- --locked
+      - name: Prepare an isolated silent audio output for native media QA
+        if: runner.os == 'Linux'
+        run: |
+          if ! pulseaudio --check; then
+            pulseaudio --daemonize=yes --exit-idle-time=-1
+            touch .ci-output/native-media/pulse-started
+          fi
+          pactl load-module module-null-sink sink_name=liberte_ci > .ci-output/native-media/pulse-module.txt
+          pactl set-default-sink liberte_ci
+          socket=$(LANG=C pactl info | sed -n 's/^Server String: //p')
+          case "$socket" in
+            unix:*) ;;
+            /*) socket="unix:$socket" ;;
+            *) echo "Expected a local PulseAudio Unix socket" >&2; exit 1 ;;
+          esac
+          cookie="${XDG_CONFIG_HOME:-$HOME/.config}/pulse/cookie"
+          test -f "$cookie"
+          printf 'PULSE_SERVER=%s\nPULSE_COOKIE=%s\n' "$socket" "$cookie" >> "$GITHUB_ENV"
+          pactl list short sinks > .ci-output/native-media/audio-output.txt
+      - name: Verify native audio, video and track cleanup between two clients
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24" python scripts/native_media.py --driver WebKitWebDriver --application target/native-media-qa/debug/liberte-client
+      - name: Stop the QA audio output
+        if: always() && runner.os == 'Linux'
+        run: |
+          if test -f .ci-output/native-media/pulse-module.txt; then
+            pactl unload-module "$(cat .ci-output/native-media/pulse-module.txt)" || true
+          fi
+          if test -f .ci-output/native-media/pulse-started; then pulseaudio --kill || true; fi
       - name: Preserve native client diagnostics
         if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
@@ -263,6 +312,7 @@ jobs:
           path: |
             .ci-output/native-smoke
             .ci-output/native-integration
+            .ci-output/native-media
           if-no-files-found: warn
           retention-days: 14
       - name: Record package checksum and source commit
@@ -344,8 +394,8 @@ jobs:
           cache-on-failure: true
       - name: Install native dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libglib2.0-dev libasound2-dev patchelf libssl-dev pkg-config
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libglib2.0-dev libasound2-dev patchelf libssl-dev pkg-config
       - name: Check formatting and preserve a correction patch
         id: format
         continue-on-error: true

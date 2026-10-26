@@ -203,7 +203,7 @@ def run_integration(application, server_binary, driver, artifacts):
         raise RuntimeError("Pinned tauri-driver executable was not found")
     artifacts = Path(artifacts).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    report = {"status": "running", "commit": os.environ.get("GITHUB_SHA"), "mocks": False,
+    report = {"status": "running", "driver": Path(driver).name, "commit": os.environ.get("GITHUB_SHA"), "mocks": False,
               "checks": [], "ui": ["identity", "channel", "invite", "join", "messages", "file acceptance", "server settings", "backup sync/restore"],
               "ipc": ["read-only status", "reaction", "file send/save paths", "portable profile export/import"]}
     for name, path in (("application", application), ("server", server_binary)):

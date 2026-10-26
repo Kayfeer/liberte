@@ -161,15 +161,24 @@ class NativeSession:
     def __enter__(self):
         self.log = (self.artifacts / f"{self.label}-driver.log").open("wb")
         try:
+            native = Path(self.driver).name == "WebKitWebDriver"
+            environment = self.env.copy()
+            if native:
+                # Exact Linux mapping used by tauri-driver 2.1.0, without its HTTP proxy.
+                environment.update(TAURI_AUTOMATION="true", TAURI_WEBVIEW_AUTOMATION="true")
+                command = [self.driver, f"--port={self.port}", "--host=127.0.0.1"]
+                options = {"webkitgtk:browserOptions": {"binary": str(self.application), "args": []}}
+            else:
+                command = [self.driver, "--port", str(self.port), "--native-port", str(self.native_port),
+                           "--native-host", "127.0.0.1"]
+                options = {"tauri:options": {"application": str(self.application)}}
             self.process = subprocess.Popen(
-                [self.driver, "--port", str(self.port), "--native-port", str(self.native_port),
-                 "--native-host", "127.0.0.1"],
-                env=self.env, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
+                command, env=environment, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
             )
             deadline = time.monotonic() + 30
             while True:
                 if self.process.poll() is not None:
-                    raise RuntimeError(f"tauri-driver exited with status {self.process.returncode}")
+                    raise RuntimeError(f"Native WebDriver exited with status {self.process.returncode}")
                 try:
                     status = self.request("GET", "/status", timeout=2)
                     if isinstance(status, dict) and status.get("ready"):
@@ -180,7 +189,7 @@ class NativeSession:
                     raise TimeoutError("Native WebDriver did not become ready")
                 time.sleep(0.2)
             created = self.request("POST", "/session", {"capabilities": {"alwaysMatch": {
-                "browserName": "wry", "tauri:options": {"application": str(self.application)},
+                "browserName": "wry", **options,
             }}}, timeout=45)
             if not isinstance(created, dict) or not created.get("sessionId"):
                 raise RuntimeError("WebDriver did not return a native session identifier")
@@ -213,9 +222,12 @@ class NativeSession:
         return self.command("GET", f"/element/{element}/property/value")
 
     def invoke(self, name, arguments=None):
-        """Call the shipped Tauri IPC bridge; never inject or replace handlers."""
-        self.command("POST", "/timeouts", {"script": 60000})
-        result = self.command("POST", "/execute/async", {
+        """Call shipped IPC. Only audited read commands may be retried."""
+        read_only = name in {
+            "get_network_status", "list_channels", "list_channel_files", "get_settings",
+            "search_messages", "get_call_state", "qa_media_capture_state",
+        }
+        payload = {
             "script": """
                 const name = arguments[0], args = arguments[1];
                 const done = arguments[arguments.length - 1];
@@ -224,8 +236,17 @@ class NativeSession:
                           error => done({ok: false, error: String(error)}));
             """,
             "args": [name, arguments or {}],
-        }, timeout=65)
-        return decode_ipc_result(name, result)
+        }
+        for attempt in range(3):
+            try:
+                self.command("POST", "/timeouts", {"script": 60000})
+                result = self.command("POST", "/execute/async", payload, timeout=65)
+                return decode_ipc_result(name, result)
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
+                if not read_only or attempt == 2:
+                    raise
+                print(f"Native IPC read transport interrupted; retry {attempt + 1}/2 ({name})", flush=True)
+                time.sleep(0.15 * (attempt + 1))
 
     def assert_no_alert(self):
         elements = self.command("POST", "/elements", {"using": "css selector", "value": '[role="alert"]'})
@@ -308,7 +329,7 @@ def run_smoke(application, driver, artifacts):
     with application.open("rb") as source:
         binary_sha = hashlib.file_digest(source, "sha256").hexdigest()
     report = {"status": "running", "commit": os.environ.get("GITHUB_SHA"),
-              "application_sha256": binary_sha, "runtime": "Tauri Linux/WebKitGTK",
+              "application_sha256": binary_sha, "runtime": "Tauri Linux/WebKitGTK", "driver": Path(driver).name,
               "checks": [], "mocks": False}
     try:
         with tempfile.TemporaryDirectory(prefix="liberte-native-", dir=os.environ.get("RUNNER_TEMP")) as temporary:

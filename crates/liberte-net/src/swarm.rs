@@ -1,9 +1,20 @@
-use std::{collections::HashMap, path::PathBuf, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use futures::StreamExt;
 use libp2p::{
-    core::transport::ListenerId, gossipsub, identify, kad, multiaddr::Protocol, relay,
-    swarm::{dial_opts::{DialOpts, PeerCondition}, ConnectionId, SwarmEvent}, Multiaddr, PeerId,
+    core::transport::ListenerId,
+    gossipsub, identify, kad,
+    multiaddr::Protocol,
+    relay,
+    swarm::{
+        dial_opts::{DialOpts, PeerCondition},
+        ConnectionId, SwarmEvent,
+    },
+    Multiaddr, PeerId,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -39,7 +50,8 @@ impl RelayReservationState {
     fn retry_later(&mut self) {
         self.listener = None;
         self.failures = self.failures.saturating_add(1);
-        self.next_attempt = Instant::now() + Duration::from_secs((1u64 << self.failures.min(6)).min(60));
+        self.next_attempt =
+            Instant::now() + Duration::from_secs((1u64 << self.failures.min(6)).min(60));
     }
 }
 
@@ -49,8 +61,15 @@ fn request_reservation(
     peer: PeerId,
     address: Multiaddr,
 ) {
-    if reservations.contains_key(&peer) || reservations.len() >= 128 { return; }
-    let mut reservation = RelayReservationState { address, listener: None, failures: 0, next_attempt: Instant::now() };
+    if reservations.contains_key(&peer) || reservations.len() >= 128 {
+        return;
+    }
+    let mut reservation = RelayReservationState {
+        address,
+        listener: None,
+        failures: 0,
+        next_attempt: Instant::now(),
+    };
     match swarm.listen_on(reservation.address.clone()) {
         Ok(listener) => reservation.listener = Some(listener),
         Err(error) => {
@@ -62,10 +81,16 @@ fn request_reservation(
 }
 
 fn remember_target(targets: &mut HashMap<PeerId, ReconnectTarget>, addresses: &[Multiaddr]) {
-    let Some(peer) = addresses.first().and_then(target_peer_id) else { return; };
-    if targets.len() >= 128 && !targets.contains_key(&peer) { return; }
+    let Some(peer) = addresses.first().and_then(target_peer_id) else {
+        return;
+    };
+    if targets.len() >= 128 && !targets.contains_key(&peer) {
+        return;
+    }
     let target = targets.entry(peer).or_insert_with(|| ReconnectTarget {
-        addresses: Vec::new(), failures: 0, next_attempt: Instant::now() + Duration::from_secs(1),
+        addresses: Vec::new(),
+        failures: 0,
+        next_attempt: Instant::now() + Duration::from_secs(1),
     });
     for address in addresses {
         if target_peer_id(address) == Some(peer) && !target.addresses.contains(address) {
@@ -123,6 +148,7 @@ pub enum SwarmNotification {
     PeerConnected {
         peer_id: PeerId,
         address: Multiaddr,
+        is_relayed: bool,
     },
     PeerDisconnected {
         peer_id: PeerId,
@@ -189,12 +215,19 @@ pub async fn spawn_swarm(
     .expect("valid multiaddr");
     let mut listen_port = config.listen_port;
     match swarm.listen_on(listen_addr_v4) {
-        Ok(_) => {},
-        Err(_) if config.listen_port == DEFAULT_QUIC_PORT && default_port_in_use(config.loopback_only) => {
+        Ok(_) => {}
+        Err(_)
+            if config.listen_port == DEFAULT_QUIC_PORT
+                && default_port_in_use(config.loopback_only) =>
+        {
             // Two profiles/processes can coexist on one device. Only an occupied
             // default port permits fallback; other listener failures stay visible.
             listen_port = 0;
-            let ip = if config.loopback_only { "127.0.0.1" } else { "0.0.0.0" };
+            let ip = if config.loopback_only {
+                "127.0.0.1"
+            } else {
+                "0.0.0.0"
+            };
             swarm.listen_on(format!("/ip4/{ip}/udp/0/quic-v1").parse()?)?;
             info!("Default QUIC port is occupied; using an available IPv4 port");
         }
@@ -209,21 +242,29 @@ pub async fn spawn_swarm(
 
     info!(peer_id = %local_peer_id, requested_port = listen_port, "Swarm listener started");
 
-    let bootstrap_addrs = config.bootstrap_peers_path.as_ref()
-        .map(|path| load_bootstrap_peers(path)).unwrap_or_default();
+    let bootstrap_addrs = config
+        .bootstrap_peers_path
+        .as_ref()
+        .map(|path| load_bootstrap_peers(path))
+        .unwrap_or_default();
     let bootstrap_addrs = resolve_bootstrap_peers(bootstrap_addrs).await;
     let mut reconnect_targets = HashMap::new();
     for address in bootstrap_addrs.iter().chain(&config.extra_dials).take(1024) {
         remember_target(&mut reconnect_targets, std::slice::from_ref(address));
         if let Some(peer) = target_peer_id(address) {
-            swarm.behaviour_mut().kademlia.add_address(&peer, address.clone());
+            swarm
+                .behaviour_mut()
+                .kademlia
+                .add_address(&peer, address.clone());
         } else if let Err(error) = swarm.dial(address.clone()) {
             warn!(%address, %error, "Initial peer connection failed");
         }
     }
     reconnect_targets.remove(&local_peer_id);
     for (peer, target) in &reconnect_targets {
-        let options = DialOpts::peer_id(*peer).addresses(target.addresses.clone()).build();
+        let options = DialOpts::peer_id(*peer)
+            .addresses(target.addresses.clone())
+            .build();
         if let Err(error) = swarm.dial(options) {
             warn!(%peer, %error, "Initial peer connection failed; will retry");
         }
@@ -507,7 +548,9 @@ pub async fn spawn_swarm(
                             peer_id, endpoint, ..
                         } => {
                             let addr = endpoint.get_remote_address().clone();
-                            let is_relayed = addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
+                            // For inbound circuits, send_back_addr may contain only the
+                            // remote PeerId. The local endpoint carries the relay route.
+                            let is_relayed = endpoint.is_relayed();
                             peer_tracker.on_connected(peer_id, addr.clone(), is_relayed);
                             if let Some(target) = reconnect_targets.get_mut(&peer_id) {
                                 target.failures = 0;
@@ -535,6 +578,7 @@ pub async fn spawn_swarm(
                                 .send(SwarmNotification::PeerConnected {
                                     peer_id,
                                     address: addr,
+                                    is_relayed,
                                 })
                                 .await;
                         }
@@ -612,7 +656,11 @@ fn default_port_in_use(loopback_only: bool) -> bool {
     // Transport wrappers can erase io::ErrorKind. After a failed listen, ask
     // the OS directly whether this exact IPv4 endpoint is occupied. Other
     // errors (permissions, unavailable interfaces) must not trigger fallback.
-    let ip = if loopback_only { std::net::Ipv4Addr::LOCALHOST } else { std::net::Ipv4Addr::UNSPECIFIED };
+    let ip = if loopback_only {
+        std::net::Ipv4Addr::LOCALHOST
+    } else {
+        std::net::Ipv4Addr::UNSPECIFIED
+    };
     matches!(std::net::UdpSocket::bind((ip, DEFAULT_QUIC_PORT)), Err(error) if error.kind() == std::io::ErrorKind::AddrInUse)
 }
 
@@ -632,9 +680,13 @@ mod tests {
     fn relayed_address_targets_the_destination_not_the_relay() {
         let relay = PeerId::random();
         let target = PeerId::random();
-        let circuit: Multiaddr = format!("/ip4/127.0.0.1/udp/4001/quic-v1/p2p/{relay}/p2p-circuit").parse().unwrap();
+        let circuit: Multiaddr = format!("/ip4/127.0.0.1/udp/4001/quic-v1/p2p/{relay}/p2p-circuit")
+            .parse()
+            .unwrap();
         assert_eq!(target_peer_id(&circuit), None);
-        assert_eq!(target_peer_id(&circuit.with(Protocol::P2p(target))), Some(target));
+        assert_eq!(
+            target_peer_id(&circuit.with(Protocol::P2p(target))),
+            Some(target)
+        );
     }
 }
-

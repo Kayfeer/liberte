@@ -77,6 +77,8 @@ pub fn run() {
             commands::media::toggle_video,
             commands::media::set_call_mode,
             commands::media::get_call_state,
+            #[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+            media_permissions::qa_media_capture_state,
             commands::media::send_call_signal,
             commands::media::announce_call,
             commands::sfu::get_sfu_connection,

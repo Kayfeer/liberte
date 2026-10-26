@@ -62,6 +62,30 @@ class NativeHarnessTests(unittest.TestCase):
             client.command("GET", "/url")
         client.request.assert_called_once()
 
+    def test_only_explicit_read_ipc_retries_a_transport_reset(self):
+        client = native_smoke.NativeSession.__new__(native_smoke.NativeSession)
+        client.command = mock.Mock(side_effect=[None, http.client.RemoteDisconnected(), None,
+                                               {"ok": True, "value": [{"status": "received"}]}])
+        with mock.patch.object(native_smoke.time, "sleep"):
+            self.assertEqual(client.invoke("list_channel_files"), [{"status": "received"}])
+        self.assertEqual(client.command.call_count, 4)
+        for name in ("send_file", "save_received_file", "send_message", "import_profile", "new_unknown_command"):
+            client.command = mock.Mock(side_effect=[None, http.client.RemoteDisconnected()])
+            with self.assertRaises(http.client.RemoteDisconnected):
+                client.invoke(name)
+            self.assertEqual(client.command.call_count, 2)
+
+    def test_read_ipc_failure_and_retry_limit_are_not_hidden(self):
+        client = native_smoke.NativeSession.__new__(native_smoke.NativeSession)
+        client.command = mock.Mock(side_effect=[None, {"ok": False, "error": "Database unavailable"}])
+        with self.assertRaisesRegex(RuntimeError, "Database unavailable"):
+            client.invoke("list_channel_files")
+        self.assertEqual(client.command.call_count, 2)
+        client.command = mock.Mock(side_effect=[None, http.client.RemoteDisconnected()] * 3)
+        with mock.patch.object(native_smoke.time, "sleep"), self.assertRaises(http.client.RemoteDisconnected):
+            client.invoke("list_channel_files")
+        self.assertEqual(client.command.call_count, 6)
+
     def test_diagnostic_tail_redacts_secrets_and_opaque_payloads(self):
         secret = "a" * 64
         archive = "Q" * 300

@@ -50,26 +50,37 @@ fn persist_new_identity(
     identity: &Identity,
     display_name: Option<&str>,
 ) -> Result<(), String> {
-    let transaction = db.conn_mut()
+    let transaction = db
+        .conn_mut()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| format!("Cannot begin identity creation: {e}"))?;
-    transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS local_identity (
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS local_identity (
             id INTEGER PRIMARY KEY CHECK (id = 1), secret_key TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS app_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL
         );",
-    ).map_err(|e| format!("Cannot prepare identity storage: {e}"))?;
-    let existing: Option<String> = transaction.query_row(
-        "SELECT secret_key FROM local_identity WHERE id = 1", [], |row| row.get(0),
-    ).optional().map_err(|e| format!("Cannot inspect existing identity: {e}"))?;
+        )
+        .map_err(|e| format!("Cannot prepare identity storage: {e}"))?;
+    let existing: Option<String> = transaction
+        .query_row(
+            "SELECT secret_key FROM local_identity WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("Cannot inspect existing identity: {e}"))?;
     if existing.is_some() {
         return Err("An identity already exists on this device; load it instead".into());
     }
-    let current: Option<String> = transaction.query_row(
-        "SELECT json FROM app_settings WHERE id = 1", [], |row| row.get(0),
-    ).optional().map_err(|e| format!("Cannot read existing settings: {e}"))?;
+    let current: Option<String> = transaction
+        .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(|e| format!("Cannot read existing settings: {e}"))?;
     let mut settings = match current {
         Some(json) => serde_json::from_str::<serde_json::Value>(&json)
             .map_err(|e| format!("Existing settings are invalid: {e}"))?,
@@ -78,26 +89,39 @@ fn persist_new_identity(
     };
     serde_json::from_value::<crate::commands::settings::AppSettings>(settings.clone())
         .map_err(|e| format!("Existing settings are invalid: {e}"))?;
-    settings.as_object_mut().ok_or("Existing settings are not an object")?
-        .insert("displayName".into(), serde_json::to_value(display_name).map_err(|e| e.to_string())?);
+    settings
+        .as_object_mut()
+        .ok_or("Existing settings are not an object")?
+        .insert(
+            "displayName".into(),
+            serde_json::to_value(display_name).map_err(|e| e.to_string())?,
+        );
     let settings_json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
     let public_key = hex::encode(identity.public_key_bytes());
 
-    transaction.execute(
-        "INSERT INTO users (pubkey, display_name, avatar_hash, bio, status, created_at)
+    transaction
+        .execute(
+            "INSERT INTO users (pubkey, display_name, avatar_hash, bio, status, created_at)
          VALUES (?1, ?2, NULL, NULL, 'online', ?3)",
-        rusqlite::params![public_key, display_name, chrono::Utc::now().to_rfc3339()],
-    ).map_err(|e| format!("Cannot persist identity profile: {e}"))?;
-    transaction.execute(
-        "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
-        [hex::encode(identity.secret_bytes())],
-    ).map_err(|e| format!("Cannot persist identity key: {e}"))?;
-    transaction.execute(
-        "INSERT INTO app_settings (id, json) VALUES (1, ?1)
+            rusqlite::params![public_key, display_name, chrono::Utc::now().to_rfc3339()],
+        )
+        .map_err(|e| format!("Cannot persist identity profile: {e}"))?;
+    transaction
+        .execute(
+            "INSERT INTO local_identity (id, secret_key) VALUES (1, ?1)",
+            [hex::encode(identity.secret_bytes())],
+        )
+        .map_err(|e| format!("Cannot persist identity key: {e}"))?;
+    transaction
+        .execute(
+            "INSERT INTO app_settings (id, json) VALUES (1, ?1)
          ON CONFLICT(id) DO UPDATE SET json=excluded.json",
-        [settings_json],
-    ).map_err(|e| format!("Cannot persist identity settings: {e}"))?;
-    transaction.commit().map_err(|e| format!("Cannot commit identity creation: {e}"))
+            [settings_json],
+        )
+        .map_err(|e| format!("Cannot persist identity settings: {e}"))?;
+    transaction
+        .commit()
+        .map_err(|e| format!("Cannot commit identity creation: {e}"))
 }
 
 #[tauri::command]
@@ -607,13 +631,25 @@ mod tests {
     fn invalid_existing_settings_do_not_commit_a_partial_identity() {
         let directory = tempfile::tempdir().unwrap();
         let identity = Identity::generate();
-        let mut db = Database::open_at(&directory.path().join("invalid-settings.db"), &identity.derive_db_key()).unwrap();
+        let mut db = Database::open_at(
+            &directory.path().join("invalid-settings.db"),
+            &identity.derive_db_key(),
+        )
+        .unwrap();
         db.conn().execute_batch("CREATE TABLE app_settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL); INSERT INTO app_settings VALUES (1,'invalid-json');").unwrap();
         assert!(persist_new_identity(&mut db, &identity, None).is_err());
         assert!(read_stored_identity(&db).unwrap().is_none());
-        let users: i64 = db.conn().query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).unwrap();
+        let users: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(users, 0);
-        let settings: String = db.conn().query_row("SELECT json FROM app_settings WHERE id=1", [], |row| row.get(0)).unwrap();
+        let settings: String = db
+            .conn()
+            .query_row("SELECT json FROM app_settings WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert_eq!(settings, "invalid-json");
     }
 

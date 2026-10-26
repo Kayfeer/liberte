@@ -70,8 +70,15 @@ async fn relayed_peer_subscribed(
         let mut subscribed = false;
         while let Some(event) = notifications.recv().await {
             match event {
-                SwarmNotification::PeerConnected { peer_id, address } if peer_id == peer => {
-                    assert!(address.iter().any(|part| part == Protocol::P2pCircuit));
+                SwarmNotification::PeerConnected {
+                    peer_id,
+                    address,
+                    is_relayed,
+                } if peer_id == peer => {
+                    // An inbound circuit has a relay local_addr but its remote
+                    // send_back_addr may contain only /p2p/<source>. The actual
+                    // endpoint classification must survive the notification.
+                    assert!(is_relayed, "peer {peer} was classified direct at {address}");
                     connected = true;
                 }
                 SwarmNotification::PeerSubscribed {
@@ -183,7 +190,10 @@ async fn production_relay_reserves_a_circuit_and_carries_authenticated_messages_
     relayed_peer_subscribed(&mut alice_rx, bob_peer, &channel.to_topic()).await;
     relayed_peer_subscribed(&mut bob_rx, alice_peer, &channel.to_topic()).await;
     for tx in [&alice_tx, &bob_tx] {
-        assert_eq!(network_snapshot(tx).await.unwrap().connection_mode, "relayed");
+        assert_eq!(
+            network_snapshot(tx).await.unwrap().connection_mode,
+            "relayed"
+        );
     }
     exchange(
         &alice_tx,
@@ -206,7 +216,10 @@ async fn production_relay_reserves_a_circuit_and_carries_authenticated_messages_
     )
     .await;
     for tx in [&alice_tx, &bob_tx] {
-        assert_eq!(network_snapshot(tx).await.unwrap().connection_mode, "relayed");
+        assert_eq!(
+            network_snapshot(tx).await.unwrap().connection_mode,
+            "relayed"
+        );
         tx.send(SwarmCommand::Shutdown).await.unwrap();
     }
 }

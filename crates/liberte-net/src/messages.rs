@@ -38,7 +38,8 @@ pub async fn publish_once(
         SwarmCommand::PublishConfirmed { topic, data, reply },
         receiver,
         std::time::Duration::from_secs(15),
-    ).await?
+    )
+    .await?
 }
 
 /// Confirms acceptance by GossipSub, not delivery/read by a remote recipient.

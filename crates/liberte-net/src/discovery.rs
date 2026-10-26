@@ -61,10 +61,21 @@ pub async fn resolve_bootstrap_peers(addresses: Vec<Multiaddr>) -> Vec<Multiaddr
 
     let pending = futures::stream::iter(addresses.into_iter().take(1024))
         .map(|address| async move {
-            match tokio::time::timeout(Duration::from_secs(5), crate::dns::resolve_multiaddr(address.clone())).await {
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                crate::dns::resolve_multiaddr(address.clone()),
+            )
+            .await
+            {
                 Ok(Ok(resolved)) => Some(resolved),
-                Ok(Err(error)) => { warn!(%address, %error, "Bootstrap address could not be resolved"); None },
-                Err(_) => { warn!(%address, "Bootstrap DNS lookup timed out"); None },
+                Ok(Err(error)) => {
+                    warn!(%address, %error, "Bootstrap address could not be resolved");
+                    None
+                }
+                Err(_) => {
+                    warn!(%address, "Bootstrap DNS lookup timed out");
+                    None
+                }
             }
         })
         .buffer_unordered(8);

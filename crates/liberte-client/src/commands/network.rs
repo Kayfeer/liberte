@@ -1,6 +1,6 @@
 use crate::state::AppState;
-use serde::Serialize;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
@@ -105,27 +105,51 @@ pub(crate) fn remember_peer_addresses(
     store_peer_addresses(db, addresses)
 }
 
-fn store_peer_addresses(db: &liberte_store::Database, addresses: &[libp2p::Multiaddr]) -> Result<(), String> {
-    let peer = addresses.first().and_then(liberte_net::swarm::target_peer_id)
+fn store_peer_addresses(
+    db: &liberte_store::Database,
+    addresses: &[libp2p::Multiaddr],
+) -> Result<(), String> {
+    let peer = addresses
+        .first()
+        .and_then(liberte_net::swarm::target_peer_id)
         .ok_or("A destination peer ID is required")?;
-    if addresses.len() > 8 || addresses.iter().any(|address| {
-        address.to_string().len() > 1024 || liberte_net::swarm::target_peer_id(address) != Some(peer)
-    }) { return Err("Invalid peer address list".into()); }
+    if addresses.len() > 8
+        || addresses.iter().any(|address| {
+            address.to_string().len() > 1024
+                || liberte_net::swarm::target_peer_id(address) != Some(peer)
+        })
+    {
+        return Err("Invalid peer address list".into());
+    }
     let peer = peer.to_string();
-    let transaction = db.conn().unchecked_transaction().map_err(|e| e.to_string())?;
-    let previous: Option<String> = transaction.query_row(
-        "SELECT addresses_json FROM peer_addresses WHERE peer_id = ?1", [&peer], |row| row.get(0),
-    ).optional().map_err(|e| e.to_string())?;
+    let transaction = db
+        .conn()
+        .unchecked_transaction()
+        .map_err(|e| e.to_string())?;
+    let previous: Option<String> = transaction
+        .query_row(
+            "SELECT addresses_json FROM peer_addresses WHERE peer_id = ?1",
+            [&peer],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
     let mut saved = Vec::new();
     for address in addresses {
         let address = address.to_string();
-        if !saved.contains(&address) { saved.push(address); }
+        if !saved.contains(&address) {
+            saved.push(address);
+        }
     }
     if let Some(previous) = previous.filter(|json| json.len() <= 16_384) {
         if let Ok(previous) = serde_json::from_str::<Vec<String>>(&previous) {
             for address in previous {
-                if saved.len() == 8 { break; }
-                if address.len() <= 1024 && !saved.contains(&address) { saved.push(address); }
+                if saved.len() == 8 {
+                    break;
+                }
+                if address.len() <= 1024 && !saved.contains(&address) {
+                    saved.push(address);
+                }
             }
         }
     }
@@ -140,7 +164,9 @@ fn store_peer_addresses(db: &liberte_store::Database, addresses: &[libp2p::Multi
     transaction.commit().map_err(|e| e.to_string())
 }
 
-pub(crate) fn saved_peer_addresses(state: &Arc<Mutex<AppState>>) -> Result<Vec<libp2p::Multiaddr>, String> {
+pub(crate) fn saved_peer_addresses(
+    state: &Arc<Mutex<AppState>>,
+) -> Result<Vec<libp2p::Multiaddr>, String> {
     let guard = state.lock().map_err(|e| e.to_string())?;
     let db = guard.database.as_ref().ok_or("Database not opened")?;
     read_peer_addresses(db)
@@ -150,17 +176,30 @@ fn read_peer_addresses(db: &liberte_store::Database) -> Result<Vec<libp2p::Multi
     let mut statement = db.conn().prepare(
         "SELECT peer_id, addresses_json FROM peer_addresses ORDER BY updated_at DESC, peer_id LIMIT 128",
     ).map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|e| e.to_string())?;
     let mut addresses = Vec::new();
     for row in rows {
         let (peer, json) = row.map_err(|e| e.to_string())?;
-        if json.len() > 16_384 { continue; }
-        let Ok(saved) = serde_json::from_str::<Vec<String>>(&json) else { continue; };
+        if json.len() > 16_384 {
+            continue;
+        }
+        let Ok(saved) = serde_json::from_str::<Vec<String>>(&json) else {
+            continue;
+        };
         for raw in saved.into_iter().take(8) {
-            if raw.len() > 1024 { continue; }
-            let Ok(address) = raw.parse::<libp2p::Multiaddr>() else { continue; };
-            if liberte_net::swarm::target_peer_id(&address).is_some_and(|target| target.to_string() == peer) {
+            if raw.len() > 1024 {
+                continue;
+            }
+            let Ok(address) = raw.parse::<libp2p::Multiaddr>() else {
+                continue;
+            };
+            if liberte_net::swarm::target_peer_id(&address)
+                .is_some_and(|target| target.to_string() == peer)
+            {
                 addresses.push(address);
             }
         }
@@ -177,8 +216,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers.db");
         let peer = libp2p::PeerId::random();
-        let first: libp2p::Multiaddr = format!("/ip4/127.0.0.1/udp/4001/quic-v1/p2p/{peer}").parse().unwrap();
-        let other: libp2p::Multiaddr = format!("/ip4/127.0.0.1/udp/4002/quic-v1/p2p/{}", libp2p::PeerId::random()).parse().unwrap();
+        let first: libp2p::Multiaddr = format!("/ip4/127.0.0.1/udp/4001/quic-v1/p2p/{peer}")
+            .parse()
+            .unwrap();
+        let other: libp2p::Multiaddr = format!(
+            "/ip4/127.0.0.1/udp/4002/quic-v1/p2p/{}",
+            libp2p::PeerId::random()
+        )
+        .parse()
+        .unwrap();
         {
             let db = liberte_store::Database::open_at(&path, &[0; 32]).unwrap();
             store_peer_addresses(&db, std::slice::from_ref(&first)).unwrap();

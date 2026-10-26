@@ -109,13 +109,14 @@ async fn notification_loop(
 
     while let Some(notification) = notif_rx.recv().await {
         match notification {
-            SwarmNotification::PeerConnected { peer_id, address } => {
+            SwarmNotification::PeerConnected {
+                peer_id,
+                address,
+                is_relayed,
+            } => {
                 if let Ok(mut guard) = state.lock() {
                     guard.network_error = None;
-                    guard.connection_mode = if address
-                        .iter()
-                        .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
-                    {
+                    guard.connection_mode = if is_relayed {
                         liberte_shared::types::ConnectionMode::Relayed
                     } else {
                         liberte_shared::types::ConnectionMode::Direct

@@ -105,6 +105,55 @@ fn trusted_origin(uri: &str) -> bool {
             && url.port_or_known_default() == Some(5173))
 }
 
+/// Native engine observation for the separate QA binary. No capture state is
+/// changed here, and this command does not exist in distribution builds.
+#[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaMediaCaptureState {
+    microphone: &'static str,
+    camera: &'static str,
+    mock_capture_devices: bool,
+    automation_controlled: bool,
+}
+
+#[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+fn capture_state_name(state: webkit2gtk::MediaCaptureState) -> &'static str {
+    match state {
+        webkit2gtk::MediaCaptureState::None => "none",
+        webkit2gtk::MediaCaptureState::Active => "active",
+        webkit2gtk::MediaCaptureState::Muted => "muted",
+        _ => "unknown",
+    }
+}
+
+#[cfg(all(feature = "qa-media-devices", debug_assertions, target_os = "linux"))]
+#[tauri::command]
+pub async fn qa_media_capture_state(
+    window: tauri::WebviewWindow,
+) -> Result<QaMediaCaptureState, String> {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    let (reply, result) = tokio::sync::oneshot::channel();
+    window
+        .with_webview(move |platform| {
+            let view = platform.inner();
+            let snapshot = QaMediaCaptureState {
+                microphone: capture_state_name(WebViewExt::microphone_capture_state(&view)),
+                camera: capture_state_name(WebViewExt::camera_capture_state(&view)),
+                mock_capture_devices: WebViewExt::settings(&view)
+                    .is_some_and(|settings| settings.enables_mock_capture_devices()),
+                automation_controlled: WebViewExt::is_controlled_by_automation(&view),
+            };
+            let _ = reply.send(snapshot);
+        })
+        .map_err(|error| error.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), result)
+        .await
+        .map_err(|_| "Native capture observation timed out".to_string())?
+        .map_err(|_| "Native capture observation unavailable".to_string())
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
